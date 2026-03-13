@@ -2,32 +2,28 @@
 
 import { useMemo, useState } from "react";
 
-const PROPERTIES = [
+const INITIAL_PROPERTIES = [
   {
     id: "p1",
     name: "123 Main St",
     market: "Dallas",
     leaseEnd: "2026-04-30",
     moveOut: "Apr 30",
-    readiness: 72,
     risk: 82,
-    projectedCost: "$2,450",
+    projectedCost: 2450,
     projectedCompletion: "May 6",
-    timelineConfidence: "84%",
+    timelineConfidence: 84,
     scope: "Flooring + Paint",
     turnOwner: "Ashley M.",
-    readinessStatus: "Blocked",
     turnStatus: "Ready to Prep",
-    blockers: ["Utilities not scheduled", "Appliance ETA pending"],
     insight:
       "Paint and flooring are scheduled within the same week. Bundling vendors could reduce total labor mobilization.",
     timeline: [
-      "Apr 30 — Resident move-out",
-      "May 1 — Flooring start",
-      "May 3 — Flooring complete",
-      "May 4 — Paint start",
-      "May 5 — Paint complete",
-      "May 6 — Ready for leasing",
+      { key: "moveout", label: "Move Out", date: "Apr 30", progress: 100 },
+      { key: "flooring", label: "Flooring", date: "May 1–3", progress: 78 },
+      { key: "paint", label: "Paint", date: "May 4–5", progress: 52 },
+      { key: "qa", label: "QA", date: "May 6", progress: 18 },
+      { key: "ready", label: "Ready", date: "May 6", progress: 0 },
     ],
   },
   {
@@ -36,23 +32,21 @@ const PROPERTIES = [
     market: "Atlanta",
     leaseEnd: "2026-05-12",
     moveOut: "May 12",
-    readiness: 61,
     risk: 71,
-    projectedCost: "$1,850",
+    projectedCost: 1850,
     projectedCompletion: "May 15",
-    timelineConfidence: "79%",
+    timelineConfidence: 79,
     scope: "Paint + Patch",
     turnOwner: "Justin R.",
-    readinessStatus: "Pending",
     turnStatus: "Monitoring",
-    blockers: ["Appliance ETA pending"],
     insight:
       "Awaiting appliance ETA confirmation. Timeline risk is moderate if delivery slips.",
     timeline: [
-      "May 12 — Resident move-out",
-      "May 13 — Paint prep",
-      "May 14 — Paint + patch",
-      "May 15 — Clean + QA",
+      { key: "moveout", label: "Move Out", date: "May 12", progress: 0 },
+      { key: "prep", label: "Prep", date: "May 13", progress: 0 },
+      { key: "paint", label: "Paint + Patch", date: "May 14", progress: 0 },
+      { key: "qa", label: "Clean + QA", date: "May 15", progress: 0 },
+      { key: "ready", label: "Ready", date: "May 15", progress: 0 },
     ],
   },
   {
@@ -61,21 +55,19 @@ const PROPERTIES = [
     market: "Nashville",
     leaseEnd: "2026-05-18",
     moveOut: "May 18",
-    readiness: 88,
     risk: 64,
-    projectedCost: "$950",
+    projectedCost: 950,
     projectedCompletion: "May 19",
-    timelineConfidence: "92%",
+    timelineConfidence: 92,
     scope: "Deep Clean",
     turnOwner: "Thomas K.",
-    readinessStatus: "Ready",
     turnStatus: "Monitoring",
-    blockers: [],
     insight: "Low-friction turn. Most work is cosmetic and already staged.",
     timeline: [
-      "May 18 — Resident move-out",
-      "May 19 — Deep clean + QA",
-      "May 19 — Ready for leasing",
+      { key: "moveout", label: "Move Out", date: "May 18", progress: 0 },
+      { key: "clean", label: "Deep Clean", date: "May 19", progress: 0 },
+      { key: "qa", label: "QA", date: "May 19", progress: 0 },
+      { key: "ready", label: "Ready", date: "May 19", progress: 0 },
     ],
   },
   {
@@ -84,29 +76,21 @@ const PROPERTIES = [
     market: "Phoenix",
     leaseEnd: "2026-04-21",
     moveOut: "Apr 21",
-    readiness: 41,
     risk: 88,
-    projectedCost: "$3,850",
+    projectedCost: 3850,
     projectedCompletion: "May 1",
-    timelineConfidence: "68%",
+    timelineConfidence: 68,
     scope: "Heavy Turn Review",
     turnOwner: "Megan T.",
-    readinessStatus: "Blocked",
     turnStatus: "Blocked",
-    blockers: [
-      "Lockbox missing",
-      "Scope approval pending",
-      "HVAC vendor delayed",
-    ],
     insight:
       "This turn is high risk due to access delays and unresolved trade dependencies.",
     timeline: [
-      "Apr 21 — Expected move-out",
-      "Apr 22 — Access / lockbox resolution",
-      "Apr 23 — HVAC start",
-      "Apr 25 — Paint + flooring coordination",
-      "Apr 30 — QA",
-      "May 1 — Ready for leasing",
+      { key: "moveout", label: "Move Out", date: "Apr 21", progress: 100 },
+      { key: "access", label: "Access", date: "Apr 22", progress: 35 },
+      { key: "hvac", label: "HVAC", date: "Apr 23–24", progress: 25 },
+      { key: "turnwork", label: "Paint + Flooring", date: "Apr 25–30", progress: 10 },
+      { key: "ready", label: "Ready", date: "May 1", progress: 0 },
     ],
   },
   {
@@ -115,26 +99,24 @@ const PROPERTIES = [
     market: "Dallas",
     leaseEnd: "2026-05-07",
     moveOut: "May 7",
-    readiness: 90,
     risk: 59,
-    projectedCost: "$375",
+    projectedCost: 375,
     projectedCompletion: "May 8",
-    timelineConfidence: "91%",
+    timelineConfidence: 91,
     scope: "Deep Clean",
     turnOwner: "Ashley M.",
-    readinessStatus: "Ready",
     turnStatus: "Monitoring",
-    blockers: [],
     insight: "Fast-turn candidate with minimal oversight required.",
     timeline: [
-      "May 7 — Resident move-out",
-      "May 8 — Deep clean",
-      "May 8 — Ready for leasing",
+      { key: "moveout", label: "Move Out", date: "May 7", progress: 0 },
+      { key: "clean", label: "Deep Clean", date: "May 8", progress: 0 },
+      { key: "qa", label: "QA", date: "May 8", progress: 0 },
+      { key: "ready", label: "Ready", date: "May 8", progress: 0 },
     ],
   },
 ];
 
-const READINESS_CHECKS = {
+const INITIAL_CHECKS = {
   "123 Main St": [
     ["Electric on", "Blocked"],
     ["Water on", "Ready"],
@@ -187,8 +169,9 @@ const READINESS_CHECKS = {
   ],
 };
 
-const JOBS = [
+const INITIAL_JOBS = [
   {
+    id: "j1",
     property: "123 Main St",
     market: "Dallas",
     trade: "Flooring",
@@ -196,12 +179,13 @@ const JOBS = [
     start: "May 1",
     finish: "May 3",
     status: "Scheduled",
-    budget: "$2,100",
-    actual: "$0",
+    budget: 2100,
+    actual: 0,
     complete: 0,
     variance: "Flagged",
   },
   {
+    id: "j2",
     property: "123 Main St",
     market: "Dallas",
     trade: "Paint",
@@ -209,12 +193,13 @@ const JOBS = [
     start: "May 4",
     finish: "May 5",
     status: "Scheduled",
-    budget: "$1,600",
-    actual: "$0",
+    budget: 1600,
+    actual: 0,
     complete: 0,
     variance: "In Range",
   },
   {
+    id: "j3",
     property: "456 Oak Ave",
     market: "Atlanta",
     trade: "Paint",
@@ -222,12 +207,13 @@ const JOBS = [
     start: "May 13",
     finish: "May 14",
     status: "Scheduled",
-    budget: "$1,150",
-    actual: "$0",
+    budget: 1150,
+    actual: 0,
     complete: 0,
     variance: "In Range",
   },
   {
+    id: "j4",
     property: "456 Oak Ave",
     market: "Atlanta",
     trade: "Cleaning",
@@ -235,12 +221,13 @@ const JOBS = [
     start: "May 15",
     finish: "May 15",
     status: "Scheduled",
-    budget: "$280",
-    actual: "$0",
+    budget: 280,
+    actual: 0,
     complete: 0,
     variance: "In Range",
   },
   {
+    id: "j5",
     property: "22 Cedar Ln",
     market: "Phoenix",
     trade: "HVAC",
@@ -248,12 +235,13 @@ const JOBS = [
     start: "Apr 23",
     finish: "Apr 24",
     status: "Delayed",
-    budget: "$750",
-    actual: "$300",
+    budget: 750,
+    actual: 300,
     complete: 25,
     variance: "In Range",
   },
   {
+    id: "j6",
     property: "22 Cedar Ln",
     market: "Phoenix",
     trade: "Landscaping",
@@ -261,12 +249,13 @@ const JOBS = [
     start: "Apr 22",
     finish: "Apr 22",
     status: "Scheduled",
-    budget: "$180",
-    actual: "$0",
+    budget: 180,
+    actual: 0,
     complete: 0,
     variance: "In Range",
   },
   {
+    id: "j7",
     property: "789 Pine Rd",
     market: "Nashville",
     trade: "Cleaning",
@@ -274,51 +263,39 @@ const JOBS = [
     start: "May 19",
     finish: "May 19",
     status: "Scheduled",
-    budget: "$150",
-    actual: "$0",
+    budget: 150,
+    actual: 0,
     complete: 0,
     variance: "In Range",
   },
 ];
 
-const MARKET_ANALYTICS = [
-  {
-    market: "Dallas",
-    turns: 13,
-    avgTime: "5.8 days",
-    avgCost: "$2,520",
-    highRisk: 2,
-    readiness: 81,
-    noi: "$92,000",
-  },
-  {
-    market: "Atlanta",
-    turns: 9,
-    avgTime: "6.4 days",
-    avgCost: "$2,210",
-    highRisk: 1,
-    readiness: 84,
-    noi: "$48,000",
-  },
-  {
-    market: "Phoenix",
-    turns: 11,
-    avgTime: "7.1 days",
-    avgCost: "$2,730",
-    highRisk: 3,
-    readiness: 58,
-    noi: "$39,000",
-  },
-  {
-    market: "Nashville",
-    turns: 6,
-    avgTime: "5.9 days",
-    avgCost: "$2,140",
-    highRisk: 0,
-    readiness: 93,
-    noi: "$35,000",
-  },
-];
+function scoreReadiness(checks) {
+  let score = 100;
+  const reasons = [];
+
+  checks.forEach(([label, status]) => {
+    if (status === "Blocked") {
+      score -= 18;
+      reasons.push(`${label} blocked`);
+    } else if (status === "Pending") {
+      score -= 9;
+      reasons.push(`${label} pending`);
+    }
+  });
+
+  score = Math.max(0, Math.min(100, score));
+
+  let status = "Ready";
+  if (score < 60) status = "Blocked";
+  else if (score < 85) status = "Pending";
+
+  return { score, status, reasons };
+}
+
+function formatMoney(value) {
+  return `$${value.toLocaleString()}`;
+}
 
 function Card({ children, title, subtitle, className = "" }) {
   return (
@@ -395,47 +372,111 @@ function ProgressBar({ value, tone = "blue" }) {
 export default function Page() {
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
-  const [selectedPropertyId, setSelectedPropertyId] = useState(PROPERTIES[0].id);
+  const [selectedPropertyId, setSelectedPropertyId] = useState(INITIAL_PROPERTIES[0].id);
   const [selectedTrade, setSelectedTrade] = useState("All Trades");
   const [selectedVendor, setSelectedVendor] = useState("All Vendors");
+  const [checksMap, setChecksMap] = useState(INITIAL_CHECKS);
+  const [jobs, setJobs] = useState(INITIAL_JOBS);
 
-  const allMarkets = ["All Markets", ...Array.from(new Set(PROPERTIES.map((x) => x.market)))];
-  const allTrades = ["All Trades", ...Array.from(new Set(JOBS.map((x) => x.trade)))];
-  const allVendors = ["All Vendors", ...Array.from(new Set(JOBS.map((x) => x.vendor)))];
+  const allMarkets = ["All Markets", ...Array.from(new Set(INITIAL_PROPERTIES.map((x) => x.market)))];
+  const allTrades = ["All Trades", ...Array.from(new Set(jobs.map((x) => x.trade)))];
+  const allVendors = ["All Vendors", ...Array.from(new Set(jobs.map((x) => x.vendor)))];
+
+  const computedProperties = useMemo(() => {
+    return INITIAL_PROPERTIES.map((property) => {
+      const checks = checksMap[property.name] || [];
+      const readiness = scoreReadiness(checks);
+
+      return {
+        ...property,
+        readiness: readiness.score,
+        readinessStatus: readiness.status,
+        blockers: readiness.reasons.slice(0, 3),
+      };
+    });
+  }, [checksMap]);
 
   const filteredProperties = useMemo(() => {
-    return PROPERTIES.filter(
+    return computedProperties.filter(
       (x) => selectedMarket === "All Markets" || x.market === selectedMarket
     );
-  }, [selectedMarket]);
+  }, [computedProperties, selectedMarket]);
 
   const filteredJobs = useMemo(() => {
-    return JOBS.filter(
+    return jobs.filter(
       (x) =>
         (selectedMarket === "All Markets" || x.market === selectedMarket) &&
         (selectedTrade === "All Trades" || x.trade === selectedTrade) &&
         (selectedVendor === "All Vendors" || x.vendor === selectedVendor)
     );
-  }, [selectedMarket, selectedTrade, selectedVendor]);
+  }, [jobs, selectedMarket, selectedTrade, selectedVendor]);
 
   const selectedProperty =
     filteredProperties.find((x) => x.id === selectedPropertyId) ||
-    PROPERTIES.find((x) => x.id === selectedPropertyId) ||
+    computedProperties.find((x) => x.id === selectedPropertyId) ||
     filteredProperties[0] ||
-    PROPERTIES[0];
+    computedProperties[0];
 
-  const readinessChecks = READINESS_CHECKS[selectedProperty.name] || [];
+  const readinessChecks = checksMap[selectedProperty.name] || [];
+
+  const marketAnalytics = useMemo(() => {
+    const markets = Array.from(new Set(computedProperties.map((x) => x.market)));
+    return markets.map((market) => {
+      const homes = computedProperties.filter((x) => x.market === market);
+      const avgReadiness = Math.round(
+        homes.reduce((sum, h) => sum + h.readiness, 0) / homes.length
+      );
+      const highRisk = homes.filter((h) => h.risk >= 75).length;
+
+      const avgTime =
+        market === "Dallas"
+          ? "5.8 days"
+          : market === "Atlanta"
+          ? "6.4 days"
+          : market === "Phoenix"
+          ? "7.1 days"
+          : "5.9 days";
+
+      const avgCost =
+        market === "Dallas"
+          ? "$2,520"
+          : market === "Atlanta"
+          ? "$2,210"
+          : market === "Phoenix"
+          ? "$2,730"
+          : "$2,140";
+
+      const noi =
+        market === "Dallas"
+          ? "$92,000"
+          : market === "Atlanta"
+          ? "$48,000"
+          : market === "Phoenix"
+          ? "$39,000"
+          : "$35,000";
+
+      return {
+        market,
+        turns: homes.length,
+        avgTime,
+        avgCost,
+        highRisk,
+        readiness: avgReadiness,
+        noi,
+      };
+    });
+  }, [computedProperties]);
 
   const dashboardMetrics = [
     {
       label: "Upcoming Turns",
-      value: String(filteredProperties.length || PROPERTIES.length),
+      value: String(filteredProperties.length || computedProperties.length),
       subtext: "next 60–90 days",
     },
     {
       label: "High-Risk Turns",
       value: String(
-        (filteredProperties.length ? filteredProperties : PROPERTIES).filter(
+        (filteredProperties.length ? filteredProperties : computedProperties).filter(
           (x) => x.risk >= 75
         ).length
       ),
@@ -444,7 +485,7 @@ export default function Page() {
     {
       label: "Blocked Turns",
       value: String(
-        (filteredProperties.length ? filteredProperties : PROPERTIES).filter(
+        (filteredProperties.length ? filteredProperties : computedProperties).filter(
           (x) => x.readinessStatus === "Blocked"
         ).length
       ),
@@ -455,7 +496,7 @@ export default function Page() {
       value:
         selectedMarket === "All Markets"
           ? "6.2 days"
-          : MARKET_ANALYTICS.find((x) => x.market === selectedMarket)?.avgTime || "6.2 days",
+          : marketAnalytics.find((x) => x.market === selectedMarket)?.avgTime || "6.2 days",
       subtext: "current trailing average",
     },
     {
@@ -463,7 +504,7 @@ export default function Page() {
       value:
         selectedMarket === "All Markets"
           ? "14"
-          : String(MARKET_ANALYTICS.find((x) => x.market === selectedMarket)?.highRisk || 0),
+          : String(marketAnalytics.find((x) => x.market === selectedMarket)?.highRisk || 0),
       subtext: "linked to active blockers",
     },
   ];
@@ -482,64 +523,113 @@ export default function Page() {
       ? "amber"
       : "emerald";
 
+  const updateCheckStatus = (propertyName, index, nextStatus) => {
+    setChecksMap((prev) => {
+      const next = { ...prev };
+      next[propertyName] = [...next[propertyName]];
+      next[propertyName][index] = [next[propertyName][index][0], nextStatus];
+      return next;
+    });
+  };
+
+  const resolvePendingBlockers = (propertyName) => {
+    setChecksMap((prev) => {
+      const next = { ...prev };
+      next[propertyName] = next[propertyName].map(([label, status]) => [
+        label,
+        status === "Pending" ? "Ready" : status,
+      ]);
+      return next;
+    });
+  };
+
+  const approveScope = (propertyName) => {
+    const checks = checksMap[propertyName] || [];
+    const index = checks.findIndex(([label]) => label === "Scope approved");
+    if (index >= 0) updateCheckStatus(propertyName, index, "Ready");
+  };
+
+  const assignVendor = (propertyName) => {
+    const checks = checksMap[propertyName] || [];
+    const index = checks.findIndex(([label]) => label === "Vendor assigned");
+    if (index >= 0) updateCheckStatus(propertyName, index, "Ready");
+
+    setJobs((prev) =>
+      prev.map((job) =>
+        job.property === propertyName && job.status === "Scheduled"
+          ? { ...job, vendor: job.vendor || "Assigned Vendor" }
+          : job
+      )
+    );
+  };
+
+  const startTurn = (propertyName) => {
+    setJobs((prev) =>
+      prev.map((job) =>
+        job.property === propertyName && job.status === "Scheduled"
+          ? { ...job, status: "In Progress", complete: Math.max(job.complete, 20) }
+          : job
+      )
+    );
+  };
+
+  const completeTurn = (propertyName) => {
+    setChecksMap((prev) => {
+      const next = { ...prev };
+      next[propertyName] = next[propertyName].map(([label]) => [label, "Ready"]);
+      return next;
+    });
+
+    setJobs((prev) =>
+      prev.map((job) =>
+        job.property === propertyName
+          ? { ...job, status: "Complete", complete: 100, actual: job.actual || job.budget }
+          : job
+      )
+    );
+  };
+
+  const selectedPropertyJobs = jobs.filter((job) => job.property === selectedProperty.name);
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-8">
+      <div className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+        <div className="mx-auto max-w-7xl px-6 pt-4">
+          <div className="mb-4 flex items-center justify-between rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
             <div>
               <div className="text-xl font-bold">TurnIQ</div>
               <div className="text-xs text-slate-500">AI-powered turn operations prototype</div>
             </div>
-            <nav className="hidden gap-6 text-sm md:flex">
-              {["Dashboard", "Forecast", "Readiness", "Jobs", "Metrics", "Properties"].map((tab) => (
-                <button
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={activeTab === tab ? "font-semibold text-slate-900" : "text-slate-600 hover:text-slate-900"}
-                >
-                  {tab}
-                </button>
-              ))}
-            </nav>
-          </div>
-          <div className="flex items-center gap-3 text-sm">
             <Selector value={selectedMarket} onChange={setSelectedMarket} options={allMarkets} />
+          </div>
+
+          <div className="grid gap-4 pb-4 md:grid-cols-2 xl:grid-cols-5">
+            {dashboardMetrics.map((m) => (
+              <KPI key={m.label} label={m.label} value={m.value} subtext={m.subtext} />
+            ))}
           </div>
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {dashboardMetrics.map((m) => (
-            <KPI key={m.label} label={m.label} value={m.value} subtext={m.subtext} />
-          ))}
+      <div className="border-b border-slate-200 bg-white">
+        <div className="mx-auto flex max-w-7xl gap-6 px-6 py-4 text-sm">
+          {["Dashboard", "Forecast", "Readiness", "Jobs", "Metrics", "Properties", "Overview"].map(
+            (tab) => (
+              <button
+                key={tab}
+                onClick={() => setActiveTab(tab)}
+                className={activeTab === tab ? "font-semibold text-slate-900" : "text-slate-600 hover:text-slate-900"}
+              >
+                {tab}
+              </button>
+            )
+          )}
         </div>
+      </div>
 
-        <Card title="Platform Overview" subtitle="Core capabilities powering predictive turn operations">
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 text-sm text-slate-600">
-            <div className="rounded-xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">Clickable properties</div>
-              <div className="mt-1">Open any turn from the queue and view readiness, jobs, timeline, and cost in one place.</div>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">Readiness scoring AI</div>
-              <div className="mt-1">Prioritize turns with a 0–100 readiness score tied to real blockers and timeline impact.</div>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">Market analytics</div>
-              <div className="mt-1">Compare turn performance, readiness, cost, and NOI impact by market and operator group.</div>
-            </div>
-            <div className="rounded-xl bg-slate-50 p-4">
-              <div className="font-semibold text-slate-900">AI timeline prediction</div>
-              <div className="mt-1">Forecast completion dates, confidence, and risk drivers before a turn goes off track.</div>
-            </div>
-          </div>
-        </Card>
-
+      <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
         <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">TurnIQ Prototype</div>
-          <h1 className="mt-1 text-2xl font-semibold text-slate-900">{activeTab}</h1>
+          <h1 className="text-2xl font-semibold text-slate-900">{activeTab}</h1>
           <p className="mt-1 text-sm text-slate-500">
             {activeTab === "Dashboard" && "See likely upcoming turns, detect blockers early, coordinate jobs, and track turn performance."}
             {activeTab === "Forecast" && "View predicted turns 60–90 days out, likely scope, and AI rationale."}
@@ -547,92 +637,120 @@ export default function Page() {
             {activeTab === "Jobs" && "Coordinate work by trade, vendor, budget, and QA status."}
             {activeTab === "Metrics" && "Measure market performance, owner impact, blockers, and vendor efficiency."}
             {activeTab === "Properties" && "Browse the property list and jump directly into turn detail."}
+            {activeTab === "Overview" && "High-level product framing and capability summary."}
           </p>
         </div>
 
-        <Card title="Property Turn Overview" subtitle="Operator control panel for the selected home">
-          <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
-            <div>
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="text-lg font-semibold text-slate-900">{selectedProperty.name}</div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    {selectedProperty.market} • Turn Owner: {selectedProperty.turnOwner} • Lease End: {selectedProperty.leaseEnd}
+        {activeTab !== "Overview" && (
+          <Card title="Property Turn Overview" subtitle="Operator control panel for the selected home">
+            <div className="grid gap-6 xl:grid-cols-[1.2fr_1fr]">
+              <div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <div className="text-lg font-semibold text-slate-900">{selectedProperty.name}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {selectedProperty.market} • Turn Owner: {selectedProperty.turnOwner} • Lease End: {selectedProperty.leaseEnd}
+                    </div>
+                  </div>
+                  <Pill tone={toneForStatus(selectedProperty.readinessStatus)}>
+                    {selectedProperty.readinessStatus}
+                  </Pill>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-4">
+                  <KPI label="Turn Readiness Score" value={`${selectedProperty.readiness}/100`} subtext="AI-scored" />
+                  <KPI label="Turn Risk Score" value={`${selectedProperty.risk}/100`} subtext="non-renewal likelihood" />
+                  <KPI label="Projected Cost" value={formatMoney(selectedProperty.projectedCost)} subtext={selectedProperty.scope} />
+                  <KPI label="Projected Completion" value={selectedProperty.projectedCompletion} subtext={`confidence ${selectedProperty.timelineConfidence}%`} />
+                </div>
+
+                <div className="mt-5 rounded-xl border border-indigo-300 bg-indigo-50 p-5 text-sm shadow-sm">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">TurnIQ Insight</div>
+                  <div className="mt-2 text-slate-700">{selectedProperty.insight}</div>
+                </div>
+
+                <div className="mt-5 rounded-xl border border-slate-200 bg-white p-4">
+                  <div className="mb-3 text-sm font-semibold text-slate-900">Operator Actions</div>
+                  <div className="flex flex-wrap gap-3">
+                    <button
+                      onClick={() => resolvePendingBlockers(selectedProperty.name)}
+                      className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+                    >
+                      Resolve Pending Blockers
+                    </button>
+                    <button
+                      onClick={() => approveScope(selectedProperty.name)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                    >
+                      Approve Scope
+                    </button>
+                    <button
+                      onClick={() => assignVendor(selectedProperty.name)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                    >
+                      Assign Vendor
+                    </button>
+                    <button
+                      onClick={() => startTurn(selectedProperty.name)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                    >
+                      Start Turn
+                    </button>
+                    <button
+                      onClick={() => completeTurn(selectedProperty.name)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                    >
+                      Complete Turn
+                    </button>
                   </div>
                 </div>
-                <Pill tone={toneForStatus(selectedProperty.readinessStatus)}>
-                  {selectedProperty.readinessStatus}
-                </Pill>
               </div>
 
-              <div className="mt-4 grid gap-4 md:grid-cols-4">
-                <KPI
-                  label="Turn Readiness Score"
-                  value={`${selectedProperty.readiness}/100`}
-                  subtext="AI-scored"
-                />
-                <KPI
-                  label="Turn Risk Score"
-                  value={`${selectedProperty.risk}/100`}
-                  subtext="non-renewal likelihood"
-                />
-                <KPI
-                  label="Projected Cost"
-                  value={selectedProperty.projectedCost}
-                  subtext={selectedProperty.scope}
-                />
-                <KPI
-                  label="Projected Completion"
-                  value={selectedProperty.projectedCompletion}
-                  subtext={`confidence ${selectedProperty.timelineConfidence}`}
-                />
-              </div>
-
-              <div className="mt-5 rounded-xl border border-indigo-300 bg-indigo-50 p-5 text-sm shadow-sm">
-                <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">
-                  TurnIQ Insight
+              <div className="space-y-4">
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">AI Turn Timeline Prediction</div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Confidence: {selectedProperty.timelineConfidence}%
+                  </div>
+                  <div className="mt-4 space-y-3">
+                    {selectedProperty.timeline.map((step, index) => (
+                      <div key={`${step.label}-${index}`} className="grid grid-cols-[120px_1fr_70px] items-center gap-3 text-sm">
+                        <div className="text-slate-700">{step.label}</div>
+                        <div className="h-3 rounded-full bg-slate-200">
+                          <div
+                            className={`h-3 rounded-full ${step.progress >= 100 ? "bg-emerald-500" : "bg-blue-500"}`}
+                            style={{ width: `${step.progress}%` }}
+                          />
+                        </div>
+                        <div className="text-xs text-slate-500">{step.date}</div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="mt-2 text-slate-700">{selectedProperty.insight}</div>
+
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">Primary blockers</div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {selectedProperty.blockers.length ? (
+                      selectedProperty.blockers.map((b) => (
+                        <Pill key={b} tone="amber">
+                          {b}
+                        </Pill>
+                      ))
+                    ) : (
+                      <Pill tone="emerald">No active blockers</Pill>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="mb-2 text-sm font-semibold text-slate-900">Readiness progress</div>
+                  <ProgressBar value={selectedProperty.readiness} tone={readinessTone} />
+                </div>
               </div>
             </div>
-
-            <div className="space-y-4">
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">AI Turn Timeline Prediction</div>
-                <div className="mt-2 text-xs text-slate-500">
-                  Confidence: {selectedProperty.timelineConfidence}
-                </div>
-                <div className="mt-3 space-y-3 text-sm text-slate-600">
-                  {selectedProperty.timeline.map((item) => (
-                    <div key={item} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                      {item}
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">Primary blockers</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {selectedProperty.blockers.length ? (
-                    selectedProperty.blockers.map((b) => (
-                      <Pill key={b} tone="amber">
-                        {b}
-                      </Pill>
-                    ))
-                  ) : (
-                    <Pill tone="emerald">No active blockers</Pill>
-                  )}
-                </div>
-              </div>
-
-              <div className="rounded-xl bg-slate-50 p-4">
-                <div className="mb-2 text-sm font-semibold text-slate-900">Readiness progress</div>
-                <ProgressBar value={selectedProperty.readiness} tone={readinessTone} />
-              </div>
-            </div>
-          </div>
-        </Card>
+          </Card>
+        )}
 
         {activeTab === "Dashboard" && (
           <div className="grid gap-6 xl:grid-cols-[1.5fr_1fr]">
@@ -775,7 +893,7 @@ export default function Page() {
                 <li>
                   Projected completion is{" "}
                   <span className="font-medium text-slate-900">{selectedProperty.projectedCompletion}</span>{" "}
-                  with {selectedProperty.timelineConfidence} confidence.
+                  with {selectedProperty.timelineConfidence}% confidence.
                 </li>
               </ul>
             </Card>
@@ -788,19 +906,35 @@ export default function Page() {
               <div className="mb-5 grid gap-4 md:grid-cols-4 text-sm">
                 <div className="rounded-xl bg-slate-50 p-4">
                   <div className="text-xs text-slate-500">Utilities Off</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">6</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {computedProperties.filter((p) =>
+                      p.blockers.some((b) => b.toLowerCase().includes("electric") || b.toLowerCase().includes("gas") || b.toLowerCase().includes("water"))
+                    ).length}
+                  </div>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-4">
                   <div className="text-xs text-slate-500">Lockbox / Access</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">4</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {computedProperties.filter((p) =>
+                      p.blockers.some((b) => b.toLowerCase().includes("lockbox"))
+                    ).length}
+                  </div>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-4">
                   <div className="text-xs text-slate-500">Materials / Appliance ETA</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">3</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {computedProperties.filter((p) =>
+                      p.blockers.some((b) => b.toLowerCase().includes("materials") || b.toLowerCase().includes("appliance"))
+                    ).length}
+                  </div>
                 </div>
                 <div className="rounded-xl bg-slate-50 p-4">
                   <div className="text-xs text-slate-500">Scope Approval</div>
-                  <div className="mt-1 text-lg font-semibold text-slate-900">2</div>
+                  <div className="mt-1 text-lg font-semibold text-slate-900">
+                    {computedProperties.filter((p) =>
+                      p.blockers.some((b) => b.toLowerCase().includes("scope"))
+                    ).length}
+                  </div>
                 </div>
               </div>
 
@@ -816,7 +950,7 @@ export default function Page() {
                 </div>
                 <div className="mt-2 font-medium text-slate-900">
                   Projected completion: {selectedProperty.projectedCompletion} • Confidence:{" "}
-                  {selectedProperty.timelineConfidence}
+                  {selectedProperty.timelineConfidence}%
                 </div>
               </div>
 
@@ -870,13 +1004,33 @@ export default function Page() {
                   </div>
                   <ProgressBar value={selectedProperty.readiness} tone={readinessTone} />
                 </div>
-                {readinessChecks.map(([item, status]) => (
-                  <div
-                    key={item}
-                    className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-                  >
-                    <span>{item}</span>
-                    <Pill tone={toneForStatus(status)}>{status}</Pill>
+
+                {readinessChecks.map(([item, status], index) => (
+                  <div key={item} className="rounded-xl border border-slate-200 px-3 py-3 text-sm hover:bg-slate-50">
+                    <div className="flex items-center justify-between">
+                      <span>{item}</span>
+                      <Pill tone={toneForStatus(status)}>{status}</Pill>
+                    </div>
+                    <div className="mt-3 flex gap-2">
+                      <button
+                        onClick={() => updateCheckStatus(selectedProperty.name, index, "Ready")}
+                        className="rounded-lg border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
+                      >
+                        Mark Ready
+                      </button>
+                      <button
+                        onClick={() => updateCheckStatus(selectedProperty.name, index, "Pending")}
+                        className="rounded-lg border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
+                      >
+                        Mark Pending
+                      </button>
+                      <button
+                        onClick={() => updateCheckStatus(selectedProperty.name, index, "Blocked")}
+                        className="rounded-lg border border-slate-200 px-3 py-1 text-xs hover:bg-slate-50"
+                      >
+                        Mark Blocked
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -905,9 +1059,9 @@ export default function Page() {
                   </thead>
                   <tbody>
                     {filteredJobs.map((job) => {
-                      const property = PROPERTIES.find((p) => p.name === job.property);
+                      const property = computedProperties.find((p) => p.name === job.property);
                       return (
-                        <tr key={`${job.property}-${job.trade}`} className="border-b border-slate-50 hover:bg-slate-50">
+                        <tr key={job.id} className="border-b border-slate-50 hover:bg-slate-50">
                           <td className="px-3 py-3">
                             <button
                               onClick={() => property && setSelectedPropertyId(property.id)}
@@ -923,8 +1077,8 @@ export default function Page() {
                           <td className="px-3 py-3">
                             <Pill tone={toneForStatus(job.status)}>{job.status}</Pill>
                           </td>
-                          <td className="px-3 py-3">{job.budget}</td>
-                          <td className="px-3 py-3">{job.actual}</td>
+                          <td className="px-3 py-3">{formatMoney(job.budget)}</td>
+                          <td className="px-3 py-3">{formatMoney(job.actual)}</td>
                         </tr>
                       );
                     })}
@@ -941,7 +1095,7 @@ export default function Page() {
                     {selectedProperty.projectedCompletion}
                   </div>
                   <div className="mt-1 text-slate-500">
-                    Confidence: {selectedProperty.timelineConfidence}
+                    Confidence: {selectedProperty.timelineConfidence}%
                   </div>
                 </div>
 
@@ -949,10 +1103,27 @@ export default function Page() {
                   <div className="font-medium text-slate-900">Timeline sequence</div>
                   <div className="mt-3 space-y-2">
                     {selectedProperty.timeline.map((item) => (
-                      <div key={item} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-                        {item}
+                      <div key={item.label + item.date} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        {item.label} — {item.date}
                       </div>
                     ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl bg-slate-50 p-4">
+                  <div className="font-medium text-slate-900">Selected property jobs</div>
+                  <div className="mt-3 space-y-2">
+                    {selectedPropertyJobs.length ? (
+                      selectedPropertyJobs.map((job) => (
+                        <div key={job.id} className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                          {job.trade} • {job.vendor} • {job.status}
+                        </div>
+                      ))
+                    ) : (
+                      <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
+                        No jobs assigned yet
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -963,8 +1134,12 @@ export default function Page() {
         {activeTab === "Metrics" && (
           <Card title="Market Analytics Dashboard" subtitle="Leadership and owner view across markets">
             <div className="mb-6 grid gap-4 md:grid-cols-4">
-              <KPI label="Total Turns" value="39" subtext="current planning window" />
-              <KPI label="Average Readiness" value="79/100" subtext="portfolio-wide" />
+              <KPI label="Total Turns" value={String(computedProperties.length)} subtext="current planning window" />
+              <KPI
+                label="Average Readiness"
+                value={`${Math.round(computedProperties.reduce((sum, p) => sum + p.readiness, 0) / computedProperties.length)}/100`}
+                subtext="portfolio-wide"
+              />
               <KPI label="Vacancy Days Prevented" value="41" subtext="estimated" />
               <KPI label="Projected NOI Lift" value="$214,000" subtext="owner impact" />
             </div>
@@ -981,19 +1156,19 @@ export default function Page() {
                   </tr>
                 </thead>
                 <tbody>
-                  {MARKET_ANALYTICS.filter(
-                    (row) => selectedMarket === "All Markets" || row.market === selectedMarket
-                  ).map((row) => (
-                    <tr key={row.market} className="border-b border-slate-50 hover:bg-slate-50">
-                      <td className="px-3 py-3 font-medium">{row.market}</td>
-                      <td className="px-3 py-3">{row.turns}</td>
-                      <td className="px-3 py-3">{row.avgTime}</td>
-                      <td className="px-3 py-3">{row.avgCost}</td>
-                      <td className="px-3 py-3">{row.highRisk}</td>
-                      <td className="px-3 py-3">{row.readiness}/100</td>
-                      <td className="px-3 py-3">{row.noi}</td>
-                    </tr>
-                  ))}
+                  {marketAnalytics
+                    .filter((row) => selectedMarket === "All Markets" || row.market === selectedMarket)
+                    .map((row) => (
+                      <tr key={row.market} className="border-b border-slate-50 hover:bg-slate-50">
+                        <td className="px-3 py-3 font-medium">{row.market}</td>
+                        <td className="px-3 py-3">{row.turns}</td>
+                        <td className="px-3 py-3">{row.avgTime}</td>
+                        <td className="px-3 py-3">{row.avgCost}</td>
+                        <td className="px-3 py-3">{row.highRisk}</td>
+                        <td className="px-3 py-3">{row.readiness}/100</td>
+                        <td className="px-3 py-3">{row.noi}</td>
+                      </tr>
+                    ))}
                 </tbody>
               </table>
             </div>
@@ -1028,12 +1203,35 @@ export default function Page() {
                     </div>
                     <div>
                       <div className="text-xs text-slate-500">Projected Cost</div>
-                      <div className="font-semibold text-slate-900">{property.projectedCost}</div>
+                      <div className="font-semibold text-slate-900">{formatMoney(property.projectedCost)}</div>
                     </div>
                   </div>
                   <div className="mt-4 text-sm text-slate-600">{property.insight}</div>
                 </button>
               ))}
+            </div>
+          </Card>
+        )}
+
+        {activeTab === "Overview" && (
+          <Card title="Overview" subtitle="TurnIQ capability summary">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4 text-sm text-slate-600">
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="font-semibold text-slate-900">Clickable properties</div>
+                <div className="mt-1">Every major workflow can pivot into a selected property detail view.</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="font-semibold text-slate-900">Dynamic readiness scoring</div>
+                <div className="mt-1">Scores are recalculated from blocked and pending readiness checks in real time.</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="font-semibold text-slate-900">Operator actions</div>
+                <div className="mt-1">Demo actions change readiness, blockers, jobs, and status so operators can play with the workflow.</div>
+              </div>
+              <div className="rounded-xl bg-slate-50 p-4">
+                <div className="font-semibold text-slate-900">Market analytics</div>
+                <div className="mt-1">Leadership and owners can compare readiness, risk, cost, and NOI impact across markets.</div>
+              </div>
             </div>
           </Card>
         )}
