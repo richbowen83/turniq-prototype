@@ -1,14 +1,18 @@
 export const metadata = {
-  title: 'TurnIQ Prototype',
-  description: 'AI-powered turn operations prototype',
+  title: "TurnIQ Prototype",
+  description: "AI-powered turn operations prototype",
 };
 
-import './globals.css';
+import "./globals.css";
 
 export default function RootLayout({ children }) {
   return (
     <html lang="en">
-      <body>{children}</body>
+      <body className="bg-slate-50 text-slate-900">
+        <div className="mx-auto max-w-7xl px-6 py-6">
+          {children}
+        </div>
+      </body>
     </html>
   );
 }
