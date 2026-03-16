@@ -300,7 +300,7 @@ export default function DashboardTab({
           <Card className="h-full">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
-                <div className="text-xl font-semibold text-slate-900">Today’s Priorities</div>
+                <div className="text-xl font-semibold text-slate-900">Priorities</div>
                 <div className="mt-1 text-sm text-slate-500">
                   Highest-urgency turns based on blockers, risk, and ECD pressure.
                 </div>

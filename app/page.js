@@ -327,45 +327,79 @@ export default function Page() {
 
   const kpis = useMemo(() => {
   const rows = filteredProperties;
+
+  const blockedTurns = rows.filter((x) => x.turnStatus === "Blocked").length;
+
+  const scopeReviewsPending = rows.filter(
+    (x) => x.currentStage === "Scope Review"
+  ).length;
+
+  const ownerApprovalPending = rows.filter(
+    (x) => x.currentStage === "Owner Approval"
+  ).length;
+
+  const highRisk = rows.filter((x) => x.risk >= 75).length;
+
+  const avgTurnTime = rows.length
+    ? `${(rows.reduce((sum, x) => sum + x.openDays, 0) / rows.length).toFixed(1)} days`
+    : "0 days";
+
+  const ecdPastDue = rows.filter(
+    (x) => new Date(x.projectedCompletion) < new Date("2026-05-07")
+  ).length;
+
+  const ecdThisWeek = rows.filter((x) =>
+    ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
+  ).length;
+
+  // Temporary prototype metric until true RRI outcome data is wired in
+  const rriFailRate = rows.length
+    ? `${Math.round((rows.filter((x) => x.risk >= 75).length / rows.length) * 100)}%`
+    : "0%";
+
   return {
     allOpenTurns: rows.length,
-    blockedTurns: rows.filter((x) => x.turnStatus === "Blocked").length,
-    scopeApprovalBacklog: rows.filter(
-      (x) => x.currentStage === "Scope Review" || x.currentStage === "Owner Approval"
-    ).length,
-    highRisk: rows.filter((x) => x.risk >= 75).length,
-    avgTurnTime: rows.length
-      ? `${(rows.reduce((sum, x) => sum + x.openDays, 0) / rows.length).toFixed(1)} days`
-      : "0 days",
-    rriPassRate: "50%",
-    ecdPastDue: rows.filter(
-      (x) => new Date(x.projectedCompletion) < new Date("2026-05-07")
-    ).length,
-    ecdThisWeek: rows.filter((x) =>
-      ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
-    ).length,
+    blockedTurns,
+    scopeReviewsPending,
+    ownerApprovalPending,
+    highRisk,
+    avgTurnTime,
+    ecdPastDue,
+    ecdThisWeek,
+    rriFailRate,
   };
 }, [filteredProperties]);
-
   const queueRows = useMemo(() => {
     let rows = filteredProperties;
 
     if (queueFilter === "Open Turns > 60 Days") rows = rows.filter((x) => x.openDays > 60);
-    if (queueFilter === "Open Turns 31–60 Days") {
-      rows = rows.filter((x) => x.openDays >= 31 && x.openDays <= 60);
-    }
-    if (queueFilter === "Open Turns 8–30 Days") {
-      rows = rows.filter((x) => x.openDays >= 8 && x.openDays <= 30);
-    }
-    if (queueFilter === "Open Turns 0–7 Days") rows = rows.filter((x) => x.openDays <= 7);
-    if (queueFilter === "High-Risk Turns") rows = rows.filter((x) => x.risk >= 75);
-    if (queueFilter === "ECD Past Due") {
-      rows = rows.filter((x) => new Date(x.projectedCompletion) < new Date("2026-05-07"));
-    }
+if (queueFilter === "Open Turns 31–60 Days") {
+  rows = rows.filter((x) => x.openDays >= 31 && x.openDays <= 60);
+}
+if (queueFilter === "Open Turns 8–30 Days") {
+  rows = rows.filter((x) => x.openDays >= 8 && x.openDays <= 30);
+}
+if (queueFilter === "Open Turns 0–7 Days") rows = rows.filter((x) => x.openDays <= 7);
 
-    if (selectedStageFilter) {
-      rows = rows.filter((x) => x.currentStage === selectedStageFilter);
-    }
+if (queueFilter === "Blocked Turns") {
+  rows = rows.filter((x) => x.turnStatus === "Blocked");
+}
+
+if (queueFilter === "High-Risk Turns") rows = rows.filter((x) => x.risk >= 75);
+
+if (queueFilter === "ECD Past Due") {
+  rows = rows.filter((x) => new Date(x.projectedCompletion) < new Date("2026-05-07"));
+}
+
+if (queueFilter === "ECD This Week") {
+  rows = rows.filter((x) =>
+    ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
+  );
+}
+
+if (selectedStageFilter) {
+  rows = rows.filter((x) => x.currentStage === selectedStageFilter);
+}
 
     const sorted = [...rows];
 
@@ -449,12 +483,17 @@ function addActivity(propertyName, item) {
     setActiveTab("Control Center");
   }}
   onBlockedTurnsClick={() => {
-    setQueueFilter("All Open Turns");
+    setQueueFilter("Blocked Turns");
     setSelectedStageFilter(null);
     setActiveTab("Dashboard");
   }}
-  onScopeApprovalClick={() => {
-    setQueueFilter("Stage: Owner Approval");
+  onScopeReviewsClick={() => {
+    setQueueFilter("All Open Turns");
+    setSelectedStageFilter("Scope Review");
+    setActiveTab("Control Center");
+  }}
+  onOwnerApprovalClick={() => {
+    setQueueFilter("All Open Turns");
     setSelectedStageFilter("Owner Approval");
     setActiveTab("Control Center");
   }}
@@ -467,6 +506,14 @@ function addActivity(propertyName, item) {
     setQueueFilter("ECD Past Due");
     setSelectedStageFilter(null);
     setActiveTab("Control Center");
+  }}
+  onEcdThisWeekClick={() => {
+    setQueueFilter("ECD This Week");
+    setSelectedStageFilter(null);
+    setActiveTab("Control Center");
+  }}
+  onRriFailRateClick={() => {
+    setActiveTab("Analytics");
   }}
 />
         </div>
