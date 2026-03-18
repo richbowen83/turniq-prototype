@@ -6,6 +6,7 @@ import Pill from "../shared/Pill";
 import ProgressBar from "../shared/ProgressBar";
 
 const HORIZONS = ["Today", "Next 7 Days", "Next 14 Days", "All Active"];
+const TODAY = new Date("2026-05-07T00:00:00");
 
 function getReadinessTone(readiness) {
   if (readiness < 40) return "red";
@@ -17,9 +18,8 @@ function getReadinessTone(readiness) {
 function isInHorizon(property, horizon) {
   if (horizon === "All Active") return true;
 
-  const today = new Date("2026-05-07");
   const ecd = new Date(property.projectedCompletion);
-  const diffDays = Math.ceil((ecd - today) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.ceil((ecd - TODAY) / (1000 * 60 * 60 * 24));
 
   if (horizon === "Today") {
     return property.turnStatus === "Blocked" || diffDays <= 0 || property.risk >= 80;
@@ -29,6 +29,17 @@ function isInHorizon(property, horizon) {
   if (horizon === "Next 14 Days") return diffDays <= 14;
 
   return true;
+}
+
+function formatDateShort(dateStr) {
+  const d = new Date(dateStr);
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function addDays(dateStr, days) {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
 function buildPriorityItems(properties) {
@@ -112,21 +123,6 @@ function buildRecommendations(properties) {
       });
     });
 
-  const tradeOverlap = properties.filter(
-    (p) =>
-      (p.scope || "").toLowerCase().includes("floor") ||
-      (p.scope || "").toLowerCase().includes("paint")
-  );
-
-  if (tradeOverlap.length >= 2) {
-    recs.push({
-      tone: "blue",
-      title: "Vendor dispatch efficiency opportunity",
-      body: `${tradeOverlap.length} turns have overlapping trade needs. Consolidating vendor mobilization could lower labor and scheduling friction.`,
-      homes: tradeOverlap.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
-    });
-  }
-
   const highReadiness = properties.filter((p) => p.readiness >= 90);
   if (highReadiness.length) {
     recs.push({
@@ -138,6 +134,181 @@ function buildRecommendations(properties) {
   }
 
   return recs.slice(0, 5);
+}
+
+function getActionButtonLabel(type) {
+  if (type === "resolve-blocker") return "Resolve";
+  if (type === "approve-scope") return "Approve";
+  if (type === "assign-vendor") return "Assign";
+  return "Review";
+}
+
+function buildActionFromProperty(p) {
+  if (p.turnStatus === "Blocked") {
+    const topBlocker =
+      (p.blockers || []).find((b) => b !== "No active blockers") || "execution blocker";
+
+    return {
+      id: `${p.id}-blocked`,
+      propertyId: p.id,
+      propertyName: p.name,
+      market: p.market,
+      title: `Resolve ${topBlocker.toLowerCase()}`,
+      message: "Current blocker is preventing forward progress through the turn workflow.",
+      impact: "Reduce delay risk by ~2 days",
+      priority: "High",
+      tone: "red",
+      type: "resolve-blocker",
+      rank: 1,
+      simulation: {
+        readinessDelta: 10,
+        riskDelta: -8,
+        ecdDeltaDays: -2,
+        vacancySavings: 140,
+      },
+    };
+  }
+
+  if (p.currentStage === "Scope Review") {
+    return {
+      id: `${p.id}-scope`,
+      propertyId: p.id,
+      propertyName: p.name,
+      market: p.market,
+      title: "Approve scope review",
+      message: "Scope is waiting on review by the turn manager before moving forward.",
+      impact: "Move turn into approval flow",
+      priority: "High",
+      tone: "amber",
+      type: "approve-scope",
+      rank: 2,
+      simulation: {
+        readinessDelta: 6,
+        riskDelta: -5,
+        ecdDeltaDays: -1,
+        vacancySavings: 70,
+      },
+    };
+  }
+
+  if (p.currentStage === "Owner Approval") {
+    return {
+      id: `${p.id}-owner`,
+      propertyId: p.id,
+      propertyName: p.name,
+      market: p.market,
+      title: "Escalate owner approval",
+      message: "Owner response is delaying dispatch and start readiness.",
+      impact: "Reduce owner-driven delay",
+      priority: "High",
+      tone: "amber",
+      type: "review-owner",
+      rank: 3,
+      simulation: {
+        readinessDelta: 4,
+        riskDelta: -4,
+        ecdDeltaDays: -2,
+        vacancySavings: 140,
+      },
+    };
+  }
+
+  if (!p.vendor || p.vendor === "TBD") {
+    return {
+      id: `${p.id}-vendor`,
+      propertyId: p.id,
+      propertyName: p.name,
+      market: p.market,
+      title: "Assign execution vendor",
+      message: "No clear vendor execution path is in place for the current turn scope.",
+      impact: "Improve dispatch readiness",
+      priority: p.risk >= 75 ? "High" : "Medium",
+      tone: "blue",
+      type: "assign-vendor",
+      rank: 4,
+      simulation: {
+        readinessDelta: 7,
+        riskDelta: -6,
+        ecdDeltaDays: -1,
+        vacancySavings: 70,
+      },
+    };
+  }
+
+  const dueSoon = new Date(p.projectedCompletion) <= new Date("2026-05-14");
+  if (p.risk >= 70 && dueSoon) {
+    return {
+      id: `${p.id}-delay`,
+      propertyId: p.id,
+      propertyName: p.name,
+      market: p.market,
+      title: "Mitigate near-term delay risk",
+      message: "Turn is at risk of missing expected completion based on risk and timing.",
+      impact: "Avoid +1–3 days of slippage",
+      priority: "High",
+      tone: "red",
+      type: "review-delay",
+      rank: 5,
+      simulation: {
+        readinessDelta: 5,
+        riskDelta: -7,
+        ecdDeltaDays: -2,
+        vacancySavings: 140,
+      },
+    };
+  }
+
+  return null;
+}
+
+function generateActions(properties) {
+  const rawActions = properties
+    .map((p) => buildActionFromProperty(p))
+    .filter(Boolean);
+
+  const deduped = {};
+  rawActions.forEach((action) => {
+    const current = deduped[action.propertyId];
+    if (!current || action.rank < current.rank) {
+      deduped[action.propertyId] = action;
+    }
+  });
+
+  const priorityOrder = { High: 0, Medium: 1, Low: 2 };
+
+  return Object.values(deduped)
+    .sort((a, b) => {
+      if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
+        return priorityOrder[a.priority] - priorityOrder[b.priority];
+      }
+      return a.rank - b.rank;
+    })
+    .slice(0, 6);
+}
+
+function buildPerformanceMetrics(actionLog) {
+  const completed = actionLog.filter((a) => a.kind === "completed");
+  const totalCompleted = completed.length;
+  const totalDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+  const totalVacancySaved = completed.reduce((sum, a) => sum + (a.vacancySavings || 0), 0);
+  const avgResponseMinutes = totalCompleted
+    ? Math.round(
+        completed.reduce((sum, a) => sum + (a.responseMinutes || 0), 0) / totalCompleted
+      )
+    : 0;
+
+  const byType = {};
+  completed.forEach((item) => {
+    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
+  });
+
+  return {
+    totalCompleted,
+    totalDaysAvoided,
+    totalVacancySaved,
+    avgResponseMinutes,
+    byType,
+  };
 }
 
 export default function DashboardTab({
@@ -156,15 +327,22 @@ export default function DashboardTab({
 }) {
   const [draftNote, setDraftNote] = useState("");
   const [horizon, setHorizon] = useState("Today");
+  const [previewActionId, setPreviewActionId] = useState(null);
+  const [actionLog, setActionLog] = useState([]);
 
   const horizonProperties = useMemo(
     () => properties.filter((p) => isInHorizon(p, horizon)),
     [properties, horizon]
   );
 
+  const actions = useMemo(() => generateActions(horizonProperties), [horizonProperties]);
   const priorities = useMemo(() => buildPriorityItems(horizonProperties), [horizonProperties]);
   const marketHealth = useMemo(() => buildMarketHealth(properties), [properties]);
   const recommendations = useMemo(() => buildRecommendations(horizonProperties), [horizonProperties]);
+  const performanceMetrics = useMemo(() => buildPerformanceMetrics(actionLog), [actionLog]);
+
+  const previewAction =
+    actions.find((a) => a.id === previewActionId) || actions[0] || null;
 
   const activityFeed = useMemo(() => {
     const noteEvents = notes.map((note, i) => ({
@@ -181,6 +359,22 @@ export default function DashboardTab({
 
     return [...activityEvents, ...noteEvents].reverse().slice(0, 8);
   }, [notes, activity]);
+
+  function logCompletedAction(target, action) {
+    setActionLog((prev) => [
+      {
+        id: `${action.id}-${Date.now()}`,
+        kind: "completed",
+        propertyId: target.id,
+        propertyName: target.name,
+        actionType: action.type,
+        daysAvoided: Math.abs(action.simulation?.ecdDeltaDays || 0),
+        vacancySavings: action.simulation?.vacancySavings || 0,
+        responseMinutes: 11,
+      },
+      ...prev,
+    ]);
+  }
 
   function handleAddNote() {
     if (!draftNote.trim()) return;
@@ -268,6 +462,106 @@ export default function DashboardTab({
     addActivity(selectedProperty.name, "Turn marked complete");
   }
 
+  function handleActionResolve(action) {
+    const target = properties.find((p) => p.id === action.propertyId);
+    if (!target) return;
+
+    setSelectedPropertyId(target.id);
+
+    if (action.type === "resolve-blocker") {
+      const current = target.blockers || [];
+      const remaining = current.filter((b) => b !== "No active blockers").slice(1);
+      updateProperty(target.id, {
+        blockers: remaining.length ? remaining : ["No active blockers"],
+        turnStatus: remaining.length ? "Monitoring" : "Ready",
+        readiness: Math.min(100, target.readiness + (action.simulation?.readinessDelta || 10)),
+        risk: Math.max(0, target.risk + (action.simulation?.riskDelta || -8)),
+        projectedCompletion: addDays(
+          target.projectedCompletion,
+          action.simulation?.ecdDeltaDays || -2
+        ),
+      });
+      addActivity(target.name, `Action Center: ${action.title}`);
+      logCompletedAction(target, action);
+      return;
+    }
+
+    if (action.type === "approve-scope") {
+      updateProperty(target.id, {
+        currentStage: "Owner Approval",
+        readiness: Math.min(100, target.readiness + (action.simulation?.readinessDelta || 6)),
+        risk: Math.max(0, target.risk + (action.simulation?.riskDelta || -5)),
+        projectedCompletion: addDays(
+          target.projectedCompletion,
+          action.simulation?.ecdDeltaDays || -1
+        ),
+      });
+      addActivity(target.name, "Action Center: scope review approved");
+      logCompletedAction(target, action);
+      return;
+    }
+
+    if (action.type === "assign-vendor") {
+      const fallbackVendor =
+        target.vendor ||
+        (target.market === "Dallas"
+          ? "FloorCo"
+          : target.market === "Atlanta"
+          ? "ABC Paint"
+          : target.market === "Phoenix"
+          ? "Prime Paint"
+          : "Sparkle");
+
+      updateProperty(target.id, {
+        vendor: fallbackVendor,
+        readiness: Math.min(100, target.readiness + (action.simulation?.readinessDelta || 7)),
+        risk: Math.max(0, target.risk + (action.simulation?.riskDelta || -6)),
+        projectedCompletion: addDays(
+          target.projectedCompletion,
+          action.simulation?.ecdDeltaDays || -1
+        ),
+      });
+      addActivity(target.name, `Action Center: vendor assigned (${fallbackVendor})`);
+      logCompletedAction(target, action);
+      return;
+    }
+
+    updateProperty(target.id, {
+      readiness: Math.min(100, target.readiness + (action.simulation?.readinessDelta || 4)),
+      risk: Math.max(0, target.risk + (action.simulation?.riskDelta || -4)),
+      projectedCompletion: addDays(
+        target.projectedCompletion,
+        action.simulation?.ecdDeltaDays || -1
+      ),
+    });
+    addActivity(target.name, `Action Center reviewed: ${action.title}`);
+    logCompletedAction(target, action);
+  }
+
+  function handleActionView(action) {
+    setSelectedPropertyId(action.propertyId);
+    setPreviewActionId(action.id);
+    const target = properties.find((p) => p.id === action.propertyId);
+    if (target) {
+      addActivity(target.name, `Opened from Action Center: ${action.title}`);
+    }
+  }
+
+  function handleBatchResolveBlocked() {
+    const batch = actions.filter((a) => a.type === "resolve-blocker");
+    batch.forEach((action) => handleActionResolve(action));
+  }
+
+  function handleBatchApproveScope() {
+    const batch = actions.filter((a) => a.type === "approve-scope");
+    batch.forEach((action) => handleActionResolve(action));
+  }
+
+  function handleBatchAssignVendor() {
+    const batch = actions.filter((a) => a.type === "assign-vendor");
+    batch.forEach((action) => handleActionResolve(action));
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -294,6 +588,136 @@ export default function DashboardTab({
           ))}
         </div>
       </div>
+
+      <Card>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="text-xl font-semibold text-slate-900">Recommended Actions</div>
+            <div className="mt-1 text-sm text-slate-500">
+              AI-generated operator actions to reduce delay risk and keep turns moving.
+            </div>
+          </div>
+          <Pill tone="blue">{actions.length} actions</Pill>
+        </div>
+
+        <div className="mb-4 flex flex-wrap gap-2">
+          <button
+            onClick={handleBatchResolveBlocked}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Resolve all blocked
+          </button>
+          <button
+            onClick={handleBatchApproveScope}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Approve all scope reviews
+          </button>
+          <button
+            onClick={handleBatchAssignVendor}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Assign all vendorless turns
+          </button>
+        </div>
+
+        <div className="grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-8 space-y-3">
+            {actions.map((action) => (
+              <div
+                key={action.id}
+                className="flex flex-col gap-3 rounded-2xl border border-slate-200 p-4 shadow-sm transition hover:shadow-md md:flex-row md:items-center md:justify-between"
+              >
+                <div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="font-semibold text-slate-900">{action.propertyName}</div>
+                    <Pill tone={action.tone}>{action.priority}</Pill>
+                  </div>
+                  <div className="mt-1 text-sm font-medium text-slate-800">{action.title}</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    {action.market} • {action.message}
+                  </div>
+                  <div className="mt-2 text-xs font-medium text-slate-400">
+                    Impact: {action.impact}
+                  </div>
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleActionResolve(action)}
+                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                  >
+                    {getActionButtonLabel(action.type)}
+                  </button>
+                  <button
+                    onClick={() => handleActionView(action)}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    View
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="xl:col-span-4">
+            <Card className="h-full bg-slate-50">
+              <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
+              <div className="mt-1 text-sm text-slate-500">
+                {previewAction
+                  ? `Projected impact for ${previewAction.propertyName}`
+                  : "Select an action to preview operator impact"}
+              </div>
+
+              {previewAction ? (
+                <div className="mt-5 space-y-4">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Expected ECD Change
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {previewAction.simulation?.ecdDeltaDays < 0
+                        ? `${Math.abs(previewAction.simulation.ecdDeltaDays)} days faster`
+                        : `${previewAction.simulation?.ecdDeltaDays || 0} days`}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Readiness Lift
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      +{previewAction.simulation?.readinessDelta || 0} pts
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Risk Reduction
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {previewAction.simulation?.riskDelta || 0} pts
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Vacancy Savings
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      ${previewAction.simulation?.vacancySavings || 0}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
+                  Open an action to preview projected outcome before execution.
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
+      </Card>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-7">
@@ -636,7 +1060,49 @@ export default function DashboardTab({
           </Card>
         </div>
 
-        <div className="xl:col-span-5">
+        <div className="xl:col-span-5 space-y-6">
+          <Card>
+            <div className="mb-3 text-lg font-semibold text-slate-900">Operator Performance</div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Actions Completed</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {performanceMetrics.totalCompleted}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response Time</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {performanceMetrics.avgResponseMinutes}m
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Avoided</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {performanceMetrics.totalDaysAvoided}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Savings</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  ${performanceMetrics.totalVacancySaved}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {Object.entries(performanceMetrics.byType).map(([type, count]) => (
+                <div
+                  key={type}
+                  className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                >
+                  <span className="text-slate-600">{type}</span>
+                  <span className="font-medium text-slate-900">{count}</span>
+                </div>
+              ))}
+            </div>
+          </Card>
+
           <Card className="h-full">
             <div className="mb-3 text-lg font-semibold text-slate-900">Activity Feed</div>
             <div className="space-y-3">

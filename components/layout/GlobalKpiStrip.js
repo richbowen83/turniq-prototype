@@ -1,5 +1,33 @@
 "use client";
 
+function KpiButton({ label, value, onClick, clickable = true }) {
+  const content = (
+    <div className="min-w-[132px] text-left">
+      <div className="text-[11px] uppercase tracking-wide text-slate-400">
+        {label}
+      </div>
+      <div className="mt-1 text-xl font-semibold text-slate-900">{value}</div>
+    </div>
+  );
+
+  if (!clickable || !onClick) {
+    return <div>{content}</div>;
+  }
+
+  return (
+    <button
+      onClick={onClick}
+      className="rounded-xl px-2 py-1 text-left transition hover:bg-slate-50"
+    >
+      {content}
+    </button>
+  );
+}
+
+function Divider() {
+  return <div className="h-10 w-px shrink-0 bg-slate-200" />;
+}
+
 export default function GlobalKpiStrip({
   kpis,
   onOpenTurnsClick,
@@ -13,105 +41,84 @@ export default function GlobalKpiStrip({
 }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-x-8 gap-y-3 text-sm">
-        <button onClick={onOpenTurnsClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            Open Turns
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.allOpenTurns}
-          </div>
-        </button>
+      <div className="mb-2 text-xs font-medium text-slate-500">Portfolio Overview</div>
 
-        <div className="h-8 w-px bg-slate-200" />
+      <div className="overflow-x-auto">
+        <div className="flex min-w-max items-center gap-4 pb-1">
+          <KpiButton
+            label="Open Turns"
+            value={kpis.allOpenTurns}
+            onClick={onOpenTurnsClick}
+          />
 
-        <button onClick={onBlockedTurnsClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            Blocked Turns
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.blockedTurns}
-          </div>
-        </button>
+          <Divider />
 
-        <div className="h-8 w-px bg-slate-200" />
+          <KpiButton
+            label="Blocked Turns"
+            value={kpis.blockedTurns}
+            onClick={onBlockedTurnsClick}
+          />
 
-        <button onClick={onScopeReviewsClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            Scope Reviews Pending
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.scopeReviewsPending}
-          </div>
-        </button>
+          <Divider />
 
-        <div className="h-8 w-px bg-slate-200" />
+          <KpiButton
+            label="Scope Reviews Pending"
+            value={kpis.scopeReviewsPending}
+            onClick={onScopeReviewsClick}
+          />
 
-        <button onClick={onOwnerApprovalClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            Owner Approval
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.ownerApprovalPending}
-          </div>
-        </button>
+          <Divider />
 
-        <div className="h-8 w-px bg-slate-200" />
+          <KpiButton
+            label="Owner Approval"
+            value={kpis.ownerApprovalPending}
+            onClick={onOwnerApprovalClick}
+          />
 
-        <button onClick={onHighRiskClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            High Risk
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.highRisk}
-          </div>
-        </button>
+          <Divider />
 
-        <div className="h-8 w-px bg-slate-200" />
+          <KpiButton
+            label="High Risk"
+            value={kpis.highRisk}
+            onClick={onHighRiskClick}
+          />
 
-        <div className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            Avg Turn Time
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.avgTurnTime}
-          </div>
+          <Divider />
+
+          <KpiButton
+            label="Avg Turn Time"
+            value={kpis.avgTurnTime}
+            clickable={false}
+          />
+
+          <Divider />
+
+          <KpiButton
+            label="ECD Past Due"
+            value={kpis.ecdPastDue}
+            onClick={onPastDueClick}
+          />
+
+          <Divider />
+
+          <KpiButton
+            label="ECD This Week"
+            value={kpis.ecdThisWeek}
+            onClick={onEcdThisWeekClick}
+          />
+
+          <Divider />
+
+          <KpiButton
+            label="RRI Fail Rate"
+            value={kpis.rriFailRate}
+            onClick={onRriFailRateClick}
+          />
         </div>
+      </div>
 
-        <div className="h-8 w-px bg-slate-200" />
-
-        <button onClick={onPastDueClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            ECD Past Due
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.ecdPastDue}
-          </div>
-        </button>
-
-        <div className="h-8 w-px bg-slate-200" />
-
-        <button onClick={onEcdThisWeekClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            ECD This Week
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.ecdThisWeek}
-          </div>
-        </button>
-
-        <div className="h-8 w-px bg-slate-200" />
-
-        <button onClick={onRriFailRateClick} className="text-left">
-          <div className="text-[11px] uppercase tracking-wide text-slate-400">
-            RRI Fail Rate
-          </div>
-          <div className="mt-1 text-xl font-semibold text-slate-900">
-            {kpis.rriFailRate}
-          </div>
-        </button>
-
-        <div className="ml-auto flex flex-wrap gap-2">
+      <div className="mt-3 overflow-x-auto">
+        <div className="flex min-w-max gap-2">
           {kpis.blockedTurns > 0 && (
             <button
               onClick={onBlockedTurnsClick}
