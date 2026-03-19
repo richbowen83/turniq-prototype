@@ -20,12 +20,39 @@ function maxOrOne(values) {
   return max > 0 ? max : 1;
 }
 
+function getActionRollup(actionHistory = []) {
+  const completed = actionHistory.filter((a) => a.kind === "completed");
+
+  const totalActions = completed.length;
+  const delayDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+  const vacancySavings = completed.reduce((sum, a) => sum + (a.vacancySavings || 0), 0);
+  const avgResponseMinutes = totalActions
+    ? Math.round(
+        completed.reduce((sum, a) => sum + (a.responseMinutes || 0), 0) / totalActions
+      )
+    : 0;
+
+  const byType = {};
+  completed.forEach((item) => {
+    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
+  });
+
+  return {
+    totalActions,
+    delayDaysAvoided,
+    vacancySavings,
+    avgResponseMinutes,
+    byType,
+  };
+}
+
 export default function OverviewTab({
   properties,
   kpis,
   selectedMarket,
   setSelectedMarket,
   setActiveTab,
+  actionHistory = [],
 }) {
   const blockedTurns = properties.filter((p) => p.turnStatus === "Blocked");
   const highRiskTurns = properties.filter((p) => p.risk >= 75);
@@ -38,6 +65,8 @@ export default function OverviewTab({
   const avgRisk = Math.round(avg(properties.map((p) => p.risk)));
   const avgReadiness = Math.round(avg(properties.map((p) => p.readiness)));
   const avgConfidence = Math.round(avg(properties.map((p) => p.timelineConfidence || 0)));
+
+  const actionRollup = getActionRollup(actionHistory);
 
   const marketSummary = Array.from(new Set(properties.map((p) => p.market)))
     .map((market) => {
@@ -107,6 +136,14 @@ export default function OverviewTab({
           tone: "emerald",
         }
       : null,
+    actionRollup.totalActions > 0
+      ? {
+          title: "Review action impact",
+          body: `${actionRollup.totalActions} actions have already avoided ${actionRollup.delayDaysAvoided} delay days and saved $${actionRollup.vacancySavings}.`,
+          tab: "Analytics",
+          tone: "blue",
+        }
+      : null,
     {
       title: "Review vendor capacity",
       body: "Use the Vendors tab to rebalance market load and reduce dispatch friction.",
@@ -118,7 +155,7 @@ export default function OverviewTab({
   const tabCards = [
     {
       title: "Dashboard",
-      desc: "Daily operating priorities, selected property command panel, blockers, and activity feed.",
+      desc: "Daily operating priorities, selected property command panel, blockers, simulation preview, and action center.",
       cta: "Open Dashboard",
     },
     {
@@ -128,17 +165,17 @@ export default function OverviewTab({
     },
     {
       title: "Forecast",
-      desc: "See upcoming turns, predicted scope, vendor recommendations, and modeled delay exposure.",
+      desc: "See upcoming turns, predicted scope, vendor recommendations, delay exposure, and bundling opportunities.",
       cta: "Open Forecast",
     },
     {
       title: "Vendors",
-      desc: "Compare vendor scorecards, market coverage, capacity risk, and AI sourcing insights.",
+      desc: "Compare vendor scorecards, market coverage, capacity risk, and sourcing insights.",
       cta: "Open Vendors",
     },
     {
       title: "Analytics",
-      desc: "Understand bottlenecks, delay drivers, market risk, vendor performance, and portfolio trends.",
+      desc: "Understand bottlenecks, delay drivers, vendor performance, operator impact, and portfolio trends.",
       cta: "Open Analytics",
     },
   ];
@@ -149,21 +186,19 @@ export default function OverviewTab({
 
   return (
     <div className="space-y-6">
-      {/* HEADER */}
       <div>
         <div className="text-3xl font-semibold text-slate-900">Overview</div>
         <div className="mt-1 text-sm text-slate-500">
-          Executive summary of portfolio health, operating pressure, and where to go next.
+          Executive summary of portfolio health, operating pressure, and quantified action impact.
         </div>
       </div>
 
-      {/* EXEC SUMMARY */}
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-7">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Portfolio Summary</div>
             <div className="mt-1 text-sm text-slate-500">
-              A concise readout of current turn performance and modeled operating risk.
+              A concise readout of current turn performance, modeled risk, and operational intervention impact.
             </div>
 
             <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -194,16 +229,47 @@ export default function OverviewTab({
               </div>
             </div>
 
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-blue-700">Actions Completed</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {actionRollup.totalActions}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-emerald-700">Delay Days Avoided</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {actionRollup.delayDaysAvoided}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-amber-700">Vacancy Savings</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  ${actionRollup.vacancySavings}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response</div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {actionRollup.avgResponseMinutes}m
+                </div>
+              </div>
+            </div>
+
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 p-4">
                 <div className="text-sm font-semibold text-slate-900">TurnIQ Summary</div>
                 <div className="mt-3 text-sm leading-6 text-slate-700">
                   TurnIQ is currently managing <strong>{kpis.allOpenTurns} open turns</strong> with{" "}
                   <strong>{kpis.blockedTurns} blocked</strong>,{" "}
-                  <strong>{kpis.scopeApprovalBacklog} in scope/approval flow</strong>, and{" "}
+                  <strong>{kpis.scopeReviewsPending} scope reviews pending</strong>, and{" "}
                   <strong>{kpis.ecdPastDue} past due</strong>. Portfolio readiness averages{" "}
-                  <strong>{avgReadiness}/100</strong>, while modeled confidence sits at{" "}
-                  <strong>{avgConfidence}%</strong>.
+                  <strong>{avgReadiness}/100</strong>, modeled confidence sits at{" "}
+                  <strong>{avgConfidence}%</strong>, and completed operator actions have already
+                  avoided <strong>{actionRollup.delayDaysAvoided} delay days</strong>.
                 </div>
               </div>
 
@@ -288,7 +354,6 @@ export default function OverviewTab({
         </div>
       </div>
 
-      {/* CHARTS */}
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-6">
           <Card className="h-full">
@@ -419,7 +484,6 @@ export default function OverviewTab({
         </div>
       </div>
 
-      {/* MARKET + RISK SUMMARY */}
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-6">
           <Card className="h-full">
@@ -545,7 +609,6 @@ export default function OverviewTab({
         </div>
       </div>
 
-      {/* TAB GUIDE */}
       <div>
         <div className="mb-4 text-xl font-semibold text-slate-900">Where to go next</div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">

@@ -203,6 +203,8 @@ const INITIAL_ACTIVITY = {
   "123 Main St": ["Turn created", "Scope approved", "Vendor recommendation generated"],
 };
 
+const INITIAL_ACTION_HISTORY = [];
+
 const TABS = [
   "Dashboard",
   "Control Center",
@@ -261,6 +263,7 @@ export default function Page() {
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
   const [notesMap, setNotesMap] = useState(INITIAL_NOTES);
   const [activityMap, setActivityMap] = useState(INITIAL_ACTIVITY);
+  const [actionHistory, setActionHistory] = useState(INITIAL_ACTION_HISTORY);
   const [queueFilter, setQueueFilter] = useState("All Open Turns");
   const [selectedStageFilter, setSelectedStageFilter] = useState(null);
   const [sortBy, setSortBy] = useState("Risk");
@@ -326,80 +329,80 @@ export default function Page() {
   }, [filteredProperties]);
 
   const kpis = useMemo(() => {
-  const rows = filteredProperties;
+    const rows = filteredProperties;
 
-  const blockedTurns = rows.filter((x) => x.turnStatus === "Blocked").length;
+    const blockedTurns = rows.filter((x) => x.turnStatus === "Blocked").length;
+    const scopeReviewsPending = rows.filter((x) => x.currentStage === "Scope Review").length;
+    const ownerApprovalPending = rows.filter((x) => x.currentStage === "Owner Approval").length;
+    const highRisk = rows.filter((x) => x.risk >= 75).length;
 
-  const scopeReviewsPending = rows.filter(
-    (x) => x.currentStage === "Scope Review"
-  ).length;
+    const avgTurnTime = rows.length
+      ? `${(rows.reduce((sum, x) => sum + x.openDays, 0) / rows.length).toFixed(1)} days`
+      : "0 days";
 
-  const ownerApprovalPending = rows.filter(
-    (x) => x.currentStage === "Owner Approval"
-  ).length;
+    const ecdPastDue = rows.filter(
+      (x) => new Date(x.projectedCompletion) < new Date("2026-05-07")
+    ).length;
 
-  const highRisk = rows.filter((x) => x.risk >= 75).length;
+    const ecdThisWeek = rows.filter((x) =>
+      ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
+    ).length;
 
-  const avgTurnTime = rows.length
-    ? `${(rows.reduce((sum, x) => sum + x.openDays, 0) / rows.length).toFixed(1)} days`
-    : "0 days";
+    const rriFailRate = rows.length
+      ? `${Math.round((rows.filter((x) => x.risk >= 75).length / rows.length) * 100)}%`
+      : "0%";
 
-  const ecdPastDue = rows.filter(
-    (x) => new Date(x.projectedCompletion) < new Date("2026-05-07")
-  ).length;
+    return {
+      allOpenTurns: rows.length,
+      blockedTurns,
+      scopeReviewsPending,
+      ownerApprovalPending,
+      highRisk,
+      avgTurnTime,
+      ecdPastDue,
+      ecdThisWeek,
+      rriFailRate,
+    };
+  }, [filteredProperties]);
 
-  const ecdThisWeek = rows.filter((x) =>
-    ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
-  ).length;
-
-  // Temporary prototype metric until true RRI outcome data is wired in
-  const rriFailRate = rows.length
-    ? `${Math.round((rows.filter((x) => x.risk >= 75).length / rows.length) * 100)}%`
-    : "0%";
-
-  return {
-    allOpenTurns: rows.length,
-    blockedTurns,
-    scopeReviewsPending,
-    ownerApprovalPending,
-    highRisk,
-    avgTurnTime,
-    ecdPastDue,
-    ecdThisWeek,
-    rriFailRate,
-  };
-}, [filteredProperties]);
   const queueRows = useMemo(() => {
     let rows = filteredProperties;
 
     if (queueFilter === "Open Turns > 60 Days") rows = rows.filter((x) => x.openDays > 60);
-if (queueFilter === "Open Turns 31–60 Days") {
-  rows = rows.filter((x) => x.openDays >= 31 && x.openDays <= 60);
-}
-if (queueFilter === "Open Turns 8–30 Days") {
-  rows = rows.filter((x) => x.openDays >= 8 && x.openDays <= 30);
-}
-if (queueFilter === "Open Turns 0–7 Days") rows = rows.filter((x) => x.openDays <= 7);
 
-if (queueFilter === "Blocked Turns") {
-  rows = rows.filter((x) => x.turnStatus === "Blocked");
-}
+    if (queueFilter === "Open Turns 31–60 Days") {
+      rows = rows.filter((x) => x.openDays >= 31 && x.openDays <= 60);
+    }
 
-if (queueFilter === "High-Risk Turns") rows = rows.filter((x) => x.risk >= 75);
+    if (queueFilter === "Open Turns 8–30 Days") {
+      rows = rows.filter((x) => x.openDays >= 8 && x.openDays <= 30);
+    }
 
-if (queueFilter === "ECD Past Due") {
-  rows = rows.filter((x) => new Date(x.projectedCompletion) < new Date("2026-05-07"));
-}
+    if (queueFilter === "Open Turns 0–7 Days") {
+      rows = rows.filter((x) => x.openDays <= 7);
+    }
 
-if (queueFilter === "ECD This Week") {
-  rows = rows.filter((x) =>
-    ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
-  );
-}
+    if (queueFilter === "Blocked Turns") {
+      rows = rows.filter((x) => x.turnStatus === "Blocked");
+    }
 
-if (selectedStageFilter) {
-  rows = rows.filter((x) => x.currentStage === selectedStageFilter);
-}
+    if (queueFilter === "High-Risk Turns") {
+      rows = rows.filter((x) => x.risk >= 75);
+    }
+
+    if (queueFilter === "ECD Past Due") {
+      rows = rows.filter((x) => new Date(x.projectedCompletion) < new Date("2026-05-07"));
+    }
+
+    if (queueFilter === "ECD This Week") {
+      rows = rows.filter((x) =>
+        ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
+      );
+    }
+
+    if (selectedStageFilter) {
+      rows = rows.filter((x) => x.currentStage === selectedStageFilter);
+    }
 
     const sorted = [...rows];
 
@@ -431,14 +434,28 @@ if (selectedStageFilter) {
       [propertyName]: [...(prev[propertyName] || []), note.trim()],
     }));
   }
-function addActivity(propertyName, item) {
-  if (!item?.trim()) return;
 
-  setActivityMap((prev) => ({
-    ...prev,
-    [propertyName]: [...(prev[propertyName] || []), item.trim()],
-  }));
-}
+  function addActivity(propertyName, item) {
+    if (!item?.trim()) return;
+
+    setActivityMap((prev) => ({
+      ...prev,
+      [propertyName]: [...(prev[propertyName] || []), item.trim()],
+    }));
+  }
+
+  function addActionHistory(entry) {
+    setActionHistory((prev) => [
+      {
+        id: `${entry.propertyId || "action"}-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 7)}`,
+        timestamp: new Date().toISOString(),
+        ...entry,
+      },
+      ...prev,
+    ]);
+  }
 
   function saveRow(id) {
     setSavedRowIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
@@ -476,46 +493,46 @@ function addActivity(propertyName, item) {
           />
 
           <GlobalKpiStrip
-  kpis={kpis}
-  onOpenTurnsClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onBlockedTurnsClick={() => {
-    setQueueFilter("Blocked Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Dashboard");
-  }}
-  onScopeReviewsClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter("Scope Review");
-    setActiveTab("Control Center");
-  }}
-  onOwnerApprovalClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter("Owner Approval");
-    setActiveTab("Control Center");
-  }}
-  onHighRiskClick={() => {
-    setQueueFilter("High-Risk Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onPastDueClick={() => {
-    setQueueFilter("ECD Past Due");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onEcdThisWeekClick={() => {
-    setQueueFilter("ECD This Week");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onRriFailRateClick={() => {
-    setActiveTab("Analytics");
-  }}
-/>
+            kpis={kpis}
+            onOpenTurnsClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onBlockedTurnsClick={() => {
+              setQueueFilter("Blocked Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Dashboard");
+            }}
+            onScopeReviewsClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter("Scope Review");
+              setActiveTab("Control Center");
+            }}
+            onOwnerApprovalClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter("Owner Approval");
+              setActiveTab("Control Center");
+            }}
+            onHighRiskClick={() => {
+              setQueueFilter("High-Risk Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onPastDueClick={() => {
+              setQueueFilter("ECD Past Due");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onEcdThisWeekClick={() => {
+              setQueueFilter("ECD This Week");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onRriFailRateClick={() => {
+              setActiveTab("Analytics");
+            }}
+          />
         </div>
       </div>
 
@@ -527,21 +544,23 @@ function addActivity(propertyName, item) {
 
       <div className="mx-auto max-w-7xl px-6 py-4">
         {activeTab === "Dashboard" && (
-  <DashboardTab
-    properties={filteredProperties}
-    selectedProperty={selectedProperty}
-    setSelectedPropertyId={setSelectedPropertyId}
-    selectedMarket={selectedMarket}
-    setSelectedMarket={setSelectedMarket}
-    notes={notesMap[selectedProperty.name] || []}
-    activity={activityMap[selectedProperty.name] || []}
-    addNote={addNote}
-    addActivity={addActivity}
-    updateProperty={updateProperty}
-    formatMoney={formatMoney}
-    getToneFromRisk={getToneFromRisk}
-  />
-)}
+          <DashboardTab
+            properties={filteredProperties}
+            selectedProperty={selectedProperty}
+            setSelectedPropertyId={setSelectedPropertyId}
+            selectedMarket={selectedMarket}
+            setSelectedMarket={setSelectedMarket}
+            notes={notesMap[selectedProperty.name] || []}
+            activity={activityMap[selectedProperty.name] || []}
+            addNote={addNote}
+            addActivity={addActivity}
+            addActionHistory={addActionHistory}
+            actionHistory={actionHistory}
+            updateProperty={updateProperty}
+            formatMoney={formatMoney}
+            getToneFromRisk={getToneFromRisk}
+          />
+        )}
 
         {activeTab === "Control Center" && (
           <ControlCenterTab
@@ -569,29 +588,33 @@ function addActivity(propertyName, item) {
         )}
 
         {activeTab === "Forecast" && (
-  <ForecastTab
-    selectedProperty={selectedProperty}
-    properties={filteredProperties}
-    updateProperty={updateProperty}
-    setSelectedPropertyId={setSelectedPropertyId}
-  />
-)}
+          <ForecastTab
+            selectedProperty={selectedProperty}
+            properties={filteredProperties}
+            updateProperty={updateProperty}
+            setSelectedPropertyId={setSelectedPropertyId}
+          />
+        )}
 
         {activeTab === "Analytics" && (
-  <AnalyticsTab properties={filteredProperties} />
-)}
+          <AnalyticsTab
+            properties={filteredProperties}
+            actionHistory={actionHistory}
+          />
+        )}
 
         {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
 
         {activeTab === "Overview" && (
-  <OverviewTab
-    properties={filteredProperties}
-    kpis={kpis}
-    selectedMarket={selectedMarket}
-    setSelectedMarket={setSelectedMarket}
-    setActiveTab={setActiveTab}
-  />
-)}
+          <OverviewTab
+            properties={filteredProperties}
+            kpis={kpis}
+            selectedMarket={selectedMarket}
+            setSelectedMarket={setSelectedMarket}
+            setActiveTab={setActiveTab}
+            actionHistory={actionHistory}
+          />
+        )}
       </div>
     </div>
   );

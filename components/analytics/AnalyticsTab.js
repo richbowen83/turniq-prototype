@@ -6,6 +6,7 @@ import Pill from "../shared/Pill";
 import ProgressBar from "../shared/ProgressBar";
 
 const HORIZONS = ["Current", "Next 7 Days", "Next 14 Days", "All Active"];
+const TODAY = new Date("2026-05-07");
 
 function getToneFromRisk(risk) {
   if (risk >= 75) return "red";
@@ -16,9 +17,8 @@ function getToneFromRisk(risk) {
 function isInHorizon(property, horizon) {
   if (horizon === "All Active") return true;
 
-  const today = new Date("2026-05-07");
   const ecd = new Date(property.projectedCompletion);
-  const diffDays = Math.ceil((ecd - today) / (1000 * 60 * 60 * 24));
+  const diffDays = Math.ceil((ecd - TODAY) / (1000 * 60 * 60 * 24));
 
   if (horizon === "Current") return true;
   if (horizon === "Next 7 Days") return diffDays <= 7;
@@ -107,6 +107,7 @@ function getVendorAnalytics(rows) {
   return vendors
     .map((vendor) => {
       const items = rows.filter((r) => r.vendor === vendor);
+
       const onTimeRate = Math.max(
         72,
         Math.min(
@@ -144,7 +145,9 @@ function getVendorAnalytics(rows) {
 
       const avgRisk = Math.round(average(items.map((r) => r.risk)));
       const jobs = items.length;
-      const score = Math.round((onTimeRate * 0.4) + (qualityRate * 0.35) + ((100 - avgRisk) * 0.25));
+      const score = Math.round(
+        onTimeRate * 0.4 + qualityRate * 0.35 + (100 - avgRisk) * 0.25
+      );
       const capacity = Math.min(96, 45 + jobs * 18 + (100 - avgRisk) * 0.25);
 
       return {
@@ -169,7 +172,73 @@ function getRiskBands(rows) {
   };
 }
 
-function getInsights(rows, stageAnalytics, marketAnalytics, vendorAnalytics, delayDrivers) {
+function getActionAnalytics(actionHistory) {
+  const completed = actionHistory.filter((a) => a.kind === "completed");
+
+  const totalActions = completed.length;
+  const totalDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+  const totalVacancySavings = completed.reduce(
+    (sum, a) => sum + (a.vacancySavings || 0),
+    0
+  );
+
+  const avgResponseMinutes = totalActions
+    ? Math.round(
+        completed.reduce((sum, a) => sum + (a.responseMinutes || 0), 0) / totalActions
+      )
+    : 0;
+
+  const operatorLeaderboard = [
+    {
+      operator: "Ashley M.",
+      actions: Math.ceil(totalActions * 0.4),
+      daysAvoided: Math.round(totalDaysAvoided * 0.4),
+      savings: Math.round(totalVacancySavings * 0.4),
+    },
+    {
+      operator: "Justin R.",
+      actions: Math.ceil(totalActions * 0.35),
+      daysAvoided: Math.round(totalDaysAvoided * 0.35),
+      savings: Math.round(totalVacancySavings * 0.35),
+    },
+    {
+      operator: "Megan T.",
+      actions: Math.max(
+        0,
+        totalActions - Math.ceil(totalActions * 0.4) - Math.ceil(totalActions * 0.35)
+      ),
+      daysAvoided: Math.max(
+        0,
+        totalDaysAvoided -
+          Math.round(totalDaysAvoided * 0.4) -
+          Math.round(totalDaysAvoided * 0.35)
+      ),
+      savings: Math.max(
+        0,
+        totalVacancySavings -
+          Math.round(totalVacancySavings * 0.4) -
+          Math.round(totalVacancySavings * 0.35)
+      ),
+    },
+  ].filter((x) => x.actions > 0);
+
+  return {
+    totalActions,
+    totalDaysAvoided,
+    totalVacancySavings,
+    avgResponseMinutes,
+    operatorLeaderboard,
+  };
+}
+
+function getInsights(
+  rows,
+  stageAnalytics,
+  marketAnalytics,
+  vendorAnalytics,
+  delayDrivers,
+  actionAnalytics
+) {
   const insights = [];
 
   const worstStage = [...stageAnalytics].sort((a, b) => b.avgDays - a.avgDays)[0];
@@ -208,10 +277,18 @@ function getInsights(rows, stageAnalytics, marketAnalytics, vendorAnalytics, del
     });
   }
 
-  return insights.slice(0, 4);
+  if (actionAnalytics.totalActions > 0) {
+    insights.push({
+      tone: "blue",
+      title: "Operator actions are reducing delay exposure",
+      body: `${actionAnalytics.totalActions} completed actions have avoided ${actionAnalytics.totalDaysAvoided} delay days and saved $${actionAnalytics.totalVacancySavings} in projected vacancy.`,
+    });
+  }
+
+  return insights.slice(0, 5);
 }
 
-export default function AnalyticsTab({ properties }) {
+export default function AnalyticsTab({ properties, actionHistory = [] }) {
   const [horizon, setHorizon] = useState("Current");
 
   const scopedProperties = useMemo(
@@ -244,6 +321,11 @@ export default function AnalyticsTab({ properties }) {
     [scopedProperties]
   );
 
+  const actionAnalytics = useMemo(
+    () => getActionAnalytics(actionHistory),
+    [actionHistory]
+  );
+
   const insights = useMemo(
     () =>
       getInsights(
@@ -251,9 +333,17 @@ export default function AnalyticsTab({ properties }) {
         stageAnalytics,
         marketAnalytics,
         vendorAnalytics,
-        delayDrivers
+        delayDrivers,
+        actionAnalytics
       ),
-    [scopedProperties, stageAnalytics, marketAnalytics, vendorAnalytics, delayDrivers]
+    [
+      scopedProperties,
+      stageAnalytics,
+      marketAnalytics,
+      vendorAnalytics,
+      delayDrivers,
+      actionAnalytics,
+    ]
   );
 
   const avgRisk = Math.round(average(scopedProperties.map((p) => p.risk)));
@@ -267,15 +357,15 @@ export default function AnalyticsTab({ properties }) {
 
   const maxStageDays = Math.max(...stageAnalytics.map((s) => s.avgDays), 1);
   const maxDelayDays = Math.max(...delayDrivers.map((d) => d.totalDays), 1);
+  const hasOperatorData = actionAnalytics.totalActions > 0;
 
   return (
     <div className="space-y-6">
-      {/* HEADER */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <div className="text-3xl font-semibold text-slate-900">Analytics</div>
           <div className="mt-1 text-sm text-slate-500">
-            Analyze bottlenecks, market risk, vendor performance, and modeled delay drivers.
+            Analyze bottlenecks, market risk, vendor performance, modeled delay drivers, and operator impact.
           </div>
         </div>
 
@@ -296,72 +386,49 @@ export default function AnalyticsTab({ properties }) {
         </div>
       </div>
 
-      {/* KPI CARDS */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Portfolio Risk</div>
           <div className="mt-3 flex items-center gap-2">
-  <div className="text-3xl font-semibold text-slate-900">
-    {avgConfidence}%
-  </div>
-  <span className="text-sm text-emerald-500">↑4</span>
-</div>
-
-<div className="mt-1 text-xs text-slate-400">
-  vs last week
-</div>
+            <div className="text-3xl font-semibold text-slate-900">{avgRisk}</div>
+            <span className="text-sm text-emerald-500">↑4</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">vs last week</div>
           <div className="mt-2 text-sm text-slate-500">Across scoped active turns</div>
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Readiness</div>
           <div className="mt-3 flex items-center gap-2">
-  <div className="text-3xl font-semibold text-slate-900">
-    {avgConfidence}%
-  </div>
-  <span className="text-sm text-emerald-500">↑4</span>
-</div>
-
-<div className="mt-1 text-xs text-slate-400">
-  vs last week
-</div>
+            <div className="text-3xl font-semibold text-slate-900">{avgReadiness}/100</div>
+            <span className="text-sm text-emerald-500">↑4</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">vs last week</div>
           <div className="mt-2 text-sm text-slate-500">Portfolio execution readiness</div>
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Days In Stage</div>
           <div className="mt-3 flex items-center gap-2">
-  <div className="text-3xl font-semibold text-slate-900">
-    {avgConfidence}%
-  </div>
-  <span className="text-sm text-emerald-500">↑4</span>
-</div>
-
-<div className="mt-1 text-xs text-slate-400">
-  vs last week
-</div>
+            <div className="text-3xl font-semibold text-slate-900">{avgStageAge}</div>
+            <span className="text-sm text-emerald-500">↑4</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">vs last week</div>
           <div className="mt-2 text-sm text-slate-500">Current stage aging</div>
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">AI Confidence</div>
           <div className="mt-3 flex items-center gap-2">
-  <div className="text-3xl font-semibold text-slate-900">
-    {avgConfidence}%
-  </div>
-  <span className="text-sm text-emerald-500">↑4</span>
-</div>
-
-<div className="mt-1 text-xs text-slate-400">
-  vs last week
-</div>
+            <div className="text-3xl font-semibold text-slate-900">{avgConfidence}%</div>
+            <span className="text-sm text-emerald-500">↑4</span>
+          </div>
+          <div className="mt-1 text-xs text-slate-400">vs last week</div>
           <div className="mt-2 text-sm text-slate-500">Average modeled timeline confidence</div>
         </Card>
       </div>
 
-      {/* ROW 1 */}
       <div className="grid gap-6 xl:grid-cols-12">
-        {/* STAGE BOTTLENECK */}
         <div className="xl:col-span-6">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Stage Bottleneck Analysis</div>
@@ -370,50 +437,47 @@ export default function AnalyticsTab({ properties }) {
             </div>
 
             <div className="mt-5">
-  <div className="mb-3 grid grid-cols-[1fr_72px] gap-3">
-    <div className="flex justify-between px-1 text-[11px] uppercase tracking-wide text-slate-400">
-      <span>0d</span>
-      <span>{Math.ceil(maxStageDays / 4)}d</span>
-      <span>{Math.ceil(maxStageDays / 2)}d</span>
-      <span>{Math.ceil((maxStageDays * 3) / 4)}d</span>
-      <span>{Math.ceil(maxStageDays)}d</span>
-    </div>
-    <div />
-  </div>
+              <div className="mb-3 grid grid-cols-[1fr_72px] gap-3">
+                <div className="flex justify-between px-1 text-[11px] uppercase tracking-wide text-slate-400">
+                  <span>0d</span>
+                  <span>{Math.ceil(maxStageDays / 4)}d</span>
+                  <span>{Math.ceil(maxStageDays / 2)}d</span>
+                  <span>{Math.ceil((maxStageDays * 3) / 4)}d</span>
+                  <span>{Math.ceil(maxStageDays)}d</span>
+                </div>
+                <div />
+              </div>
 
-  <div className="space-y-4">
-    {stageAnalytics.map((item) => (
-      <div key={item.stage}>
-        <div className="mb-1 flex items-center justify-between gap-3">
-          <div className="text-sm font-medium text-slate-800">{item.stage}</div>
-          <div className="text-xs text-slate-500">
-            {item.count} turns • {item.avgDays} days
-          </div>
-        </div>
+              <div className="space-y-4">
+                {stageAnalytics.map((item) => (
+                  <div key={item.stage}>
+                    <div className="mb-1 flex items-center justify-between gap-3">
+                      <div className="text-sm font-medium text-slate-800">{item.stage}</div>
+                      <div className="text-xs text-slate-500">
+                        {item.count} turns • {item.avgDays} days
+                      </div>
+                    </div>
 
-        <div className="flex items-center gap-3">
-          <div className="h-3 flex-1 rounded-full bg-slate-100">
-            <div
-              className={`h-3 rounded-full ${
-                item.avgDays === maxStageDays
-                  ? "bg-amber-500"
-                  : "bg-blue-500"
-              }`}
-              style={{ width: `${(item.avgDays / maxStageDays) * 100}%` }}
-            />
-          </div>
-          <div className="w-16 text-right text-xs text-slate-500">
-            {item.blockedPct}% blocked
-          </div>
-        </div>
-      </div>
-    ))}
-  </div>
-</div>
+                    <div className="flex items-center gap-3">
+                      <div className="h-3 flex-1 rounded-full bg-slate-100">
+                        <div
+                          className={`h-3 rounded-full ${
+                            item.avgDays === maxStageDays ? "bg-amber-500" : "bg-blue-500"
+                          }`}
+                          style={{ width: `${(item.avgDays / maxStageDays) * 100}%` }}
+                        />
+                      </div>
+                      <div className="w-16 text-right text-xs text-slate-500">
+                        {item.blockedPct}% blocked
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </Card>
         </div>
 
-        {/* MARKET HEATMAP */}
         <div className="xl:col-span-6">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Market Risk Heatmap</div>
@@ -456,9 +520,7 @@ export default function AnalyticsTab({ properties }) {
         </div>
       </div>
 
-      {/* ROW 2 */}
       <div className="grid gap-6 xl:grid-cols-12">
-        {/* DELAY DRIVERS */}
         <div className="xl:col-span-5">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Delay Driver Contribution</div>
@@ -488,7 +550,6 @@ export default function AnalyticsTab({ properties }) {
           </Card>
         </div>
 
-        {/* VENDOR PERFORMANCE */}
         <div className="xl:col-span-7">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Vendor Performance Leaderboard</div>
@@ -500,10 +561,8 @@ export default function AnalyticsTab({ properties }) {
               <table className="min-w-full text-sm">
                 <thead>
                   <tr className="border-b border-slate-100 text-left text-slate-500">
-                  <th className="px-3 py-2 font-medium">#</th>  
-<th className="px-3 py-2 font-medium">#</th>
-<th className="px-3 py-2 font-medium">Vendor</th>
-<th className="px-3 py-2 font-medium">Vendor</th>
+                    <th className="px-3 py-2 font-medium">#</th>
+                    <th className="px-3 py-2 font-medium">Vendor</th>
                     <th className="px-3 py-2 font-medium">Markets</th>
                     <th className="px-3 py-2 font-medium">Jobs</th>
                     <th className="px-3 py-2 font-medium">Score</th>
@@ -515,14 +574,8 @@ export default function AnalyticsTab({ properties }) {
                 <tbody>
                   {vendorAnalytics.map((vendor, index) => (
                     <tr key={vendor.vendor} className="border-b border-slate-50">
-
-  <td className="px-3 py-3 text-slate-500 font-medium">
-    {index + 1}
-  </td>
-
-  <td className="px-3 py-3 font-medium text-slate-900">
-    {vendor.vendor}
-  </td>
+                      <td className="px-3 py-3 text-slate-500 font-medium">{index + 1}</td>
+                      <td className="px-3 py-3 font-medium text-slate-900">{vendor.vendor}</td>
                       <td className="px-3 py-3 text-slate-600">{vendor.markets}</td>
                       <td className="px-3 py-3">{vendor.jobs}</td>
                       <td className="px-3 py-3">
@@ -538,7 +591,13 @@ export default function AnalyticsTab({ properties }) {
                           <div className="flex-1">
                             <ProgressBar
                               value={vendor.capacity}
-                              tone={vendor.capacity >= 80 ? "red" : vendor.capacity >= 65 ? "amber" : "emerald"}
+                              tone={
+                                vendor.capacity >= 80
+                                  ? "red"
+                                  : vendor.capacity >= 65
+                                  ? "amber"
+                                  : "emerald"
+                              }
                             />
                           </div>
                         </div>
@@ -552,9 +611,7 @@ export default function AnalyticsTab({ properties }) {
         </div>
       </div>
 
-      {/* ROW 3 */}
       <div className="grid gap-6 xl:grid-cols-12">
-        {/* RISK DISTRIBUTION */}
         <div className="xl:col-span-5">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Risk Distribution</div>
@@ -616,12 +673,11 @@ export default function AnalyticsTab({ properties }) {
           </Card>
         </div>
 
-        {/* AI INSIGHTS */}
         <div className="xl:col-span-7">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">TurnIQ Operating Insights</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI-generated operating takeaways from current turn performance and predicted execution risk.
+              AI-generated operating takeaways from current turn performance, operator actions, and predicted execution risk.
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -646,6 +702,114 @@ export default function AnalyticsTab({ properties }) {
           </Card>
         </div>
       </div>
+
+      {hasOperatorData ? (
+        <div className="grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-6">
+            <Card className="h-full">
+              <div className="text-xl font-semibold text-slate-900">
+                Operator Performance Loop
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                Impact generated from action center execution.
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Actions Completed
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {actionAnalytics.totalActions}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Avg Response Time
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {actionAnalytics.avgResponseMinutes}m
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Delay Days Avoided
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {actionAnalytics.totalDaysAvoided}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">
+                    Vacancy Savings
+                  </div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    ${actionAnalytics.totalVacancySavings}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          <div className="xl:col-span-6">
+            <Card className="h-full">
+              <div className="text-xl font-semibold text-slate-900">
+                Operator Leaderboard
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                Ranking based on execution impact and modeled savings.
+              </div>
+
+              <div className="mt-5 space-y-3">
+                {actionAnalytics.operatorLeaderboard.map((operator, index) => (
+                  <div
+                    key={operator.operator}
+                    className="flex items-center justify-between rounded-2xl border border-slate-200 p-4"
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-slate-100 text-sm font-semibold text-slate-700">
+                        {index + 1}
+                      </div>
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {operator.operator}
+                        </div>
+                        <div className="text-sm text-slate-500">
+                          {operator.actions} actions • {operator.daysAvoided} days avoided
+                        </div>
+                      </div>
+                    </div>
+                    <div className="text-sm font-medium text-slate-900">
+                      ${operator.savings}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        </div>
+      ) : (
+        <Card>
+          <div className="text-xl font-semibold text-slate-900">
+            Operator Performance
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            No operator activity yet.
+          </div>
+
+          <div className="mt-6 rounded-2xl border border-dashed border-slate-200 p-6 text-center">
+            <div className="text-sm text-slate-600">
+              Complete actions from the Dashboard to start tracking performance impact.
+            </div>
+            <div className="mt-2 text-xs text-slate-400">
+              Metrics will include delay days avoided, response time, and vacancy savings.
+            </div>
+          </div>
+        </Card>
+      )}
     </div>
   );
 }

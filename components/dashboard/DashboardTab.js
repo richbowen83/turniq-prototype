@@ -31,11 +31,6 @@ function isInHorizon(property, horizon) {
   return true;
 }
 
-function formatDateShort(dateStr) {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-}
-
 function addDays(dateStr, days) {
   const d = new Date(dateStr);
   d.setDate(d.getDate() + days);
@@ -262,9 +257,7 @@ function buildActionFromProperty(p) {
 }
 
 function generateActions(properties) {
-  const rawActions = properties
-    .map((p) => buildActionFromProperty(p))
-    .filter(Boolean);
+  const rawActions = properties.map((p) => buildActionFromProperty(p)).filter(Boolean);
 
   const deduped = {};
   rawActions.forEach((action) => {
@@ -321,6 +314,8 @@ export default function DashboardTab({
   activity,
   addNote,
   addActivity,
+  addActionHistory,
+  actionHistory,
   updateProperty,
   formatMoney,
   getToneFromRisk,
@@ -328,7 +323,6 @@ export default function DashboardTab({
   const [draftNote, setDraftNote] = useState("");
   const [horizon, setHorizon] = useState("Today");
   const [previewActionId, setPreviewActionId] = useState(null);
-  const [actionLog, setActionLog] = useState([]);
 
   const horizonProperties = useMemo(
     () => properties.filter((p) => isInHorizon(p, horizon)),
@@ -338,11 +332,16 @@ export default function DashboardTab({
   const actions = useMemo(() => generateActions(horizonProperties), [horizonProperties]);
   const priorities = useMemo(() => buildPriorityItems(horizonProperties), [horizonProperties]);
   const marketHealth = useMemo(() => buildMarketHealth(properties), [properties]);
-  const recommendations = useMemo(() => buildRecommendations(horizonProperties), [horizonProperties]);
-  const performanceMetrics = useMemo(() => buildPerformanceMetrics(actionLog), [actionLog]);
+  const recommendations = useMemo(
+    () => buildRecommendations(horizonProperties),
+    [horizonProperties]
+  );
+  const performanceMetrics = useMemo(
+    () => buildPerformanceMetrics(actionHistory),
+    [actionHistory]
+  );
 
-  const previewAction =
-    actions.find((a) => a.id === previewActionId) || actions[0] || null;
+  const previewAction = actions.find((a) => a.id === previewActionId) || actions[0] || null;
 
   const activityFeed = useMemo(() => {
     const noteEvents = notes.map((note, i) => ({
@@ -361,19 +360,21 @@ export default function DashboardTab({
   }, [notes, activity]);
 
   function logCompletedAction(target, action) {
-    setActionLog((prev) => [
-      {
-        id: `${action.id}-${Date.now()}`,
-        kind: "completed",
-        propertyId: target.id,
-        propertyName: target.name,
-        actionType: action.type,
-        daysAvoided: Math.abs(action.simulation?.ecdDeltaDays || 0),
-        vacancySavings: action.simulation?.vacancySavings || 0,
-        responseMinutes: 11,
-      },
-      ...prev,
-    ]);
+    addActionHistory({
+      kind: "completed",
+      propertyId: target.id,
+      propertyName: target.name,
+      market: target.market,
+      actionType: action.type,
+      title: action.title,
+      daysAvoided: Math.abs(action.simulation?.ecdDeltaDays || 0),
+      vacancySavings: action.simulation?.vacancySavings || 0,
+      responseMinutes: 11,
+      beforeEcd: target.projectedCompletion,
+      afterEcd: addDays(target.projectedCompletion, action.simulation?.ecdDeltaDays || 0),
+      readinessDelta: action.simulation?.readinessDelta || 0,
+      riskDelta: action.simulation?.riskDelta || 0,
+    });
   }
 
   function handleAddNote() {
@@ -471,6 +472,7 @@ export default function DashboardTab({
     if (action.type === "resolve-blocker") {
       const current = target.blockers || [];
       const remaining = current.filter((b) => b !== "No active blockers").slice(1);
+
       updateProperty(target.id, {
         blockers: remaining.length ? remaining : ["No active blockers"],
         turnStatus: remaining.length ? "Monitoring" : "Ready",
@@ -481,6 +483,7 @@ export default function DashboardTab({
           action.simulation?.ecdDeltaDays || -2
         ),
       });
+
       addActivity(target.name, `Action Center: ${action.title}`);
       logCompletedAction(target, action);
       return;
@@ -496,6 +499,7 @@ export default function DashboardTab({
           action.simulation?.ecdDeltaDays || -1
         ),
       });
+
       addActivity(target.name, "Action Center: scope review approved");
       logCompletedAction(target, action);
       return;
@@ -521,6 +525,7 @@ export default function DashboardTab({
           action.simulation?.ecdDeltaDays || -1
         ),
       });
+
       addActivity(target.name, `Action Center: vendor assigned (${fallbackVendor})`);
       logCompletedAction(target, action);
       return;
@@ -534,6 +539,7 @@ export default function DashboardTab({
         action.simulation?.ecdDeltaDays || -1
       ),
     });
+
     addActivity(target.name, `Action Center reviewed: ${action.title}`);
     logCompletedAction(target, action);
   }
@@ -758,8 +764,8 @@ export default function DashboardTab({
           </Card>
         </div>
 
-        <div className="xl:col-span-5">
-          <Card className="h-full">
+        <div className="xl:col-span-5 self-start">
+          <Card>
             <div className="text-xl font-semibold text-slate-900">Market Health Snapshot</div>
             <div className="mt-1 text-sm text-slate-500">
               Click a market to filter the dashboard.
@@ -1003,7 +1009,7 @@ export default function DashboardTab({
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-12">
+      <div className="grid items-start gap-6 xl:grid-cols-12">
         <div className="xl:col-span-7">
           <Card className="h-full">
             <div className="mb-4 flex items-center justify-between gap-4">
@@ -1060,50 +1066,8 @@ export default function DashboardTab({
           </Card>
         </div>
 
-        <div className="xl:col-span-5 space-y-6">
+        <div className="xl:col-span-5">
           <Card>
-            <div className="mb-3 text-lg font-semibold text-slate-900">Operator Performance</div>
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Actions Completed</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {performanceMetrics.totalCompleted}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response Time</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {performanceMetrics.avgResponseMinutes}m
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Avoided</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {performanceMetrics.totalDaysAvoided}
-                </div>
-              </div>
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Savings</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  ${performanceMetrics.totalVacancySaved}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 space-y-2">
-              {Object.entries(performanceMetrics.byType).map(([type, count]) => (
-                <div
-                  key={type}
-                  className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2 text-sm"
-                >
-                  <span className="text-slate-600">{type}</span>
-                  <span className="font-medium text-slate-900">{count}</span>
-                </div>
-              ))}
-            </div>
-          </Card>
-
-          <Card className="h-full">
             <div className="mb-3 text-lg font-semibold text-slate-900">Activity Feed</div>
             <div className="space-y-3">
               {activityFeed.map((item) => (
