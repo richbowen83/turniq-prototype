@@ -155,6 +155,7 @@ function buildActionFromProperty(p) {
       tone: "red",
       type: "resolve-blocker",
       rank: 1,
+      confidence: 88,
       simulation: {
         readinessDelta: 10,
         riskDelta: -8,
@@ -177,6 +178,7 @@ function buildActionFromProperty(p) {
       tone: "amber",
       type: "approve-scope",
       rank: 2,
+      confidence: 84,
       simulation: {
         readinessDelta: 6,
         riskDelta: -5,
@@ -199,6 +201,7 @@ function buildActionFromProperty(p) {
       tone: "amber",
       type: "review-owner",
       rank: 3,
+      confidence: 80,
       simulation: {
         readinessDelta: 4,
         riskDelta: -4,
@@ -221,6 +224,7 @@ function buildActionFromProperty(p) {
       tone: "blue",
       type: "assign-vendor",
       rank: 4,
+      confidence: 82,
       simulation: {
         readinessDelta: 7,
         riskDelta: -6,
@@ -244,6 +248,7 @@ function buildActionFromProperty(p) {
       tone: "red",
       type: "review-delay",
       rank: 5,
+      confidence: 78,
       simulation: {
         readinessDelta: 5,
         riskDelta: -7,
@@ -290,18 +295,70 @@ function buildPerformanceMetrics(actionLog) {
       )
     : 0;
 
-  const byType = {};
-  completed.forEach((item) => {
-    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
-  });
-
   return {
     totalCompleted,
     totalDaysAvoided,
     totalVacancySaved,
     avgResponseMinutes,
-    byType,
   };
+}
+
+function buildBatchPreview(actions) {
+  if (!actions.length) {
+    return {
+      turns: 0,
+      daysAvoided: 0,
+      savings: 0,
+      readinessLift: 0,
+      avgConfidence: 0,
+    };
+  }
+
+  return {
+    turns: actions.length,
+    daysAvoided: actions.reduce(
+      (sum, action) => sum + Math.abs(action.simulation?.ecdDeltaDays || 0),
+      0
+    ),
+    savings: actions.reduce(
+      (sum, action) => sum + (action.simulation?.vacancySavings || 0),
+      0
+    ),
+    readinessLift: actions.reduce(
+      (sum, action) => sum + (action.simulation?.readinessDelta || 0),
+      0
+    ),
+    avgConfidence: Math.round(
+      actions.reduce((sum, action) => sum + (action.confidence || 0), 0) / actions.length
+    ),
+  };
+}
+
+function buildBottleneck(properties) {
+  const stages = [
+    "Pre-Leasing",
+    "Pre-Move Out Inspection",
+    "Move Out Inspection",
+    "Scope Review",
+    "Owner Approval",
+    "Dispatch",
+    "Pending RRI",
+    "Rent Ready Open",
+  ];
+
+  const stageStats = stages.map((stage) => {
+    const rows = properties.filter((p) => p.currentStage === stage);
+    const avgDays = rows.length
+      ? rows.reduce((sum, row) => sum + (row.daysInStage || 0), 0) / rows.length
+      : 0;
+    return {
+      stage,
+      turns: rows.length,
+      avgDays: Number(avgDays.toFixed(1)),
+    };
+  });
+
+  return stageStats.sort((a, b) => b.avgDays - a.avgDays)[0] || null;
 }
 
 export default function DashboardTab({
@@ -340,6 +397,8 @@ export default function DashboardTab({
     () => buildPerformanceMetrics(actionHistory),
     [actionHistory]
   );
+  const bottleneck = useMemo(() => buildBottleneck(properties), [properties]);
+  const batchPreview = useMemo(() => buildBatchPreview(actions), [actions]);
 
   const previewAction = actions.find((a) => a.id === previewActionId) || actions[0] || null;
 
@@ -595,6 +654,25 @@ export default function DashboardTab({
         </div>
       </div>
 
+      {bottleneck && bottleneck.turns > 0 && (
+        <Card className="border-amber-200 bg-amber-50">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold uppercase tracking-wide text-amber-700">
+                TurnIQ Callout
+              </div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">
+                {bottleneck.stage} is the current bottleneck
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                {bottleneck.turns} active turns are sitting here for an average of {bottleneck.avgDays} days.
+              </div>
+            </div>
+            <Pill tone="amber">{bottleneck.stage}</Pill>
+          </div>
+        </Card>
+      )}
+
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
           <div>
@@ -627,6 +705,48 @@ export default function DashboardTab({
           </button>
         </div>
 
+        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Batch Impact</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              {batchPreview.turns}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">turns addressable</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Avoided</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              {batchPreview.daysAvoided}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">projected across actions</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Savings</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              ${batchPreview.savings}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">modeled upside</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Readiness Lift</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              +{batchPreview.readinessLift}
+            </div>
+            <div className="mt-1 text-sm text-slate-500">aggregate points</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              {batchPreview.avgConfidence}%
+            </div>
+            <div className="mt-1 text-sm text-slate-500">modeled recommendation confidence</div>
+          </div>
+        </div>
+
         <div className="grid gap-6 xl:grid-cols-12">
           <div className="xl:col-span-8 space-y-3">
             {actions.map((action) => (
@@ -638,6 +758,7 @@ export default function DashboardTab({
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="font-semibold text-slate-900">{action.propertyName}</div>
                     <Pill tone={action.tone}>{action.priority}</Pill>
+                    <Pill tone="blue">{action.confidence}% confidence</Pill>
                   </div>
                   <div className="mt-1 text-sm font-medium text-slate-800">{action.title}</div>
                   <div className="mt-1 text-sm text-slate-500">
@@ -668,7 +789,10 @@ export default function DashboardTab({
 
           <div className="xl:col-span-4">
             <Card className="h-full bg-slate-50">
-              <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
+                {previewAction ? <Pill tone="blue">{previewAction.confidence}%</Pill> : null}
+              </div>
               <div className="mt-1 text-sm text-slate-500">
                 {previewAction
                   ? `Projected impact for ${previewAction.propertyName}`
@@ -678,40 +802,56 @@ export default function DashboardTab({
               {previewAction ? (
                 <div className="mt-5 space-y-4">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Expected ECD Change
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {previewAction.simulation?.ecdDeltaDays < 0
-                        ? `${Math.abs(previewAction.simulation.ecdDeltaDays)} days faster`
-                        : `${previewAction.simulation?.ecdDeltaDays || 0} days`}
+                    <div className="text-xs uppercase tracking-wide text-slate-500">ECD Before → After</div>
+                    <div className="mt-2 text-base font-medium text-slate-900">
+                      {selectedProperty.projectedCompletion} →{" "}
+                      {addDays(selectedProperty.projectedCompletion, previewAction.simulation?.ecdDeltaDays || 0)}
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Readiness Lift
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Delay Days Avoided
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {Math.abs(previewAction.simulation?.ecdDeltaDays || 0)}
+                      </div>
                     </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      +{previewAction.simulation?.readinessDelta || 0} pts
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Vacancy Savings
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        ${previewAction.simulation?.vacancySavings || 0}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Readiness Lift
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        +{previewAction.simulation?.readinessDelta || 0}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Risk Reduction
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {previewAction.simulation?.riskDelta || 0}
+                      </div>
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Risk Reduction
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {previewAction.simulation?.riskDelta || 0} pts
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Vacancy Savings
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      ${previewAction.simulation?.vacancySavings || 0}
+                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4">
+                    <div className="text-sm font-medium text-slate-900">What this means</div>
+                    <div className="mt-2 text-sm text-slate-600">
+                      Completing this action should improve turn velocity, reduce modeled slippage risk,
+                      and bring forward expected rent-ready timing.
                     </div>
                   </div>
                 </div>
@@ -1099,6 +1239,32 @@ export default function DashboardTab({
               </button>
             </div>
           </Card>
+
+          {performanceMetrics.totalCompleted > 0 && (
+            <Card className="mt-6">
+              <div className="mb-3 text-lg font-semibold text-slate-900">Operator Value Created</div>
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Actions</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {performanceMetrics.totalCompleted}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Days Avoided</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {performanceMetrics.totalDaysAvoided}
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Savings</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    ${performanceMetrics.totalVacancySaved}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
         </div>
       </div>
     </div>

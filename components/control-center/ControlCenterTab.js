@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
@@ -15,6 +16,17 @@ const STAGES = [
 ];
 
 const VENDORS = ["FloorCo", "ABC Paint", "Sparkle", "CoolAir", "Prime Paint"];
+
+function getBulkSummary(selectedRows) {
+  return {
+    count: selectedRows.length,
+    totalRisk: selectedRows.reduce((sum, row) => sum + (row.risk || 0), 0),
+    avgRisk: selectedRows.length
+      ? Math.round(selectedRows.reduce((sum, row) => sum + (row.risk || 0), 0) / selectedRows.length)
+      : 0,
+    blocked: selectedRows.filter((row) => row.turnStatus === "Blocked").length,
+  };
+}
 
 export default function ControlCenterTab({
   rows,
@@ -38,22 +50,106 @@ export default function ControlCenterTab({
   dirtyRowIds,
   markDirtyRow,
 }) {
+  const [selectedRowIds, setSelectedRowIds] = useState([]);
+  const [bulkStage, setBulkStage] = useState("");
+  const [bulkVendor, setBulkVendor] = useState("");
+  const [bulkDate, setBulkDate] = useState("");
+
   const maxCount = Math.max(...stagePipeline.map((s) => s.count), 1);
+
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedRowIds.includes(row.id)),
+    [rows, selectedRowIds]
+  );
+
+  const bulkSummary = useMemo(() => getBulkSummary(selectedRows), [selectedRows]);
+
+  function toggleRowSelection(id) {
+    setSelectedRowIds((prev) =>
+      prev.includes(id) ? prev.filter((rowId) => rowId !== id) : [...prev, id]
+    );
+  }
+
+  function toggleAllRows() {
+    if (selectedRowIds.length === rows.length) {
+      setSelectedRowIds([]);
+      return;
+    }
+    setSelectedRowIds(rows.map((row) => row.id));
+  }
+
+  function applyBulkStage() {
+    if (!bulkStage) return;
+    selectedRows.forEach((row) => {
+      updateProperty(row.id, { currentStage: bulkStage });
+      markDirtyRow(row.id);
+    });
+  }
+
+  function applyBulkVendor() {
+    if (!bulkVendor) return;
+    selectedRows.forEach((row) => {
+      updateProperty(row.id, { vendor: bulkVendor });
+      markDirtyRow(row.id);
+    });
+  }
+
+  function applyBulkDate() {
+    if (!bulkDate) return;
+    selectedRows.forEach((row) => {
+      updateProperty(row.id, { projectedCompletion: bulkDate });
+      markDirtyRow(row.id);
+    });
+  }
+
+  function saveSelected() {
+    selectedRows.forEach((row) => saveRow(row.id));
+  }
 
   return (
     <div className="space-y-6">
       <div>
         <div className="text-2xl font-semibold text-slate-900">Control Center</div>
         <div className="mt-1 text-sm text-slate-500">
-          The Control Center is where operators manage active turns. It coordinates vendors, tracks job progress, monitors readiness blockers, and ensures each home moves efficiently from move-out to rent ready.
+          The Control Center is where operators manage active turns. It coordinates vendors,
+          tracks job progress, monitors readiness blockers, and ensures each home moves efficiently
+          from move-out to rent ready.
         </div>
 
         <div className="mt-3 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
           <span className="font-medium text-slate-900">What does Risk mean?</span>{" "}
-          Risk estimates how likely a turn is to miss its expected completion date based on turn age, days in current stage, blocker severity, and schedule coordination exposure.
-          <span className="ml-2 text-slate-500">75+ = High Risk • 60–74 = Watch • below 60 = Healthy</span>
+          Risk estimates how likely a turn is to miss its expected completion date based on turn age,
+          days in current stage, blocker severity, and schedule coordination exposure.
+          <span className="ml-2 text-slate-500">
+            75+ = High Risk • 60–74 = Watch • below 60 = Healthy
+          </span>
         </div>
       </div>
+
+      {topStageBottleneck ? (
+        <Card className="border-amber-200 bg-amber-50">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-sm font-semibold uppercase tracking-wide text-amber-700">
+                Bottleneck Alert
+              </div>
+              <div className="mt-1 text-lg font-semibold text-slate-900">
+                {topStageBottleneck.stage} is slowing the portfolio
+              </div>
+              <div className="mt-1 text-sm text-slate-600">
+                Average stage time is {topStageBottleneck.avgDaysInStage} days with{" "}
+                {topStageBottleneck.count} active turns currently sitting there.
+              </div>
+            </div>
+            <button
+              onClick={() => toggleStageFilter(topStageBottleneck.stage)}
+              className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm hover:bg-amber-50"
+            >
+              Filter to {topStageBottleneck.stage}
+            </button>
+          </div>
+        </Card>
+      ) : null}
 
       <Card>
         <div className="flex items-start justify-between gap-4">
@@ -163,6 +259,103 @@ export default function ControlCenterTab({
 
       <Card>
         <div className="mb-5">
+          <div className="text-lg font-semibold text-slate-900">Bulk Action Center</div>
+          <div className="mt-1 text-sm text-slate-500">
+            Select turns below to update stage, vendor, or ECD in bulk.
+          </div>
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-5">
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Selected Turns</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{bulkSummary.count}</div>
+            <div className="mt-1 text-sm text-slate-500">currently selected</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Blocked</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{bulkSummary.blocked}</div>
+            <div className="mt-1 text-sm text-slate-500">within selection</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Avg Risk</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{bulkSummary.avgRisk}</div>
+            <div className="mt-1 text-sm text-slate-500">across selected turns</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Bulk Stage</div>
+            <select
+              value={bulkStage}
+              onChange={(e) => setBulkStage(e.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">Select stage</option>
+              {STAGES.map((stage) => (
+                <option key={stage}>{stage}</option>
+              ))}
+            </select>
+            <button
+              onClick={applyBulkStage}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Apply stage
+            </button>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Bulk Vendor / ECD</div>
+            <select
+              value={bulkVendor}
+              onChange={(e) => setBulkVendor(e.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            >
+              <option value="">Select vendor</option>
+              {VENDORS.map((vendor) => (
+                <option key={vendor}>{vendor}</option>
+              ))}
+            </select>
+            <button
+              onClick={applyBulkVendor}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Apply vendor
+            </button>
+
+            <input
+              type="date"
+              value={bulkDate}
+              onChange={(e) => setBulkDate(e.target.value)}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+            />
+            <button
+              onClick={applyBulkDate}
+              className="mt-2 w-full rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Apply ECD
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            onClick={saveSelected}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+          >
+            Save selected
+          </button>
+          <button
+            onClick={() => setSelectedRowIds([])}
+            className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+          >
+            Clear selection
+          </button>
+        </div>
+      </Card>
+
+      <Card>
+        <div className="mb-5">
           <div className="text-lg font-semibold text-slate-900">Active Turn Queue</div>
           <div className="mt-1 text-sm text-slate-500">
             Editable queue for stage, ECD, vendor, and blocker monitoring.
@@ -205,6 +398,13 @@ export default function ControlCenterTab({
           <table className="min-w-full text-sm">
             <thead className="sticky top-0 bg-white">
               <tr className="border-b border-slate-100 text-left text-slate-500">
+                <th className="px-3 py-2 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={rows.length > 0 && selectedRowIds.length === rows.length}
+                    onChange={toggleAllRows}
+                  />
+                </th>
                 <th className="px-3 py-2 font-medium">Property</th>
                 <th className="px-3 py-2 font-medium">Market</th>
                 <th className="px-3 py-2 font-medium">Open Days</th>
@@ -221,6 +421,7 @@ export default function ControlCenterTab({
               {rows.map((row) => {
                 const isDirty = dirtyRowIds.includes(row.id);
                 const isSaved = savedRowIds.includes(row.id) && !isDirty;
+                const isSelected = selectedRowIds.includes(row.id);
 
                 return (
                   <tr
@@ -229,6 +430,13 @@ export default function ControlCenterTab({
                       row.id === selectedPropertyId ? "bg-slate-50" : "hover:bg-slate-50"
                     }`}
                   >
+                    <td className="px-3 py-3">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => toggleRowSelection(row.id)}
+                      />
+                    </td>
                     <td className="px-3 py-3">
                       <button
                         onClick={() => setSelectedPropertyId(row.id)}
