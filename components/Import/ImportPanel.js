@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Card from "../shared/Card";
 import {
   parseCsvText,
@@ -107,6 +107,7 @@ export default function ImportPanel({
   onClearImportedData,
   onUndoImport,
   canUndoImport,
+  hasImportedData,
   importMode,
   setImportMode,
   lastImportCount,
@@ -121,6 +122,22 @@ export default function ImportPanel({
   const [previewRows, setPreviewRows] = useState([]);
   const [error, setError] = useState("");
   const [detectedSchema, setDetectedSchema] = useState("");
+  const [showImportSuccess, setShowImportSuccess] = useState(false);
+
+  useEffect(() => {
+    if (!hasImportedData || lastImportCount <= 0) {
+      setShowImportSuccess(false);
+      return;
+    }
+
+    setShowImportSuccess(true);
+
+    const timer = setTimeout(() => {
+      setShowImportSuccess(false);
+    }, 4500);
+
+    return () => clearTimeout(timer);
+  }, [hasImportedData, lastImportCount, lastImportTimestamp]);
 
   function handleFileChange(event) {
     const file = event.target.files?.[0];
@@ -290,51 +307,59 @@ export default function ImportPanel({
                     : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
                 }`}
               >
-                Import rows
+                Import turns
               </button>
 
               <button
                 onClick={handleClear}
                 className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
               >
-                Clear
+                Reset file
               </button>
             </div>
 
-            {lastUploadedCount > 0 ? (
-              <div className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                Import complete: {lastUploadedCount} rows uploaded • {lastImportCount} new turns
-                added
+            <div className="mt-3 text-xs text-slate-500">
+              Reset file clears the current upload preview. Revert to demo dataset removes
+              imported data and restores the sample dataset.
+            </div>
+
+            <div
+              className={`mt-4 overflow-hidden transition-all duration-500 ${
+                showImportSuccess ? "max-h-32 opacity-100" : "max-h-0 opacity-0"
+              }`}
+            >
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                {lastImportCount} turns imported
                 {lastSkippedCount > 0 ? ` • ${lastSkippedCount} duplicates skipped` : ""}
               </div>
-            ) : null}
+            </div>
 
             {lastImportTimestamp ? (
-              <div className="mt-3 text-xs text-slate-500">
-                Last import: {new Date(lastImportTimestamp).toLocaleString()}
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <div className="text-xs text-slate-500">
+                  Last import: {new Date(lastImportTimestamp).toLocaleString()}
+                </div>
+
+                {canUndoImport ? (
+                  <button
+                    type="button"
+                    onClick={onUndoImport}
+                    className="text-xs font-medium text-amber-700 hover:underline"
+                  >
+                    Undo
+                  </button>
+                ) : null}
               </div>
             ) : null}
 
-            {canUndoImport ? (
-              <div className="mt-3">
-                <button
-                  type="button"
-                  onClick={onUndoImport}
-                  className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-700 hover:bg-amber-100"
-                >
-                  Undo last import
-                </button>
-              </div>
-            ) : null}
-
-            {lastUploadedCount > 0 ? (
+            {hasImportedData ? (
               <div className="mt-3">
                 <button
                   type="button"
                   onClick={onClearImportedData}
-                  className="rounded-xl border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700 hover:bg-red-100"
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
                 >
-                  Clear imported data
+                  Revert to demo dataset
                 </button>
               </div>
             ) : null}

@@ -272,6 +272,7 @@ export default function Page() {
   const [dirtyRowIds, setDirtyRowIds] = useState([]);
   const [savedRowIds, setSavedRowIds] = useState([]);
   const [importedProperties, setImportedProperties] = useState([]);
+  const [hasHydrated, setHasHydrated] = useState(false);
   const [previousImportedProperties, setPreviousImportedProperties] = useState([]);
   const [canUndoImport, setCanUndoImport] = useState(false);
   const [importMode, setImportMode] = useState("replace");
@@ -281,25 +282,33 @@ export default function Page() {
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
 
   useEffect(() => {
-    const saved = localStorage.getItem("turniq_imported_properties");
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          setImportedProperties(parsed);
-        }
-      } catch (error) {
-        console.error("Failed to load imported properties", error);
-      }
-    }
-  }, []);
+  if (!hasHydrated) return;
 
-  useEffect(() => {
+  try {
     localStorage.setItem(
       "turniq_imported_properties",
       JSON.stringify(importedProperties)
     );
-  }, [importedProperties]);
+  } catch (error) {
+    console.error("Failed to persist imported properties", error);
+  }
+}, [importedProperties, hasHydrated]);
+
+  useEffect(() => {
+  try {
+    const saved = localStorage.getItem("turniq_imported_properties");
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        setImportedProperties(parsed);
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load imported properties", error);
+  } finally {
+    setHasHydrated(true);
+  }
+}, []);
 
   const activeProperties = useMemo(
     () => (importedProperties.length ? importedProperties : properties),
@@ -405,37 +414,29 @@ export default function Page() {
     let rows = filteredProperties;
 
     if (queueFilter === "Open Turns > 60 Days") rows = rows.filter((x) => x.openDays > 60);
-
     if (queueFilter === "Open Turns 31–60 Days") {
       rows = rows.filter((x) => x.openDays >= 31 && x.openDays <= 60);
     }
-
     if (queueFilter === "Open Turns 8–30 Days") {
       rows = rows.filter((x) => x.openDays >= 8 && x.openDays <= 30);
     }
-
     if (queueFilter === "Open Turns 0–7 Days") {
       rows = rows.filter((x) => x.openDays <= 7);
     }
-
     if (queueFilter === "Blocked Turns") {
       rows = rows.filter((x) => x.turnStatus === "Blocked");
     }
-
     if (queueFilter === "High-Risk Turns") {
       rows = rows.filter((x) => x.risk >= 75);
     }
-
     if (queueFilter === "ECD Past Due") {
       rows = rows.filter((x) => new Date(x.projectedCompletion) < new Date("2026-05-07"));
     }
-
     if (queueFilter === "ECD This Week") {
       rows = rows.filter((x) =>
         ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
       );
     }
-
     if (selectedStageFilter) {
       rows = rows.filter((x) => x.currentStage === selectedStageFilter);
     }
@@ -482,7 +483,6 @@ export default function Page() {
 
   function addActivity(propertyName, item) {
     if (!item?.trim()) return;
-
     setActivityMap((prev) => ({
       ...prev,
       [propertyName]: [...(prev[propertyName] || []), item.trim()],
@@ -593,6 +593,25 @@ export default function Page() {
     }
   }
 
+  const activeDatasetLabel = importedProperties.length
+    ? `Imported dataset • ${importedProperties.length} turns`
+    : "Demo dataset";
+
+if (!hasHydrated) {
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
+          <div className="mt-2 text-sm text-slate-500">
+            Loading workspace...
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <div className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
@@ -602,6 +621,18 @@ export default function Page() {
             setSelectedMarket={setSelectedMarket}
             markets={markets}
           />
+
+          <div className="flex items-center justify-between gap-3">
+            <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+              {activeDatasetLabel}
+            </div>
+
+            {lastImportTimestamp ? (
+              <div className="text-xs text-slate-500">
+                Last import: {new Date(lastImportTimestamp).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
 
           <GlobalKpiStrip
             kpis={kpis}
@@ -714,25 +745,26 @@ export default function Page() {
         {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
 
         {activeTab === "Import" && (
-          <ImportPanel
-            onImport={handleImportTurns}
-            onClearSuccess={() => {
-              setLastImportCount(0);
-              setLastUploadedCount(0);
-              setLastSkippedCount(0);
-              setLastImportTimestamp(null);
-            }}
-            onClearImportedData={handleClearImportedData}
-            onUndoImport={handleUndoImport}
-            canUndoImport={canUndoImport}
-            lastImportCount={lastImportCount}
-            lastUploadedCount={lastUploadedCount}
-            lastSkippedCount={lastSkippedCount}
-            lastImportTimestamp={lastImportTimestamp}
-            importMode={importMode}
-            setImportMode={setImportMode}
-          />
-        )}
+  <ImportPanel
+    onImport={handleImportTurns}
+    onClearSuccess={() => {
+      setLastImportCount(0);
+      setLastUploadedCount(0);
+      setLastSkippedCount(0);
+      setLastImportTimestamp(null);
+    }}
+    onClearImportedData={handleClearImportedData}
+    onUndoImport={handleUndoImport}
+    canUndoImport={canUndoImport}
+    hasImportedData={importedProperties.length > 0}
+    importMode={importMode}
+    setImportMode={setImportMode}
+    lastImportCount={lastImportCount}
+    lastUploadedCount={lastUploadedCount}
+    lastSkippedCount={lastSkippedCount}
+    lastImportTimestamp={lastImportTimestamp}
+  />
+)}
 
         {activeTab === "Overview" && (
           <OverviewTab
