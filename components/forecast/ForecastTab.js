@@ -57,6 +57,12 @@ function getLiveBlockers(blockers = []) {
   );
 }
 
+function getConfidenceLabel(score) {
+  if (score >= 85) return { label: "High", tone: "emerald" };
+  if (score >= 70) return { label: "Moderate", tone: "amber" };
+  return { label: "Low", tone: "red" };
+}
+
 function buildForecast(property) {
   const blockers = getLiveBlockers(property.blockers);
   const riskDelay = getRiskDelay(property.risk);
@@ -64,10 +70,10 @@ function buildForecast(property) {
   const blockerDelay = blockers.reduce((sum, blocker) => sum + getBlockerSeverity(blocker), 0);
   const forecastDaysLate = riskDelay + stageDelay + blockerDelay;
   const forecastCompletion = addDays(property.projectedCompletion, forecastDaysLate);
-  const forecastConfidence = Math.max(
-    40,
-    Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5))
-  );
+  const forecastConfidence =
+    typeof property.timelineConfidence === "number"
+      ? property.timelineConfidence
+      : Math.max(40, Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5)));
 
   const forecastRiskBand =
     forecastDaysLate >= 4
@@ -102,6 +108,62 @@ function buildForecast(property) {
         ? forecastDelayDrivers
         : [{ label: "Standard execution variability", days: 0 }],
     forecastInsight,
+  };
+}
+
+function buildForecastRange(property) {
+  const base = toDate(property.projectedCompletion);
+  if (!base) {
+    return {
+      bestCaseDate: "",
+      expectedDate: "",
+      worstCaseDate: "",
+      spread: 0,
+    };
+  }
+
+  const blockers = getLiveBlockers(property.blockers);
+  const uncertaintyDays = Math.max(
+    1,
+    Math.round(property.risk / 35) + Math.min(3, blockers.length)
+  );
+
+  const best = new Date(base);
+  best.setDate(best.getDate() - 1);
+
+  const worst = new Date(base);
+  worst.setDate(worst.getDate() + uncertaintyDays);
+
+  return {
+    bestCaseDate: best.toISOString().slice(0, 10),
+    expectedDate: base.toISOString().slice(0, 10),
+    worstCaseDate: worst.toISOString().slice(0, 10),
+    spread: uncertaintyDays + 1,
+  };
+}
+
+function getTotalScenarioImpact(drivers = []) {
+  return drivers.reduce((sum, d) => sum + (d.days || 0), 0);
+}
+
+function buildPortfolioForecast(properties) {
+  const rows = properties.map((p) => {
+    const forecast = buildForecast(p);
+    return { ...p, ...forecast };
+  });
+
+  const totalDelay = rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0);
+  const avgDelay = Number((totalDelay / (rows.length || 1)).toFixed(1));
+  const avgConfidence = Math.round(
+    rows.reduce((sum, row) => sum + (row.forecastConfidence || 0), 0) / (rows.length || 1)
+  );
+
+  return {
+    totalDelay,
+    avgDelay,
+    avgConfidence,
+    onTrack: rows.filter((row) => row.forecastDaysLate <= 1).length,
+    delayed: rows.filter((row) => row.forecastDaysLate >= 2).length,
   };
 }
 
@@ -214,6 +276,7 @@ export default function ForecastTab({
       properties.map((property) => ({
         ...property,
         ...buildForecast(property),
+        ...buildForecastRange(property),
       })),
     [properties]
   );
@@ -237,22 +300,10 @@ export default function ForecastTab({
     compressSchedule,
   ]);
 
-  const summary = useMemo(() => {
-    const total = forecastRows.length || 1;
-    const totalDaysAtRisk = forecastRows.reduce((sum, row) => sum + row.forecastDaysLate, 0);
-    const avgDelay = Number((totalDaysAtRisk / total).toFixed(1));
-    const onTime = forecastRows.filter((row) => row.forecastDaysLate === 0).length;
-    const atRisk = forecastRows.filter((row) => row.forecastDaysLate >= 2).length;
-    const highDelay = forecastRows.filter((row) => row.forecastDaysLate >= 4).length;
-
-    return {
-      avgDelay,
-      onTimePct: Math.round((onTime / total) * 100),
-      atRisk,
-      highDelay,
-      totalDaysAtRisk,
-    };
-  }, [forecastRows]);
+  const summary = useMemo(() => buildPortfolioForecast(properties), [properties]);
+  const confidenceMeta = currentSelected
+    ? getConfidenceLabel(currentSelected.forecastConfidence)
+    : { label: "—", tone: "blue" };
 
   const maxDelay = Math.max(...forecastRows.map((row) => row.forecastDaysLate), 1);
 
@@ -309,25 +360,70 @@ export default function ForecastTab({
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">On-Time Forecast</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.onTimePct}%</div>
-          <div className="mt-1 text-sm text-slate-500">Turns with no modeled delay</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.totalDelay}</div>
+          <div className="mt-1 text-sm text-slate-500">Total modeled portfolio slippage</div>
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">At-Risk Turns</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.atRisk}</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Delayed Turns</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.delayed}</div>
           <div className="mt-1 text-sm text-slate-500">Forecasted 2+ days late</div>
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {summary.totalDaysAtRisk}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">Total modeled portfolio slippage</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgConfidence}%</div>
+          <div className="mt-1 text-sm text-slate-500">Average timeline confidence</div>
         </Card>
       </div>
+
+      {currentSelected ? (
+        <Card>
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <div className="text-xl font-semibold text-slate-900">Forecast Summary</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Modeled delivery range and confidence for {currentSelected.name}.
+              </div>
+            </div>
+
+            <Pill tone={confidenceMeta.tone}>
+              Confidence: {confidenceMeta.label}
+            </Pill>
+          </div>
+
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Expected Completion</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {formatDate(currentSelected.forecastCompletion)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Range</div>
+              <div className="mt-2 text-lg font-semibold text-slate-900">
+                {formatDate(currentSelected.bestCaseDate)} → {formatDate(currentSelected.worstCaseDate)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Risk Exposure</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {formatVariance(currentSelected.forecastDaysLate)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Spread</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {currentSelected.spread}d
+              </div>
+            </div>
+          </div>
+        </Card>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-7">
@@ -354,52 +450,58 @@ export default function ForecastTab({
                   {forecastRows
                     .slice()
                     .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
-                    .map((row) => (
-                      <tr
-                        key={row.id}
-                        className={`border-t border-slate-100 ${
-                          currentSelected?.id === row.id ? "bg-slate-50" : "hover:bg-slate-50"
-                        }`}
-                      >
-                        <td className="px-3 py-3">
-                          <button
-                            onClick={() => setSelectedPropertyId(row.id)}
-                            className="font-medium text-blue-700 hover:underline"
-                          >
-                            {row.name}
-                          </button>
-                          <div className="mt-1 text-xs text-slate-500">{row.market}</div>
-                        </td>
-                        <td className="px-3 py-3">{row.currentStage}</td>
-                        <td className="px-3 py-3">{formatDate(row.projectedCompletion)}</td>
-                        <td className="px-3 py-3">{formatDate(row.forecastCompletion)}</td>
-                        <td className="px-3 py-3">
-                          <Pill tone={varianceTone(row.forecastDaysLate)}>
-                            {formatVariance(row.forecastDaysLate)}
-                          </Pill>
-                        </td>
-                        <td className="px-3 py-3">{row.forecastConfidence}%</td>
-                        <td className="px-3 py-3">
-                          <div className="w-[120px] rounded-full bg-slate-100">
-                            <div
-                              className={`h-2 rounded-full ${
-                                row.forecastDaysLate >= 4
-                                  ? "bg-red-500"
-                                  : row.forecastDaysLate >= 2
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{
-                                width: `${Math.max(
-                                  8,
-                                  (row.forecastDaysLate / maxDelay) * 100
-                                )}%`,
-                              }}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
+                    .map((row) => {
+                      const meta = getConfidenceLabel(row.forecastConfidence);
+
+                      return (
+                        <tr
+                          key={row.id}
+                          className={`border-t border-slate-100 ${
+                            currentSelected?.id === row.id ? "bg-slate-50" : "hover:bg-slate-50"
+                          }`}
+                        >
+                          <td className="px-3 py-3">
+                            <button
+                              onClick={() => setSelectedPropertyId(row.id)}
+                              className="font-medium text-blue-700 hover:underline"
+                            >
+                              {row.name}
+                            </button>
+                            <div className="mt-1 text-xs text-slate-500">{row.market}</div>
+                          </td>
+                          <td className="px-3 py-3">{row.currentStage}</td>
+                          <td className="px-3 py-3">{formatDate(row.projectedCompletion)}</td>
+                          <td className="px-3 py-3">{formatDate(row.forecastCompletion)}</td>
+                          <td className="px-3 py-3">
+                            <Pill tone={varianceTone(row.forecastDaysLate)}>
+                              {formatVariance(row.forecastDaysLate)}
+                            </Pill>
+                          </td>
+                          <td className="px-3 py-3">
+                            <Pill tone={meta.tone}>{meta.label}</Pill>
+                          </td>
+                          <td className="px-3 py-3">
+                            <div className="w-[120px] rounded-full bg-slate-100">
+                              <div
+                                className={`h-2 rounded-full ${
+                                  row.forecastDaysLate >= 4
+                                    ? "bg-red-500"
+                                    : row.forecastDaysLate >= 2
+                                    ? "bg-amber-500"
+                                    : "bg-emerald-500"
+                                }`}
+                                style={{
+                                  width: `${Math.max(
+                                    8,
+                                    (row.forecastDaysLate / maxDelay) * 100
+                                  )}%`,
+                                }}
+                              />
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
@@ -455,8 +557,11 @@ export default function ForecastTab({
                     <div className="text-xs uppercase tracking-wide text-slate-500">
                       Confidence
                     </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {currentSelected.forecastConfidence}%
+                    <div className="mt-2 flex items-center gap-2">
+                      <div className="text-2xl font-semibold text-slate-900">
+                        {currentSelected.forecastConfidence}%
+                      </div>
+                      <Pill tone={confidenceMeta.tone}>{confidenceMeta.label}</Pill>
                     </div>
                   </div>
                 </div>
@@ -470,18 +575,31 @@ export default function ForecastTab({
 
                 <div className="mt-6">
                   <div className="text-sm font-semibold text-slate-900">
-                    Primary Delay Drivers
+                    Delay Driver Breakdown
                   </div>
-                  <div className="mt-3 space-y-3">
-                    {currentSelected.forecastDelayDrivers.map((driver) => (
-                      <div
-                        key={`${driver.label}-${driver.days}`}
-                        className="flex items-center justify-between rounded-xl border border-slate-200 px-3 py-2"
-                      >
-                        <div className="text-sm text-slate-700">{driver.label}</div>
-                        <div className="text-sm font-medium text-slate-900">+{driver.days}d</div>
-                      </div>
-                    ))}
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Driver</th>
+                          <th className="px-3 py-2 font-medium">Impact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentSelected.forecastDelayDrivers.map((driver) => (
+                          <tr key={`${driver.label}-${driver.days}`} className="border-t border-slate-100">
+                            <td className="px-3 py-3 text-slate-700">{driver.label}</td>
+                            <td className="px-3 py-3 font-medium text-slate-900">+{driver.days}d</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t border-slate-100 bg-slate-50">
+                          <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
+                          <td className="px-3 py-3 font-semibold text-slate-900">
+                            +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
                   </div>
                 </div>
 

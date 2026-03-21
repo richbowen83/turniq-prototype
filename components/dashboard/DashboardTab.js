@@ -15,6 +15,79 @@ function getReadinessTone(readiness) {
   return "emerald";
 }
 
+function toDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function addDays(dateStr, days) {
+  const d = toDate(dateStr);
+  if (!d) return "";
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function formatDate(dateStr) {
+  const d = toDate(dateStr);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function getRiskDelay(risk) {
+  if (risk >= 85) return 4;
+  if (risk >= 75) return 3;
+  if (risk >= 65) return 2;
+  if (risk >= 55) return 1;
+  return 0;
+}
+
+function getStageDelay(stage) {
+  if (stage === "Owner Approval") return 3;
+  if (stage === "Dispatch") return 2;
+  if (stage === "Scope Review") return 2;
+  if (stage === "Move Out Inspection") return 1;
+  return 0;
+}
+
+function getBlockerSeverity(blocker) {
+  const b = String(blocker || "").toLowerCase();
+  if (
+    b.includes("approval") ||
+    b.includes("access") ||
+    b.includes("hvac") ||
+    b.includes("inspection")
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function getLiveBlockers(blockers = []) {
+  return blockers.filter(
+    (b) => b && b !== "No active blockers" && b !== "No major blockers"
+  );
+}
+
+function buildForecast(property) {
+  const blockers = getLiveBlockers(property.blockers);
+  const forecastDaysLate =
+    getRiskDelay(property.risk) +
+    getStageDelay(property.currentStage) +
+    blockers.reduce((sum, blocker) => sum + getBlockerSeverity(blocker), 0);
+
+  const forecastCompletion = addDays(property.projectedCompletion, forecastDaysLate);
+  const forecastConfidence = Math.max(
+    40,
+    Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5))
+  );
+
+  return {
+    forecastCompletion,
+    forecastDaysLate,
+    forecastConfidence,
+  };
+}
+
 function isInHorizon(property, horizon) {
   if (horizon === "All Active") return true;
 
@@ -31,18 +104,13 @@ function isInHorizon(property, horizon) {
   return true;
 }
 
-function addDays(dateStr, days) {
-  const d = new Date(dateStr);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
-}
-
 function buildPriorityItems(properties) {
   return [...properties]
-    .filter((p) => p.turnStatus === "Blocked" || p.risk >= 70)
+    .filter((p) => p.turnStatus === "Blocked" || p.risk >= 70 || p.forecastDaysLate >= 2)
     .sort((a, b) => {
       if (a.turnStatus === "Blocked" && b.turnStatus !== "Blocked") return -1;
       if (a.turnStatus !== "Blocked" && b.turnStatus === "Blocked") return 1;
+      if (b.forecastDaysLate !== a.forecastDaysLate) return b.forecastDaysLate - a.forecastDaysLate;
       return b.risk - a.risk;
     })
     .slice(0, 5)
@@ -51,10 +119,19 @@ function buildPriorityItems(properties) {
       title: p.name,
       subtitle: `${p.market} • ${p.currentStage}`,
       detail:
-        p.turnStatus === "Blocked"
+        p.forecastDaysLate >= 2
+          ? `Forecast is ${p.forecastDaysLate}d behind ECD (${formatDate(
+              p.forecastCompletion
+            )}).`
+          : p.turnStatus === "Blocked"
           ? "Blocked and needs operator intervention."
           : "High-risk turn should be actively managed.",
-      tone: p.turnStatus === "Blocked" ? "red" : "amber",
+      tone:
+        p.forecastDaysLate >= 4 || p.turnStatus === "Blocked"
+          ? "red"
+          : p.forecastDaysLate >= 2 || p.risk >= 70
+          ? "amber"
+          : "blue",
     }));
 }
 
@@ -65,26 +142,48 @@ function buildMarketHealth(properties) {
       const avgRisk = rows.length
         ? Math.round(rows.reduce((sum, row) => sum + row.risk, 0) / rows.length)
         : 0;
+      const avgForecastDelay = rows.length
+        ? Number(
+            (
+              rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0) / rows.length
+            ).toFixed(1)
+          )
+        : 0;
 
       return {
         market,
         openTurns: rows.length,
         blocked: rows.filter((r) => r.turnStatus === "Blocked").length,
         avgRisk,
+        avgForecastDelay,
       };
     })
-    .sort((a, b) => b.avgRisk - a.avgRisk);
+    .sort((a, b) => b.avgForecastDelay - a.avgForecastDelay || b.avgRisk - a.avgRisk);
 }
 
 function buildRecommendations(properties) {
   const recs = [];
+
+  const forecastLate = properties.filter((p) => p.forecastDaysLate >= 4);
+  if (forecastLate.length) {
+    recs.push({
+      tone: "red",
+      title: "Intervene on forecast-late turns",
+      body: `${forecastLate.length} turn${
+        forecastLate.length > 1 ? "s are" : " is"
+      } modeled at 4+ days behind ECD.`,
+      homes: forecastLate.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
+    });
+  }
 
   const blockedTurns = properties.filter((p) => p.turnStatus === "Blocked");
   if (blockedTurns.length) {
     recs.push({
       tone: "red",
       title: "Resolve blocked turns first",
-      body: `${blockedTurns.length} blocked turn${blockedTurns.length > 1 ? "s are" : " is"} driving portfolio risk and likely ECD slippage.`,
+      body: `${blockedTurns.length} blocked turn${
+        blockedTurns.length > 1 ? "s are" : " is"
+      } driving portfolio risk and likely ECD slippage.`,
       homes: blockedTurns.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
     });
   }
@@ -94,7 +193,9 @@ function buildRecommendations(properties) {
     recs.push({
       tone: "amber",
       title: "Clear Owner Approval backlog",
-      body: `${approvalTurns.length} turn${approvalTurns.length > 1 ? "s are" : " is"} waiting in Owner Approval, slowing dispatch readiness.`,
+      body: `${approvalTurns.length} turn${
+        approvalTurns.length > 1 ? "s are" : " is"
+      } waiting in Owner Approval, with modeled downstream forecast pressure.`,
       homes: approvalTurns.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
     });
   }
@@ -113,17 +214,19 @@ function buildRecommendations(properties) {
       recs.push({
         tone: "blue",
         title: `Bundle ${g.vendor} in ${g.market}`,
-        body: `${g.turns.length} turns share the same vendor. Bundling dispatch could reduce labor mobilization and coordination overhead.`,
+        body: `${g.turns.length} turns share the same vendor. Bundling dispatch could reduce labor mobilization and improve forecast confidence.`,
         homes: g.turns.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
       });
     });
 
-  const highReadiness = properties.filter((p) => p.readiness >= 90);
+  const highReadiness = properties.filter((p) => p.readiness >= 90 && p.forecastDaysLate <= 1);
   if (highReadiness.length) {
     recs.push({
       tone: "emerald",
       title: "Fast-track high-readiness turns",
-      body: `${highReadiness.length} turn${highReadiness.length > 1 ? "s are" : " is"} ready to move quickly with limited operator drag.`,
+      body: `${highReadiness.length} turn${
+        highReadiness.length > 1 ? "s are" : " is"
+      } ready to move quickly with limited modeled delay exposure.`,
       homes: highReadiness.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
     });
   }
@@ -155,7 +258,6 @@ function buildActionFromProperty(p) {
       tone: "red",
       type: "resolve-blocker",
       rank: 1,
-      confidence: 88,
       simulation: {
         readinessDelta: 10,
         riskDelta: -8,
@@ -178,7 +280,6 @@ function buildActionFromProperty(p) {
       tone: "amber",
       type: "approve-scope",
       rank: 2,
-      confidence: 84,
       simulation: {
         readinessDelta: 6,
         riskDelta: -5,
@@ -201,7 +302,6 @@ function buildActionFromProperty(p) {
       tone: "amber",
       type: "review-owner",
       rank: 3,
-      confidence: 80,
       simulation: {
         readinessDelta: 4,
         riskDelta: -4,
@@ -224,7 +324,6 @@ function buildActionFromProperty(p) {
       tone: "blue",
       type: "assign-vendor",
       rank: 4,
-      confidence: 82,
       simulation: {
         readinessDelta: 7,
         riskDelta: -6,
@@ -248,7 +347,6 @@ function buildActionFromProperty(p) {
       tone: "red",
       type: "review-delay",
       rank: 5,
-      confidence: 78,
       simulation: {
         readinessDelta: 5,
         riskDelta: -7,
@@ -263,7 +361,6 @@ function buildActionFromProperty(p) {
 
 function generateActions(properties) {
   const rawActions = properties.map((p) => buildActionFromProperty(p)).filter(Boolean);
-
   const deduped = {};
   rawActions.forEach((action) => {
     const current = deduped[action.propertyId];
@@ -295,70 +392,18 @@ function buildPerformanceMetrics(actionLog) {
       )
     : 0;
 
+  const byType = {};
+  completed.forEach((item) => {
+    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
+  });
+
   return {
     totalCompleted,
     totalDaysAvoided,
     totalVacancySaved,
     avgResponseMinutes,
+    byType,
   };
-}
-
-function buildBatchPreview(actions) {
-  if (!actions.length) {
-    return {
-      turns: 0,
-      daysAvoided: 0,
-      savings: 0,
-      readinessLift: 0,
-      avgConfidence: 0,
-    };
-  }
-
-  return {
-    turns: actions.length,
-    daysAvoided: actions.reduce(
-      (sum, action) => sum + Math.abs(action.simulation?.ecdDeltaDays || 0),
-      0
-    ),
-    savings: actions.reduce(
-      (sum, action) => sum + (action.simulation?.vacancySavings || 0),
-      0
-    ),
-    readinessLift: actions.reduce(
-      (sum, action) => sum + (action.simulation?.readinessDelta || 0),
-      0
-    ),
-    avgConfidence: Math.round(
-      actions.reduce((sum, action) => sum + (action.confidence || 0), 0) / actions.length
-    ),
-  };
-}
-
-function buildBottleneck(properties) {
-  const stages = [
-    "Pre-Leasing",
-    "Pre-Move Out Inspection",
-    "Move Out Inspection",
-    "Scope Review",
-    "Owner Approval",
-    "Dispatch",
-    "Pending RRI",
-    "Rent Ready Open",
-  ];
-
-  const stageStats = stages.map((stage) => {
-    const rows = properties.filter((p) => p.currentStage === stage);
-    const avgDays = rows.length
-      ? rows.reduce((sum, row) => sum + (row.daysInStage || 0), 0) / rows.length
-      : 0;
-    return {
-      stage,
-      turns: rows.length,
-      avgDays: Number(avgDays.toFixed(1)),
-    };
-  });
-
-  return stageStats.sort((a, b) => b.avgDays - a.avgDays)[0] || null;
 }
 
 export default function DashboardTab({
@@ -382,13 +427,16 @@ export default function DashboardTab({
   const [previewActionId, setPreviewActionId] = useState(null);
 
   const horizonProperties = useMemo(
-    () => properties.filter((p) => isInHorizon(p, horizon)),
+    () =>
+      properties
+        .filter((p) => isInHorizon(p, horizon))
+        .map((p) => ({ ...p, ...buildForecast(p) })),
     [properties, horizon]
   );
 
   const actions = useMemo(() => generateActions(horizonProperties), [horizonProperties]);
   const priorities = useMemo(() => buildPriorityItems(horizonProperties), [horizonProperties]);
-  const marketHealth = useMemo(() => buildMarketHealth(properties), [properties]);
+  const marketHealth = useMemo(() => buildMarketHealth(properties.map((p) => ({ ...p, ...buildForecast(p) }))), [properties]);
   const recommendations = useMemo(
     () => buildRecommendations(horizonProperties),
     [horizonProperties]
@@ -397,8 +445,6 @@ export default function DashboardTab({
     () => buildPerformanceMetrics(actionHistory),
     [actionHistory]
   );
-  const bottleneck = useMemo(() => buildBottleneck(properties), [properties]);
-  const batchPreview = useMemo(() => buildBatchPreview(actions), [actions]);
 
   const previewAction = actions.find((a) => a.id === previewActionId) || actions[0] || null;
 
@@ -417,6 +463,23 @@ export default function DashboardTab({
 
     return [...activityEvents, ...noteEvents].reverse().slice(0, 8);
   }, [notes, activity]);
+
+  const forecastSummary = useMemo(() => {
+    const total = horizonProperties.length || 1;
+    const totalDelay = horizonProperties.reduce(
+      (sum, property) => sum + (property.forecastDaysLate || 0),
+      0
+    );
+    const avgForecastDelay = Number((totalDelay / total).toFixed(1));
+    const forecastLateCount = horizonProperties.filter((p) => p.forecastDaysLate >= 2).length;
+    const highDelayCount = horizonProperties.filter((p) => p.forecastDaysLate >= 4).length;
+    return {
+      avgForecastDelay,
+      forecastLateCount,
+      highDelayCount,
+      totalDelay,
+    };
+  }, [horizonProperties]);
 
   function logCompletedAction(target, action) {
     addActionHistory({
@@ -627,6 +690,8 @@ export default function DashboardTab({
     batch.forEach((action) => handleActionResolve(action));
   }
 
+  const selectedForecast = selectedProperty ? buildForecast(selectedProperty) : null;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -654,24 +719,39 @@ export default function DashboardTab({
         </div>
       </div>
 
-      {bottleneck && bottleneck.turns > 0 && (
-        <Card className="border-amber-200 bg-amber-50">
-          <div className="flex flex-wrap items-center justify-between gap-4">
-            <div>
-              <div className="text-sm font-semibold uppercase tracking-wide text-amber-700">
-                TurnIQ Callout
-              </div>
-              <div className="mt-1 text-lg font-semibold text-slate-900">
-                {bottleneck.stage} is the current bottleneck
-              </div>
-              <div className="mt-1 text-sm text-slate-600">
-                {bottleneck.turns} active turns are sitting here for an average of {bottleneck.avgDays} days.
-              </div>
-            </div>
-            <Pill tone="amber">{bottleneck.stage}</Pill>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.avgForecastDelay}d
           </div>
+          <div className="mt-1 text-sm text-slate-500">Average modeled variance to ECD</div>
         </Card>
-      )}
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Forecast-Late Turns</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.forecastLateCount}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">Turns forecasted 2+ days late</div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">High Delay Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.highDelayCount}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">Turns forecasted 4+ days behind</div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.totalDelay}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">Total modeled portfolio slippage</div>
+        </Card>
+      </div>
 
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -705,48 +785,6 @@ export default function DashboardTab({
           </button>
         </div>
 
-        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Batch Impact</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {batchPreview.turns}
-            </div>
-            <div className="mt-1 text-sm text-slate-500">turns addressable</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Avoided</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {batchPreview.daysAvoided}
-            </div>
-            <div className="mt-1 text-sm text-slate-500">projected across actions</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Savings</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              ${batchPreview.savings}
-            </div>
-            <div className="mt-1 text-sm text-slate-500">modeled upside</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Readiness Lift</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              +{batchPreview.readinessLift}
-            </div>
-            <div className="mt-1 text-sm text-slate-500">aggregate points</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {batchPreview.avgConfidence}%
-            </div>
-            <div className="mt-1 text-sm text-slate-500">modeled recommendation confidence</div>
-          </div>
-        </div>
-
         <div className="grid gap-6 xl:grid-cols-12">
           <div className="xl:col-span-8 space-y-3">
             {actions.map((action) => (
@@ -758,7 +796,6 @@ export default function DashboardTab({
                   <div className="flex flex-wrap items-center gap-2">
                     <div className="font-semibold text-slate-900">{action.propertyName}</div>
                     <Pill tone={action.tone}>{action.priority}</Pill>
-                    <Pill tone="blue">{action.confidence}% confidence</Pill>
                   </div>
                   <div className="mt-1 text-sm font-medium text-slate-800">{action.title}</div>
                   <div className="mt-1 text-sm text-slate-500">
@@ -789,10 +826,7 @@ export default function DashboardTab({
 
           <div className="xl:col-span-4">
             <Card className="h-full bg-slate-50">
-              <div className="flex items-center justify-between gap-3">
-                <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
-                {previewAction ? <Pill tone="blue">{previewAction.confidence}%</Pill> : null}
-              </div>
+              <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
               <div className="mt-1 text-sm text-slate-500">
                 {previewAction
                   ? `Projected impact for ${previewAction.propertyName}`
@@ -802,56 +836,40 @@ export default function DashboardTab({
               {previewAction ? (
                 <div className="mt-5 space-y-4">
                   <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">ECD Before → After</div>
-                    <div className="mt-2 text-base font-medium text-slate-900">
-                      {selectedProperty.projectedCompletion} →{" "}
-                      {addDays(selectedProperty.projectedCompletion, previewAction.simulation?.ecdDeltaDays || 0)}
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Expected ECD Change
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {previewAction.simulation?.ecdDeltaDays < 0
+                        ? `${Math.abs(previewAction.simulation.ecdDeltaDays)} days faster`
+                        : `${previewAction.simulation?.ecdDeltaDays || 0} days`}
                     </div>
                   </div>
 
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Delay Days Avoided
-                      </div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        {Math.abs(previewAction.simulation?.ecdDeltaDays || 0)}
-                      </div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Readiness Lift
                     </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Vacancy Savings
-                      </div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        ${previewAction.simulation?.vacancySavings || 0}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Readiness Lift
-                      </div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        +{previewAction.simulation?.readinessDelta || 0}
-                      </div>
-                    </div>
-
-                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                      <div className="text-xs uppercase tracking-wide text-slate-500">
-                        Risk Reduction
-                      </div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        {previewAction.simulation?.riskDelta || 0}
-                      </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      +{previewAction.simulation?.readinessDelta || 0} pts
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-dashed border-slate-200 bg-white p-4">
-                    <div className="text-sm font-medium text-slate-900">What this means</div>
-                    <div className="mt-2 text-sm text-slate-600">
-                      Completing this action should improve turn velocity, reduce modeled slippage risk,
-                      and bring forward expected rent-ready timing.
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Risk Reduction
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {previewAction.simulation?.riskDelta || 0} pts
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Vacancy Savings
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      ${previewAction.simulation?.vacancySavings || 0}
                     </div>
                   </div>
                 </div>
@@ -872,7 +890,7 @@ export default function DashboardTab({
               <div>
                 <div className="text-xl font-semibold text-slate-900">Priorities</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Highest-urgency turns based on blockers, risk, and ECD pressure.
+                  Highest-urgency turns based on blockers, risk, and forecast pressure.
                 </div>
               </div>
               <Pill tone="blue">{horizon}</Pill>
@@ -892,7 +910,11 @@ export default function DashboardTab({
                         <div className="mt-1 text-sm text-slate-500">{item.subtitle}</div>
                       </div>
                       <Pill tone={item.tone}>
-                        {item.tone === "red" ? "Urgent" : "Watch"}
+                        {item.tone === "red"
+                          ? "Urgent"
+                          : item.tone === "amber"
+                          ? "Watch"
+                          : "Monitor"}
                       </Pill>
                     </div>
 
@@ -931,7 +953,8 @@ export default function DashboardTab({
                       <div>
                         <div className="font-semibold text-slate-900">{row.market}</div>
                         <div className="mt-1 text-sm text-slate-500">
-                          {row.openTurns} open turns • {row.blocked} blocked
+                          {row.openTurns} open turns • {row.blocked} blocked • avg delay{" "}
+                          {row.avgForecastDelay}d
                         </div>
                       </div>
                       <Pill tone={getToneFromRisk(row.avgRisk)}>{row.avgRisk}</Pill>
@@ -949,7 +972,7 @@ export default function DashboardTab({
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">TurnIQ Recommendations</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI recommendations based on blockers, approvals, vendor overlap, and readiness.
+              AI recommendations based on blockers, approvals, vendor overlap, readiness, and forecast variance.
             </div>
 
             <div className="mt-4 space-y-3">
@@ -1030,19 +1053,46 @@ export default function DashboardTab({
               </div>
 
               <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Est. Cost</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {formatMoney(selectedProperty.projectedCost)}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
                 <div className="text-xs uppercase tracking-wide text-slate-500">ECD</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">
                   {selectedProperty.projectedCompletion}
                 </div>
               </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Forecast</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {selectedForecast ? formatDate(selectedForecast.forecastCompletion) : "—"}
+                </div>
+              </div>
             </div>
+
+            {selectedForecast ? (
+              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Forecast variance
+                  </div>
+                  <Pill
+                    tone={
+                      selectedForecast.forecastDaysLate >= 4
+                        ? "red"
+                        : selectedForecast.forecastDaysLate >= 2
+                        ? "amber"
+                        : "emerald"
+                    }
+                  >
+                    {selectedForecast.forecastDaysLate === 0
+                      ? "On time"
+                      : `+${selectedForecast.forecastDaysLate}d`}
+                  </Pill>
+                </div>
+                <div className="mt-2 text-sm text-slate-600">
+                  Confidence {selectedForecast.forecastConfidence}% • Forecasted completion{" "}
+                  {formatDate(selectedForecast.forecastCompletion)}
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-6">
               <div className="mb-2 text-sm font-semibold text-slate-900">Operator Actions</div>
@@ -1164,8 +1214,8 @@ export default function DashboardTab({
                     <th className="px-3 py-2 font-medium">Property</th>
                     <th className="px-3 py-2 font-medium">Market</th>
                     <th className="px-3 py-2 font-medium">Risk</th>
+                    <th className="px-3 py-2 font-medium">Forecast</th>
                     <th className="px-3 py-2 font-medium">Readiness</th>
-                    <th className="px-3 py-2 font-medium">Scope</th>
                     <th className="px-3 py-2 font-medium">Completion</th>
                   </tr>
                 </thead>
@@ -1190,13 +1240,25 @@ export default function DashboardTab({
                       <td className="px-3 py-3">
                         <Pill tone={getToneFromRisk(row.risk)}>{row.risk}</Pill>
                       </td>
+                      <td className="px-3 py-3">
+                        <Pill
+                          tone={
+                            row.forecastDaysLate >= 4
+                              ? "red"
+                              : row.forecastDaysLate >= 2
+                              ? "amber"
+                              : "emerald"
+                          }
+                        >
+                          {row.forecastDaysLate === 0 ? "On time" : `+${row.forecastDaysLate}d`}
+                        </Pill>
+                      </td>
                       <td className="w-[160px] px-3 py-3">
                         <ProgressBar
                           value={row.readiness}
                           tone={getReadinessTone(row.readiness)}
                         />
                       </td>
-                      <td className="px-3 py-3">{row.scope}</td>
                       <td className="px-3 py-3">{row.projectedCompletion}</td>
                     </tr>
                   ))}
@@ -1239,32 +1301,6 @@ export default function DashboardTab({
               </button>
             </div>
           </Card>
-
-          {performanceMetrics.totalCompleted > 0 && (
-            <Card className="mt-6">
-              <div className="mb-3 text-lg font-semibold text-slate-900">Operator Value Created</div>
-              <div className="grid gap-3 sm:grid-cols-3">
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Actions</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {performanceMetrics.totalCompleted}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Days Avoided</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {performanceMetrics.totalDaysAvoided}
-                  </div>
-                </div>
-                <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Savings</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    ${performanceMetrics.totalVacancySaved}
-                  </div>
-                </div>
-              </div>
-            </Card>
-          )}
         </div>
       </div>
     </div>
