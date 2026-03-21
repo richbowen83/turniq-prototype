@@ -1,6 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import ImportPanel from "../components/Import/ImportPanel";
+import { useState, useEffect, useMemo } from "react";
 import AppHeader from "../components/layout/AppHeader";
 import GlobalKpiStrip from "../components/layout/GlobalKpiStrip";
 import TabNav from "../components/layout/TabNav";
@@ -206,6 +207,7 @@ const INITIAL_ACTIVITY = {
 const INITIAL_ACTION_HISTORY = [];
 
 const TABS = [
+  "Import",
   "Dashboard",
   "Control Center",
   "Forecast",
@@ -269,20 +271,54 @@ export default function Page() {
   const [sortBy, setSortBy] = useState("Risk");
   const [dirtyRowIds, setDirtyRowIds] = useState([]);
   const [savedRowIds, setSavedRowIds] = useState([]);
+  const [importedProperties, setImportedProperties] = useState([]);
+  const [previousImportedProperties, setPreviousImportedProperties] = useState([]);
+  const [canUndoImport, setCanUndoImport] = useState(false);
+  const [importMode, setImportMode] = useState("replace");
+  const [lastImportCount, setLastImportCount] = useState(0);
+  const [lastUploadedCount, setLastUploadedCount] = useState(0);
+  const [lastSkippedCount, setLastSkippedCount] = useState(0);
+  const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("turniq_imported_properties");
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setImportedProperties(parsed);
+        }
+      } catch (error) {
+        console.error("Failed to load imported properties", error);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "turniq_imported_properties",
+      JSON.stringify(importedProperties)
+    );
+  }, [importedProperties]);
+
+  const activeProperties = useMemo(
+    () => (importedProperties.length ? importedProperties : properties),
+    [importedProperties, properties]
+  );
 
   const markets = useMemo(
-    () => ["All Markets", ...Array.from(new Set(properties.map((x) => x.market)))],
-    [properties]
+    () => ["All Markets", ...Array.from(new Set(activeProperties.map((x) => x.market)))],
+    [activeProperties]
   );
 
   const filteredProperties = useMemo(() => {
-    return properties.filter(
+    return activeProperties.filter(
       (x) => selectedMarket === "All Markets" || x.market === selectedMarket
     );
-  }, [properties, selectedMarket]);
+  }, [activeProperties, selectedMarket]);
 
   const selectedProperty =
-    properties.find((x) => x.id === selectedPropertyId) || properties[0];
+    activeProperties.find((x) => x.id === selectedPropertyId) || activeProperties[0];
 
   const marketHealth = useMemo(() => getMarketHealth(filteredProperties), [filteredProperties]);
   const stageFlow = useMemo(() => getStageFlow(filteredProperties), [filteredProperties]);
@@ -424,7 +460,16 @@ export default function Page() {
   }, [filteredProperties, queueFilter, selectedStageFilter, sortBy]);
 
   function updateProperty(id, patch) {
-    setProperties((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+    if (importedProperties.length) {
+      setImportedProperties((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+      );
+      return;
+    }
+
+    setProperties((prev) =>
+      prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+    );
   }
 
   function addNote(propertyName, note) {
@@ -442,6 +487,29 @@ export default function Page() {
       ...prev,
       [propertyName]: [...(prev[propertyName] || []), item.trim()],
     }));
+  }
+
+  function handleClearImportedData() {
+    setImportedProperties([]);
+    setPreviousImportedProperties([]);
+    setCanUndoImport(false);
+    setLastImportCount(0);
+    setLastUploadedCount(0);
+    setLastSkippedCount(0);
+    setLastImportTimestamp(null);
+    localStorage.removeItem("turniq_imported_properties");
+    setSelectedMarket("All Markets");
+    setSelectedPropertyId("p1");
+    setActiveTab("Import");
+  }
+
+  function handleUndoImport() {
+    setImportedProperties(previousImportedProperties || []);
+    setCanUndoImport(false);
+    setLastImportCount(0);
+    setLastUploadedCount(0);
+    setLastSkippedCount(0);
+    setLastImportTimestamp(null);
   }
 
   function addActionHistory(entry) {
@@ -480,6 +548,49 @@ export default function Page() {
     setQueueFilter("All Open Turns");
     setSelectedStageFilter(null);
     setSortBy("Risk");
+  }
+
+  function handleImportTurns(importedTurns) {
+    const totalRows = importedTurns.length;
+    let newCount = 0;
+    let skippedCount = 0;
+
+    setPreviousImportedProperties(importedProperties);
+    setCanUndoImport(true);
+
+    if (importMode === "replace") {
+      newCount = totalRows;
+      skippedCount = 0;
+      setImportedProperties(importedTurns);
+    } else {
+      setImportedProperties((prev) => {
+        const merged = [...prev];
+        const existingIds = new Set(prev.map((row) => row.id));
+
+        importedTurns.forEach((row) => {
+          if (!existingIds.has(row.id)) {
+            merged.push(row);
+            existingIds.add(row.id);
+            newCount += 1;
+          } else {
+            skippedCount += 1;
+          }
+        });
+
+        return merged;
+      });
+    }
+
+    setLastUploadedCount(totalRows);
+    setLastImportCount(newCount);
+    setLastSkippedCount(skippedCount);
+    setLastImportTimestamp(new Date().toISOString());
+
+    if (importedTurns.length) {
+      setSelectedPropertyId(importedTurns[0].id);
+      setSelectedMarket("All Markets");
+      setActiveTab("Dashboard");
+    }
   }
 
   return (
@@ -597,13 +708,31 @@ export default function Page() {
         )}
 
         {activeTab === "Analytics" && (
-          <AnalyticsTab
-            properties={filteredProperties}
-            actionHistory={actionHistory}
-          />
+          <AnalyticsTab properties={filteredProperties} actionHistory={actionHistory} />
         )}
 
         {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
+
+        {activeTab === "Import" && (
+          <ImportPanel
+            onImport={handleImportTurns}
+            onClearSuccess={() => {
+              setLastImportCount(0);
+              setLastUploadedCount(0);
+              setLastSkippedCount(0);
+              setLastImportTimestamp(null);
+            }}
+            onClearImportedData={handleClearImportedData}
+            onUndoImport={handleUndoImport}
+            canUndoImport={canUndoImport}
+            lastImportCount={lastImportCount}
+            lastUploadedCount={lastUploadedCount}
+            lastSkippedCount={lastSkippedCount}
+            lastImportTimestamp={lastImportTimestamp}
+            importMode={importMode}
+            setImportMode={setImportMode}
+          />
+        )}
 
         {activeTab === "Overview" && (
           <OverviewTab
