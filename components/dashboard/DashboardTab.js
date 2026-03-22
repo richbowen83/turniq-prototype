@@ -1,12 +1,13 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import ProgressBar from "../shared/ProgressBar";
 
 const HORIZONS = ["Today", "Next 7 Days", "Next 14 Days", "All Active"];
 const TODAY = new Date("2026-05-07T00:00:00");
+const DAILY_RENT_ASSUMPTION = 120;
 
 function getReadinessTone(readiness) {
   if (readiness < 40) return "red";
@@ -106,6 +107,29 @@ function buildForecast(property) {
   };
 }
 
+function calculateRevenueImpact(properties) {
+  let atRisk = 0;
+  let recoverable = 0;
+
+  properties.forEach((p) => {
+    const delayDays =
+      typeof p.forecastDaysLate === "number"
+        ? p.forecastDaysLate
+        : (p.delayDrivers || []).reduce((sum, d) => sum + (d.days || 0), 0);
+
+    const riskWeight = (p.risk || 0) / 100;
+    const exposure = delayDays * DAILY_RENT_ASSUMPTION;
+
+    atRisk += exposure * Math.max(0.25, riskWeight);
+    recoverable += exposure * Math.max(0, 1 - riskWeight * 0.5);
+  });
+
+  return {
+    atRisk: Math.round(atRisk),
+    recoverable: Math.round(recoverable),
+  };
+}
+
 function buildStageBottleneck(properties) {
   const stageMap = new Map();
 
@@ -128,54 +152,6 @@ function buildStageBottleneck(properties) {
   if (!rows.length) return null;
 
   return rows.sort((a, b) => b.avgDaysInStage - a.avgDaysInStage)[0];
-}
-
-function buildTurnIQCallout({ properties, topStageBottleneck }) {
-  if (!properties?.length) return null;
-
-  const enriched = properties.map((p) => ({ ...p, ...buildForecast(p) }));
-  const highestRisk = [...enriched].sort((a, b) => b.risk - a.risk)[0];
-  const blockedCount = enriched.filter((p) => p.turnStatus === "Blocked").length;
-  const forecastLate = enriched.filter((p) => p.forecastDaysLate >= 2).length;
-  const totalDelay = enriched.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
-
-  if (topStageBottleneck?.stage === "Owner Approval") {
-    return {
-      title: "Approval Bottleneck",
-      message: `Owner Approval is the primary bottleneck, averaging ${topStageBottleneck.avgDaysInStage} days and impacting ${topStageBottleneck.count || 0} turns. Clearing approvals should reduce portfolio slippage fastest.`,
-      tone: "amber",
-    };
-  }
-
-  if (blockedCount > Math.max(1, Math.round(enriched.length * 0.25))) {
-    return {
-      title: "Blocked Turns Risk",
-      message: `${blockedCount} turns are currently blocked. This is the biggest immediate unlock point and is contributing meaningfully to modeled delay.`,
-      tone: "red",
-    };
-  }
-
-  if (forecastLate >= Math.max(2, Math.round(enriched.length * 0.3))) {
-    return {
-      title: "Forecast Pressure Building",
-      message: `${forecastLate} turns are forecasted 2+ days late, creating ${totalDelay} total days of modeled slippage across the portfolio.`,
-      tone: "amber",
-    };
-  }
-
-  if (highestRisk?.risk >= 80) {
-    return {
-      title: "High Risk Turn",
-      message: `${highestRisk.name} is driving portfolio risk (${highestRisk.risk}) and is likely to miss current ECD without intervention.`,
-      tone: "red",
-    };
-  }
-
-  return {
-    title: "Stable Execution",
-    message: "No critical bottlenecks detected. Focus on maintaining execution velocity and clearing small blockers early.",
-    tone: "emerald",
-  };
 }
 
 function isInHorizon(property, horizon) {
@@ -290,25 +266,6 @@ function buildRecommendations(properties) {
     });
   }
 
-  const grouped = {};
-  properties.forEach((p) => {
-    const key = `${p.market}-${p.vendor}`;
-    if (!grouped[key]) grouped[key] = { market: p.market, vendor: p.vendor, turns: [] };
-    grouped[key].turns.push(p);
-  });
-
-  Object.values(grouped)
-    .filter((g) => g.vendor && g.turns.length >= 2)
-    .slice(0, 2)
-    .forEach((g) => {
-      recs.push({
-        tone: "blue",
-        title: `Bundle ${g.vendor} in ${g.market}`,
-        body: `${g.turns.length} turns share the same vendor. Bundling dispatch could reduce labor mobilization and improve forecast confidence.`,
-        homes: g.turns.slice(0, 4).map((p) => ({ id: p.id, name: p.name })),
-      });
-    });
-
   const highReadiness = properties.filter((p) => p.readiness >= 90 && p.forecastDaysLate <= 1);
   if (highReadiness.length) {
     recs.push({
@@ -321,7 +278,7 @@ function buildRecommendations(properties) {
     });
   }
 
-  return recs.slice(0, 5);
+  return recs.slice(0, 4);
 }
 
 function getActionButtonLabel(type) {
@@ -344,6 +301,7 @@ function buildActionFromProperty(p) {
       title: `Resolve ${topBlocker.toLowerCase()}`,
       message: "Current blocker is preventing forward progress through the turn workflow.",
       impact: "Reduce delay risk by ~2 days",
+      why: "This blocker is directly contributing to forecast slippage and readiness drag.",
       priority: "High",
       tone: "red",
       type: "resolve-blocker",
@@ -352,7 +310,7 @@ function buildActionFromProperty(p) {
         readinessDelta: 10,
         riskDelta: -8,
         ecdDeltaDays: -2,
-        vacancySavings: 140,
+        vacancySavings: 240,
       },
     };
   }
@@ -366,6 +324,7 @@ function buildActionFromProperty(p) {
       title: "Approve scope review",
       message: "Scope is waiting on review by the turn manager before moving forward.",
       impact: "Move turn into approval flow",
+      why: "Reducing review lag improves downstream handoff speed and expected completion confidence.",
       priority: "High",
       tone: "amber",
       type: "approve-scope",
@@ -374,7 +333,7 @@ function buildActionFromProperty(p) {
         readinessDelta: 6,
         riskDelta: -5,
         ecdDeltaDays: -1,
-        vacancySavings: 70,
+        vacancySavings: 120,
       },
     };
   }
@@ -388,6 +347,7 @@ function buildActionFromProperty(p) {
       title: "Escalate owner approval",
       message: "Owner response is delaying dispatch and start readiness.",
       impact: "Reduce owner-driven delay",
+      why: "Owner Approval is one of the highest-friction stages in the modeled workflow.",
       priority: "High",
       tone: "amber",
       type: "review-owner",
@@ -396,7 +356,7 @@ function buildActionFromProperty(p) {
         readinessDelta: 4,
         riskDelta: -4,
         ecdDeltaDays: -2,
-        vacancySavings: 140,
+        vacancySavings: 240,
       },
     };
   }
@@ -410,6 +370,7 @@ function buildActionFromProperty(p) {
       title: "Assign execution vendor",
       message: "No clear vendor execution path is in place for the current turn scope.",
       impact: "Improve dispatch readiness",
+      why: "Removing vendor ambiguity improves scheduling certainty and reduces idle days.",
       priority: p.risk >= 75 ? "High" : "Medium",
       tone: "blue",
       type: "assign-vendor",
@@ -418,7 +379,7 @@ function buildActionFromProperty(p) {
         readinessDelta: 7,
         riskDelta: -6,
         ecdDeltaDays: -1,
-        vacancySavings: 70,
+        vacancySavings: 120,
       },
     };
   }
@@ -433,6 +394,7 @@ function buildActionFromProperty(p) {
       title: "Mitigate near-term delay risk",
       message: "Turn is at risk of missing expected completion based on risk and timing.",
       impact: "Avoid +1–3 days of slippage",
+      why: "Near-term high-risk turns have the highest probability of converting into real vacancy exposure.",
       priority: "High",
       tone: "red",
       type: "review-delay",
@@ -441,7 +403,7 @@ function buildActionFromProperty(p) {
         readinessDelta: 5,
         riskDelta: -7,
         ecdDeltaDays: -2,
-        vacancySavings: 140,
+        vacancySavings: 240,
       },
     };
   }
@@ -490,6 +452,130 @@ function buildPerformanceMetrics(actionLog) {
   };
 }
 
+function buildTurnIQCalloutV2({ properties, topStageBottleneck, actionHistory, revenueImpact }) {
+  if (!properties?.length) return null;
+
+  const blockedCount = properties.filter((p) => p.turnStatus === "Blocked").length;
+  const delayedCount = properties.filter((p) => (p.forecastDaysLate || 0) >= 2).length;
+  const highDelayCount = properties.filter((p) => (p.forecastDaysLate || 0) >= 4).length;
+  const totalDelay = properties.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
+  const avgReadiness = Math.round(
+    properties.reduce((sum, p) => sum + (p.readiness || 0), 0) / (properties.length || 1)
+  );
+  const totalDaysAvoided = actionHistory
+    .filter((a) => a.kind === "completed")
+    .reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+
+  const approvalTurns = properties.filter((p) => p.currentStage === "Owner Approval").length;
+  const vendorlessTurns = properties.filter((p) => !p.vendor || p.vendor === "TBD").length;
+  const highestRisk = [...properties].sort((a, b) => b.risk - a.risk)[0];
+
+  if (totalDaysAvoided >= 10 && blockedCount === 0 && highDelayCount === 0) {
+    return {
+      tone: "emerald",
+      eyebrow: "TURNIQ IMPACT",
+      title: "Critical bottlenecks have been materially reduced",
+      body: `Completed operator actions have already removed ${totalDaysAvoided} modeled delay days. Portfolio revenue exposure is now estimated at $${revenueImpact.atRisk.toLocaleString()}, with average readiness at ${avgReadiness}.`,
+      bullets: [
+        `${totalDaysAvoided} delay days avoided`,
+        `$${revenueImpact.atRisk.toLocaleString()} revenue still at risk`,
+        `Avg readiness now ${avgReadiness}`,
+      ],
+    };
+  }
+
+  if (topStageBottleneck?.stage === "Owner Approval" || approvalTurns >= 2) {
+    return {
+      tone: "amber",
+      eyebrow: "TURNIQ CALLOUT",
+      title: "Owner Approval is the current bottleneck",
+      body: `${approvalTurns} turn${approvalTurns === 1 ? "" : "s"} are sitting in Owner Approval${
+        topStageBottleneck?.avgDaysInStage
+          ? ` for an average of ${topStageBottleneck.avgDaysInStage} days`
+          : ""
+      }. Clearing approvals is the fastest path to reducing downstream forecast slippage and protecting modeled revenue.`,
+      bullets: [
+        `${approvalTurns} approvals waiting`,
+        `${totalDelay} total forecast days at risk`,
+        `$${revenueImpact.atRisk.toLocaleString()} revenue exposure`,
+      ],
+    };
+  }
+
+  if (blockedCount >= 2) {
+    return {
+      tone: "red",
+      eyebrow: "TURNIQ CALLOUT",
+      title: "Blocked turns are driving current delay pressure",
+      body: `${blockedCount} blocked turns are contributing materially to portfolio slippage. Removing the highest-severity blockers should unlock the fastest near-term improvement and reduce vacancy exposure.`,
+      bullets: [
+        `${blockedCount} blocked turns`,
+        `${highDelayCount} turns at 4+ forecast delay days`,
+        `$${revenueImpact.atRisk.toLocaleString()} revenue at risk`,
+      ],
+    };
+  }
+
+  if (highDelayCount >= 2) {
+    return {
+      tone: "red",
+      eyebrow: "TURNIQ CALLOUT",
+      title: "Forecast delay concentration is building",
+      body: `${highDelayCount} turns are modeled at 4+ days behind ECD, creating ${totalDelay} total days of portfolio delay. Immediate intervention should focus on the highest-risk homes first.`,
+      bullets: [
+        `${highDelayCount} turns heavily delayed`,
+        `${totalDelay} modeled days at risk`,
+        `${highestRisk?.name || "Top-risk turn"} is the biggest exposure`,
+      ],
+    };
+  }
+
+  if (vendorlessTurns >= 2) {
+    return {
+      tone: "blue",
+      eyebrow: "TURNIQ CALLOUT",
+      title: "Vendor assignment is the next unlock point",
+      body: `${vendorlessTurns} turns still do not have a clear execution vendor. Tightening vendor assignment now should reduce forecast drift before it compounds.`,
+      bullets: [
+        `${vendorlessTurns} turns missing vendor path`,
+        `$${revenueImpact.recoverable.toLocaleString()} recoverable revenue opportunity`,
+        `Low-effort action with near-term impact`,
+      ],
+    };
+  }
+
+  return {
+    tone: "emerald",
+    eyebrow: "TURNIQ CALLOUT",
+    title: "Execution is stable and under control",
+    body: `No major portfolio bottleneck is dominating the workflow right now. Focus should stay on maintaining readiness, pushing high-confidence turns to completion, and preventing new blockers from forming.`,
+    bullets: [
+      `${blockedCount} blocked turns`,
+      `${delayedCount} turns forecast late`,
+      `Avg readiness at ${avgReadiness}`,
+    ],
+  };
+}
+
+function buildImpactBanner(properties, actionHistory) {
+  const completed = actionHistory.filter((a) => a.kind === "completed");
+  if (!completed.length) return null;
+
+  const totalDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+  const totalVacancySaved = completed.reduce((sum, a) => sum + (a.vacancySavings || 0), 0);
+  const impactedTurns = new Set(completed.map((a) => a.propertyId)).size;
+  const blockedCount = properties.filter((p) => p.turnStatus === "Blocked").length;
+  const readinessLift = completed.reduce((sum, a) => sum + Math.max(0, a.readinessDelta || 0), 0);
+
+  return {
+    totalDaysAvoided,
+    totalVacancySaved,
+    impactedTurns,
+    blockedCount,
+    readinessLift,
+  };
+}
+
 export default function DashboardTab({
   properties,
   selectedProperty,
@@ -503,13 +589,13 @@ export default function DashboardTab({
   addActionHistory,
   actionHistory,
   updateProperty,
-  formatMoney,
   getToneFromRisk,
   topStageBottleneck,
 }) {
   const [draftNote, setDraftNote] = useState("");
   const [horizon, setHorizon] = useState("Today");
   const [previewActionId, setPreviewActionId] = useState(null);
+  const [pulse, setPulse] = useState(false);
 
   const horizonProperties = useMemo(
     () =>
@@ -519,6 +605,17 @@ export default function DashboardTab({
     [properties, horizon]
   );
 
+  useEffect(() => {
+    setPulse(true);
+    const t = setTimeout(() => setPulse(false), 500);
+    return () => clearTimeout(t);
+  }, [horizonProperties]);
+
+  const revenueImpact = useMemo(
+    () => calculateRevenueImpact(horizonProperties),
+    [horizonProperties]
+  );
+
   const derivedBottleneck = useMemo(
     () => topStageBottleneck || buildStageBottleneck(properties),
     [topStageBottleneck, properties]
@@ -526,11 +623,18 @@ export default function DashboardTab({
 
   const callout = useMemo(
     () =>
-      buildTurnIQCallout({
+      buildTurnIQCalloutV2({
         properties: horizonProperties,
         topStageBottleneck: derivedBottleneck,
+        actionHistory,
+        revenueImpact,
       }),
-    [horizonProperties, derivedBottleneck]
+    [horizonProperties, derivedBottleneck, actionHistory, revenueImpact]
+  );
+
+  const impactBanner = useMemo(
+    () => buildImpactBanner(horizonProperties, actionHistory),
+    [horizonProperties, actionHistory]
   );
 
   const selectedForecast = selectedProperty ? buildForecast(selectedProperty) : null;
@@ -824,18 +928,102 @@ export default function DashboardTab({
         </div>
       </div>
 
+      <div
+        className={`grid grid-cols-1 gap-4 md:grid-cols-2 transition-all duration-500 ${
+          pulse ? "scale-[1.01]" : "scale-100"
+        }`}
+      >
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+          <div className="text-xs uppercase tracking-wide text-red-600">
+            Revenue at Risk
+          </div>
+          <div className="mt-2 text-3xl font-semibold text-red-700 transition-all duration-500">
+            ${revenueImpact.atRisk.toLocaleString()}
+          </div>
+          <div className="mt-1 text-xs text-red-600">
+            Driven by forecast delay, blockers, and high-risk turns
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-xs uppercase tracking-wide text-emerald-600">
+            Recoverable Revenue
+          </div>
+          <div className="mt-2 text-3xl font-semibold text-emerald-700 transition-all duration-500">
+            ${revenueImpact.recoverable.toLocaleString()}
+          </div>
+          <div className="mt-1 text-xs text-emerald-600">
+            If recommendations are executed successfully
+          </div>
+        </div>
+      </div>
+
       {callout ? (
         <div
-          className={`rounded-2xl border p-4 ${
+          className={`rounded-3xl border p-5 shadow-sm transition-all duration-500 ${
             callout.tone === "red"
               ? "border-red-200 bg-red-50"
               : callout.tone === "amber"
               ? "border-amber-200 bg-amber-50"
+              : callout.tone === "blue"
+              ? "border-blue-200 bg-blue-50"
               : "border-emerald-200 bg-emerald-50"
           }`}
         >
-          <div className="font-semibold text-slate-900">{callout.title}</div>
-          <div className="mt-1 text-sm text-slate-700">{callout.message}</div>
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-600">
+            {callout.eyebrow}
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{callout.title}</div>
+          <div className="mt-2 text-sm leading-6 text-slate-700">{callout.body}</div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {callout.bullets.map((item) => (
+              <div
+                key={item}
+                className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700"
+              >
+                {item}
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-4 text-xs text-slate-500">
+            Estimates based on modeled delay, risk weighting, and assumed daily rent impact.
+          </div>
+        </div>
+      ) : null}
+
+      {impactBanner ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-sm font-semibold uppercase tracking-wide text-emerald-800">
+            Portfolio Impact
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-4">
+            <div className="rounded-2xl bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Saved</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">
+                {impactBanner.totalDaysAvoided}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Turns Impacted</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">
+                {impactBanner.impactedTurns}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Readiness Lift</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">
+                +{impactBanner.readinessLift}
+              </div>
+            </div>
+            <div className="rounded-2xl bg-white/80 p-3">
+              <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Protected</div>
+              <div className="mt-1 text-2xl font-semibold text-slate-900">
+                ${impactBanner.totalVacancySaved}
+              </div>
+            </div>
+          </div>
         </div>
       ) : null}
 
@@ -923,6 +1111,14 @@ export default function DashboardTab({
                   </div>
                   <div className="mt-2 text-xs font-medium text-slate-400">
                     Impact: {action.impact}
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Why: {action.why}
+                  </div>
+                  <div className="mt-2 text-xs text-slate-500">
+                    Modeled outcome: {Math.abs(action.simulation?.ecdDeltaDays || 0)} day(s) faster •
+                    +{action.simulation?.readinessDelta || 0} readiness • $
+                    {action.simulation?.vacancySavings || 0} vacancy protected
                   </div>
                 </div>
 
@@ -1092,7 +1288,7 @@ export default function DashboardTab({
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">TurnIQ Recommendations</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI recommendations based on blockers, approvals, vendor overlap, readiness, and forecast variance.
+              AI recommendations based on blockers, approvals, readiness, and forecast variance.
             </div>
 
             <div className="mt-4 space-y-3">

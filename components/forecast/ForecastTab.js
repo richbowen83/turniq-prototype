@@ -4,6 +4,8 @@ import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
+const DAILY_RENT_ASSUMPTION = 120;
+
 function toDate(value) {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -61,6 +63,29 @@ function getConfidenceLabel(score) {
   if (score >= 85) return { label: "High", tone: "emerald" };
   if (score >= 70) return { label: "Moderate", tone: "amber" };
   return { label: "Low", tone: "red" };
+}
+
+function calculateRevenueImpact(properties) {
+  let atRisk = 0;
+  let recoverable = 0;
+
+  properties.forEach((p) => {
+    const delayDays =
+      typeof p.forecastDaysLate === "number"
+        ? p.forecastDaysLate
+        : 0;
+
+    const riskWeight = (p.risk || 0) / 100;
+    const exposure = delayDays * DAILY_RENT_ASSUMPTION;
+
+    atRisk += exposure * Math.max(0.25, riskWeight);
+    recoverable += exposure * Math.max(0, 1 - riskWeight * 0.5);
+  });
+
+  return {
+    atRisk: Math.round(atRisk),
+    recoverable: Math.round(recoverable),
+  };
 }
 
 function buildForecast(property) {
@@ -150,30 +175,65 @@ function getRecommendedAction(property) {
   const blockers = getLiveBlockers(property.blockers);
 
   if (blockers.some((b) => b.toLowerCase().includes("approval"))) {
-    return { action: "Expedite owner approval", impact: 2, type: "approval" };
+    return {
+      action: "Expedite owner approval",
+      impact: 2,
+      type: "approval",
+      why: "Approval lag is stalling dispatch and extending modeled vacancy.",
+    };
   }
 
   if (blockers.some((b) => b.toLowerCase().includes("appliance"))) {
-    return { action: "Switch / expedite appliance vendor", impact: 2, type: "appliance" };
+    return {
+      action: "Switch / expedite appliance vendor",
+      impact: 2,
+      type: "appliance",
+      why: "Appliance timing is materially influencing expected completion.",
+    };
   }
 
   if (blockers.some((b) => b.toLowerCase().includes("inspection"))) {
-    return { action: "Pre-clear inspection issues", impact: 1, type: "inspection" };
+    return {
+      action: "Pre-clear inspection issues",
+      impact: 1,
+      type: "inspection",
+      why: "Inspection failure risk is adding avoidable delay variance.",
+    };
   }
 
   if (!property.vendor || property.vendor === "TBD") {
-    return { action: "Assign execution vendor", impact: 2, type: "vendor" };
+    return {
+      action: "Assign execution vendor",
+      impact: 2,
+      type: "vendor",
+      why: "Clear vendor ownership improves execution certainty and dispatch timing.",
+    };
   }
 
   if (property.currentStage === "Dispatch") {
-    return { action: "Re-sequence vendor scheduling", impact: 1, type: "dispatch" };
+    return {
+      action: "Re-sequence vendor scheduling",
+      impact: 1,
+      type: "dispatch",
+      why: "Dispatch-stage coordination can compress the active work window.",
+    };
   }
 
   if (blockers.some((b) => b.toLowerCase().includes("access"))) {
-    return { action: "Resolve access / lockbox issue", impact: 2, type: "access" };
+    return {
+      action: "Resolve access / lockbox issue",
+      impact: 2,
+      type: "access",
+      why: "Access issues create hard stoppages and immediate lost days.",
+    };
   }
 
-  return { action: "Monitor", impact: 0, type: "monitor" };
+  return {
+    action: "Monitor",
+    impact: 0,
+    type: "monitor",
+    why: "No high-leverage intervention is currently required.",
+  };
 }
 
 function buildDecisionForecast(property) {
@@ -183,6 +243,7 @@ function buildDecisionForecast(property) {
   const improvedDelay = Math.max(0, forecast.forecastDaysLate - recommendation.impact);
   const improvedCompletion = addDays(property.projectedCompletion, improvedDelay);
   const daysSaved = forecast.forecastDaysLate - improvedDelay;
+  const revenueProtected = daysSaved * DAILY_RENT_ASSUMPTION;
 
   return {
     ...forecast,
@@ -191,6 +252,7 @@ function buildDecisionForecast(property) {
     improvedDelay,
     improvedCompletion,
     daysSaved,
+    revenueProtected,
   };
 }
 
@@ -381,6 +443,11 @@ export default function ForecastTab({
     [properties]
   );
 
+  const portfolioRevenueImpact = useMemo(
+    () => calculateRevenueImpact(forecastRows),
+    [forecastRows]
+  );
+
   const currentSelected =
     forecastRows.find((row) => row.id === selectedProperty?.id) || forecastRows[0];
 
@@ -410,7 +477,7 @@ export default function ForecastTab({
   const fixAllSummary = useMemo(() => {
     const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
     const totalDaysSaved = actionable.reduce((sum, row) => sum + row.daysSaved, 0);
-    const totalVacancySaved = totalDaysSaved * 70;
+    const totalVacancySaved = actionable.reduce((sum, row) => sum + row.revenueProtected, 0);
 
     return {
       actionableCount: actionable.length,
@@ -487,6 +554,7 @@ export default function ForecastTab({
 
   function handleFixAll() {
     const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
+    const beforeImpact = calculateRevenueImpact(forecastRows);
 
     const patches = actionable.map((row) => {
       const patchMeta = getAppliedPatch(row, row.recommendation);
@@ -515,8 +583,16 @@ export default function ForecastTab({
 
     applyForecastBatch(patches, "Fix All recommendations");
 
+    const afterRows = forecastRows.map((row) => {
+      const found = patches.find((p) => p.id === row.id);
+      return found ? { ...row, ...found.patch, forecastDaysLate: row.improvedDelay } : row;
+    });
+
+    const afterImpact = calculateRevenueImpact(afterRows);
+    const removedRisk = Math.max(0, beforeImpact.atRisk - afterImpact.atRisk);
+
     setFixAllMessage(
-      `Applied ${actionable.length} recommendations • ${fixAllSummary.totalDaysSaved} total forecast days saved • ~$${fixAllSummary.totalVacancySaved} vacancy impact avoided`
+      `Applied ${actionable.length} recommendations • ${fixAllSummary.totalDaysSaved} total forecast days saved • ~$${fixAllSummary.totalVacancySaved} vacancy impact protected • $${removedRisk} revenue risk removed`
     );
   }
 
@@ -524,7 +600,7 @@ export default function ForecastTab({
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-3xl font-semibold text-slate-900">Forecast</div>
+          <div className="text-3xl font-semibold text-slate-900">AI Turn Optimization Engine</div>
           <div className="mt-1 text-sm text-slate-500">
             Project actual rent-ready outcomes, understand delay drivers, and model operator interventions before slippage happens.
           </div>
@@ -561,7 +637,7 @@ export default function ForecastTab({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgDelay}d</div>
@@ -587,12 +663,20 @@ export default function ForecastTab({
         </Card>
 
         <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Revenue at Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            ${portfolioRevenueImpact.atRisk.toLocaleString()}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">Modeled rent exposure</div>
+        </Card>
+
+        <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">If All Executed</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {fixAllSummary.totalDaysSaved}d
+            ${fixAllSummary.totalVacancySaved.toLocaleString()}
           </div>
           <div className="mt-1 text-sm text-slate-500">
-            Modeled days saved across {fixAllSummary.actionableCount} turns
+            Vacancy impact protected
           </div>
         </Card>
       </div>
@@ -634,10 +718,10 @@ export default function ForecastTab({
               </div>
             </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Spread</div>
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <div className="text-xs uppercase tracking-wide text-emerald-700">Revenue Protected</div>
               <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {currentSelected.spread}d
+                ${currentSelected.revenueProtected.toLocaleString()}
               </div>
             </div>
           </div>
@@ -649,7 +733,7 @@ export default function ForecastTab({
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Forecast Queue</div>
             <div className="mt-1 text-sm text-slate-500">
-              Forecast v1.3 keeps recommendation actions undoable and persistent across refresh.
+              Decision engine with quantified impact, improved ECD, and estimated dollar protection.
             </div>
 
             <div className="mt-5 overflow-x-auto">
@@ -665,6 +749,7 @@ export default function ForecastTab({
                     <th className="px-3 py-2 font-medium">Recommendation</th>
                     <th className="px-3 py-2 font-medium">Impact</th>
                     <th className="px-3 py-2 font-medium">Improved ECD</th>
+                    <th className="px-3 py-2 font-medium">$ Protected</th>
                     <th className="px-3 py-2 font-medium">Action</th>
                   </tr>
                 </thead>
@@ -702,7 +787,10 @@ export default function ForecastTab({
                           <td className="px-3 py-3">
                             <Pill tone={meta.tone}>{meta.label}</Pill>
                           </td>
-                          <td className="px-3 py-3 text-slate-700">{row.recommendation.action}</td>
+                          <td className="px-3 py-3">
+                            <div className="text-slate-700">{row.recommendation.action}</div>
+                            <div className="mt-1 text-xs text-slate-500">{row.recommendation.why}</div>
+                          </td>
                           <td className="px-3 py-3">
                             {row.recommendation.impact > 0 ? (
                               <span className="font-medium text-emerald-600">
@@ -716,6 +804,9 @@ export default function ForecastTab({
                             {row.recommendation.impact > 0
                               ? formatDate(row.improvedCompletion)
                               : formatDate(row.projectedCompletion)}
+                          </td>
+                          <td className="px-3 py-3">
+                            ${row.revenueProtected.toLocaleString()}
                           </td>
                           <td className="px-3 py-3">
                             <button
@@ -807,7 +898,10 @@ export default function ForecastTab({
                     <span className="font-medium text-emerald-700">
                       -{currentSelected.recommendation.impact}d
                     </span>{" "}
-                    to modeled delay
+                    to modeled delay • ${currentSelected.revenueProtected.toLocaleString()} revenue protected
+                  </div>
+                  <div className="mt-2 text-sm text-slate-500">
+                    Why: {currentSelected.recommendation.why}
                   </div>
                   <div className="mt-4">
                     <button
@@ -1008,7 +1102,8 @@ export default function ForecastTab({
                     <div className="mb-1 flex items-center justify-between gap-3">
                       <div className="text-sm font-medium text-slate-800">{row.name}</div>
                       <div className="text-xs text-slate-500">
-                        {row.forecastDaysLate}d variance • {row.forecastConfidence}% confidence • recommendation saves {row.daysSaved}d
+                        {row.forecastDaysLate}d variance • {row.forecastConfidence}% confidence • $
+                        {row.revenueProtected} protected if actioned
                       </div>
                     </div>
 
