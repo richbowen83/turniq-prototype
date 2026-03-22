@@ -146,6 +146,54 @@ function getTotalScenarioImpact(drivers = []) {
   return drivers.reduce((sum, d) => sum + (d.days || 0), 0);
 }
 
+function getRecommendedAction(property) {
+  const blockers = getLiveBlockers(property.blockers);
+
+  if (blockers.some((b) => b.toLowerCase().includes("approval"))) {
+    return { action: "Expedite owner approval", impact: 2, type: "approval" };
+  }
+
+  if (blockers.some((b) => b.toLowerCase().includes("appliance"))) {
+    return { action: "Switch / expedite appliance vendor", impact: 2, type: "appliance" };
+  }
+
+  if (blockers.some((b) => b.toLowerCase().includes("inspection"))) {
+    return { action: "Pre-clear inspection issues", impact: 1, type: "inspection" };
+  }
+
+  if (!property.vendor || property.vendor === "TBD") {
+    return { action: "Assign execution vendor", impact: 2, type: "vendor" };
+  }
+
+  if (property.currentStage === "Dispatch") {
+    return { action: "Re-sequence vendor scheduling", impact: 1, type: "dispatch" };
+  }
+
+  if (blockers.some((b) => b.toLowerCase().includes("access"))) {
+    return { action: "Resolve access / lockbox issue", impact: 2, type: "access" };
+  }
+
+  return { action: "Monitor", impact: 0, type: "monitor" };
+}
+
+function buildDecisionForecast(property) {
+  const forecast = buildForecast(property);
+  const range = buildForecastRange(property);
+  const recommendation = getRecommendedAction(property);
+  const improvedDelay = Math.max(0, forecast.forecastDaysLate - recommendation.impact);
+  const improvedCompletion = addDays(property.projectedCompletion, improvedDelay);
+  const daysSaved = forecast.forecastDaysLate - improvedDelay;
+
+  return {
+    ...forecast,
+    ...range,
+    recommendation,
+    improvedDelay,
+    improvedCompletion,
+    daysSaved,
+  };
+}
+
 function buildPortfolioForecast(properties) {
   const rows = properties.map((p) => {
     const forecast = buildForecast(p);
@@ -260,6 +308,74 @@ function varianceTone(days) {
   return "emerald";
 }
 
+function getAppliedPatch(property, recommendation) {
+  const currentBlockers = property.blockers || [];
+  const liveBlockers = getLiveBlockers(currentBlockers);
+
+  let blockers = currentBlockers;
+  let vendor = property.vendor;
+  let currentStage = property.currentStage;
+  let readinessDelta = 4;
+  let riskDelta = -4;
+
+  if (recommendation.type === "approval") {
+    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("approval"));
+    currentStage = property.currentStage === "Owner Approval" ? "Dispatch" : property.currentStage;
+    readinessDelta = 6;
+    riskDelta = -6;
+  } else if (recommendation.type === "appliance") {
+    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("appliance"));
+    readinessDelta = 6;
+    riskDelta = -5;
+  } else if (recommendation.type === "inspection") {
+    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("inspection"));
+    readinessDelta = 5;
+    riskDelta = -4;
+  } else if (recommendation.type === "vendor") {
+    vendor =
+      property.vendor && property.vendor !== "TBD"
+        ? property.vendor
+        : property.market === "Dallas"
+        ? "FloorCo"
+        : property.market === "Atlanta"
+        ? "ABC Paint"
+        : property.market === "Phoenix"
+        ? "Prime Paint"
+        : "Sparkle";
+    readinessDelta = 7;
+    riskDelta = -6;
+  } else if (recommendation.type === "dispatch") {
+    readinessDelta = 4;
+    riskDelta = -3;
+  } else if (recommendation.type === "access") {
+    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("access"));
+    readinessDelta = 6;
+    riskDelta = -5;
+  }
+
+  if (!getLiveBlockers(blockers).length) {
+    blockers = ["No active blockers"];
+  }
+
+  if (liveBlockers.length && getLiveBlockers(blockers).length < liveBlockers.length) {
+    return {
+      blockers,
+      vendor,
+      currentStage,
+      readinessDelta,
+      riskDelta,
+    };
+  }
+
+  return {
+    blockers,
+    vendor,
+    currentStage,
+    readinessDelta,
+    riskDelta,
+  };
+}
+
 export default function ForecastTab({
   selectedProperty,
   properties,
@@ -270,13 +386,13 @@ export default function ForecastTab({
   const [assignVendor, setAssignVendor] = useState(true);
   const [expediteApproval, setExpediteApproval] = useState(true);
   const [compressSchedule, setCompressSchedule] = useState(false);
+  const [fixAllMessage, setFixAllMessage] = useState("");
 
   const forecastRows = useMemo(
     () =>
       properties.map((property) => ({
         ...property,
-        ...buildForecast(property),
-        ...buildForecastRange(property),
+        ...buildDecisionForecast(property),
       })),
     [properties]
   );
@@ -306,6 +422,18 @@ export default function ForecastTab({
     : { label: "—", tone: "blue" };
 
   const maxDelay = Math.max(...forecastRows.map((row) => row.forecastDaysLate), 1);
+
+  const fixAllSummary = useMemo(() => {
+    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
+    const totalDaysSaved = actionable.reduce((sum, row) => sum + row.daysSaved, 0);
+    const totalVacancySaved = totalDaysSaved * 70;
+
+    return {
+      actionableCount: actionable.length,
+      totalDaysSaved,
+      totalVacancySaved,
+    };
+  }, [forecastRows]);
 
   function applyScenario() {
     if (!currentSelected || !scenario) return;
@@ -339,6 +467,60 @@ export default function ForecastTab({
     });
   }
 
+  function applySingleRecommendation(row) {
+    const patchMeta = getAppliedPatch(row, row.recommendation);
+
+    updateProperty(row.id, {
+      projectedCompletion: row.improvedCompletion,
+      risk:
+        row.improvedDelay === 0
+          ? Math.max(0, row.risk - 10)
+          : row.improvedDelay <= 2
+          ? Math.max(0, row.risk - 6)
+          : Math.max(0, row.risk - 3),
+      readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
+      blockers: patchMeta.blockers,
+      vendor: patchMeta.vendor,
+      currentStage: patchMeta.currentStage,
+      turnStatus:
+        row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
+          ? "Ready"
+          : "Monitoring",
+    });
+
+    setSelectedPropertyId(row.id);
+  }
+
+  function handleFixAll() {
+    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
+
+    actionable.forEach((row) => {
+      const patchMeta = getAppliedPatch(row, row.recommendation);
+
+      updateProperty(row.id, {
+        projectedCompletion: row.improvedCompletion,
+        risk:
+          row.improvedDelay === 0
+            ? Math.max(0, row.risk - 10)
+            : row.improvedDelay <= 2
+            ? Math.max(0, row.risk - 6)
+            : Math.max(0, row.risk - 3),
+        readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
+        blockers: patchMeta.blockers,
+        vendor: patchMeta.vendor,
+        currentStage: patchMeta.currentStage,
+        turnStatus:
+          row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
+            ? "Ready"
+            : "Monitoring",
+      });
+    });
+
+    setFixAllMessage(
+      `Applied ${actionable.length} recommendations • ${fixAllSummary.totalDaysSaved} total forecast days saved • ~$${fixAllSummary.totalVacancySaved} vacancy impact avoided`
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -349,10 +531,24 @@ export default function ForecastTab({
           </div>
         </div>
 
-        <Pill tone="blue">{forecastRows.length} turns modeled</Pill>
+        <div className="flex flex-wrap items-center gap-2">
+          <Pill tone="blue">{forecastRows.length} turns modeled</Pill>
+          <button
+            onClick={handleFixAll}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+          >
+            Fix All
+          </button>
+        </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      {fixAllMessage ? (
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+          {fixAllMessage}
+        </div>
+      ) : null}
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgDelay}d</div>
@@ -375,6 +571,16 @@ export default function ForecastTab({
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgConfidence}%</div>
           <div className="mt-1 text-sm text-slate-500">Average timeline confidence</div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">If All Executed</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {fixAllSummary.totalDaysSaved}d
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            Modeled days saved across {fixAllSummary.actionableCount} turns
+          </div>
         </Card>
       </div>
 
@@ -426,11 +632,11 @@ export default function ForecastTab({
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-7">
+        <div className="xl:col-span-8">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Forecast Queue</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI-adjusted forecast versus current ECD across the active turn portfolio.
+              Forecast v1.2 adds recommended action, quantified impact, improved ECD, and one-click application.
             </div>
 
             <div className="mt-5 overflow-x-auto">
@@ -443,7 +649,10 @@ export default function ForecastTab({
                     <th className="px-3 py-2 font-medium">Forecast</th>
                     <th className="px-3 py-2 font-medium">Variance</th>
                     <th className="px-3 py-2 font-medium">Confidence</th>
-                    <th className="px-3 py-2 font-medium">Risk</th>
+                    <th className="px-3 py-2 font-medium">Recommendation</th>
+                    <th className="px-3 py-2 font-medium">Impact</th>
+                    <th className="px-3 py-2 font-medium">Improved ECD</th>
+                    <th className="px-3 py-2 font-medium">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -480,24 +689,33 @@ export default function ForecastTab({
                           <td className="px-3 py-3">
                             <Pill tone={meta.tone}>{meta.label}</Pill>
                           </td>
+                          <td className="px-3 py-3 text-slate-700">{row.recommendation.action}</td>
                           <td className="px-3 py-3">
-                            <div className="w-[120px] rounded-full bg-slate-100">
-                              <div
-                                className={`h-2 rounded-full ${
-                                  row.forecastDaysLate >= 4
-                                    ? "bg-red-500"
-                                    : row.forecastDaysLate >= 2
-                                    ? "bg-amber-500"
-                                    : "bg-emerald-500"
-                                }`}
-                                style={{
-                                  width: `${Math.max(
-                                    8,
-                                    (row.forecastDaysLate / maxDelay) * 100
-                                  )}%`,
-                                }}
-                              />
-                            </div>
+                            {row.recommendation.impact > 0 ? (
+                              <span className="font-medium text-emerald-600">
+                                -{row.recommendation.impact}d
+                              </span>
+                            ) : (
+                              <span className="text-slate-400">-</span>
+                            )}
+                          </td>
+                          <td className="px-3 py-3">
+                            {row.recommendation.impact > 0
+                              ? formatDate(row.improvedCompletion)
+                              : formatDate(row.projectedCompletion)}
+                          </td>
+                          <td className="px-3 py-3">
+                            <button
+                              onClick={() => applySingleRecommendation(row)}
+                              disabled={row.recommendation.impact === 0}
+                              className={`rounded-xl px-3 py-2 text-xs ${
+                                row.recommendation.impact > 0
+                                  ? "bg-slate-900 text-white hover:bg-slate-800"
+                                  : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                              }`}
+                            >
+                              Apply
+                            </button>
                           </td>
                         </tr>
                       );
@@ -508,7 +726,7 @@ export default function ForecastTab({
           </Card>
         </div>
 
-        <div className="xl:col-span-5">
+        <div className="xl:col-span-4">
           <Card className="h-full">
             {currentSelected ? (
               <>
@@ -544,12 +762,12 @@ export default function ForecastTab({
                     </div>
                   </div>
 
-                  <div className="rounded-2xl border border-slate-200 p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Delay Variance
+                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                    <div className="text-xs uppercase tracking-wide text-emerald-700">
+                      Improved ECD
                     </div>
                     <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {formatVariance(currentSelected.forecastDaysLate)}
+                      {formatDate(currentSelected.improvedCompletion)}
                     </div>
                   </div>
 
@@ -566,57 +784,37 @@ export default function ForecastTab({
                   </div>
                 </div>
 
+                <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="text-sm font-semibold text-slate-900">Best Next Action</div>
+                  <div className="mt-2 text-base text-slate-800">
+                    {currentSelected.recommendation.action}
+                  </div>
+                  <div className="mt-2 text-sm text-slate-600">
+                    Expected impact:{" "}
+                    <span className="font-medium text-emerald-700">
+                      -{currentSelected.recommendation.impact}d
+                    </span>{" "}
+                    to modeled delay
+                  </div>
+                  <div className="mt-4">
+                    <button
+                      onClick={() => applySingleRecommendation(currentSelected)}
+                      disabled={currentSelected.recommendation.impact === 0}
+                      className={`rounded-xl px-4 py-2 text-sm ${
+                        currentSelected.recommendation.impact > 0
+                          ? "bg-slate-900 text-white hover:bg-slate-800"
+                          : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
+                      }`}
+                    >
+                      Apply recommendation
+                    </button>
+                  </div>
+                </div>
+
                 <div className="mt-6">
                   <div className="text-sm font-semibold text-slate-900">Forecast Insight</div>
                   <div className="mt-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-slate-700">
                     {currentSelected.forecastInsight}
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Delay Driver Breakdown
-                  </div>
-                  <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-slate-50 text-left text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">Driver</th>
-                          <th className="px-3 py-2 font-medium">Impact</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentSelected.forecastDelayDrivers.map((driver) => (
-                          <tr key={`${driver.label}-${driver.days}`} className="border-t border-slate-100">
-                            <td className="px-3 py-3 text-slate-700">{driver.label}</td>
-                            <td className="px-3 py-3 font-medium text-slate-900">+{driver.days}d</td>
-                          </tr>
-                        ))}
-                        <tr className="border-t border-slate-100 bg-slate-50">
-                          <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
-                          <td className="px-3 py-3 font-semibold text-slate-900">
-                            +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Recommended Actions
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {getRecommendedActions(currentSelected).map((rec) => (
-                      <div
-                        key={rec.label}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
-                      >
-                        {rec.label}
-                        {rec.savings > 0 ? ` • saves ~${rec.savings}d` : ""}
-                      </div>
-                    ))}
                   </div>
                 </div>
               </>
@@ -750,7 +948,7 @@ export default function ForecastTab({
                     <div className="mb-1 flex items-center justify-between gap-3">
                       <div className="text-sm font-medium text-slate-800">{row.name}</div>
                       <div className="text-xs text-slate-500">
-                        {row.forecastDaysLate}d variance • {row.forecastConfidence}% confidence
+                        {row.forecastDaysLate}d variance • {row.forecastConfidence}% confidence • recommendation saves {row.daysSaved}d
                       </div>
                     </div>
 

@@ -1,312 +1,319 @@
 "use client";
 
+import { useMemo } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
-import ProgressBar from "../shared/ProgressBar";
 
-function getToneFromRisk(risk) {
-  if (risk >= 75) return "red";
-  if (risk >= 60) return "amber";
-  return "emerald";
+function toDate(value) {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
-function avg(values) {
-  if (!values.length) return 0;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
+function addDays(dateStr, days) {
+  const d = toDate(dateStr);
+  if (!d) return "";
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
 }
 
-function maxOrOne(values) {
-  const max = Math.max(...values, 0);
-  return max > 0 ? max : 1;
+function formatDate(dateStr) {
+  const d = toDate(dateStr);
+  if (!d) return "—";
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function getActionRollup(actionHistory = []) {
-  const completed = actionHistory.filter((a) => a.kind === "completed");
+function getRiskDelay(risk) {
+  if (risk >= 85) return 4;
+  if (risk >= 75) return 3;
+  if (risk >= 65) return 2;
+  if (risk >= 55) return 1;
+  return 0;
+}
 
-  const totalActions = completed.length;
-  const delayDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
-  const vacancySavings = completed.reduce((sum, a) => sum + (a.vacancySavings || 0), 0);
-  const avgResponseMinutes = totalActions
-    ? Math.round(
-        completed.reduce((sum, a) => sum + (a.responseMinutes || 0), 0) / totalActions
-      )
-    : 0;
+function getStageDelay(stage) {
+  if (stage === "Owner Approval") return 3;
+  if (stage === "Dispatch") return 2;
+  if (stage === "Scope Review") return 2;
+  if (stage === "Move Out Inspection") return 1;
+  return 0;
+}
 
-  const byType = {};
-  completed.forEach((item) => {
-    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
-  });
+function getBlockerSeverity(blocker) {
+  const b = String(blocker || "").toLowerCase();
+  if (
+    b.includes("approval") ||
+    b.includes("access") ||
+    b.includes("hvac") ||
+    b.includes("inspection")
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function getLiveBlockers(blockers = []) {
+  return blockers.filter(
+    (b) => b && b !== "No active blockers" && b !== "No major blockers"
+  );
+}
+
+function buildForecast(property) {
+  if (
+    property.forecastCompletion &&
+    typeof property.forecastDaysLate === "number" &&
+    typeof property.forecastConfidence === "number"
+  ) {
+    return {
+      forecastCompletion: property.forecastCompletion,
+      forecastDaysLate: property.forecastDaysLate,
+      forecastConfidence: property.forecastConfidence,
+    };
+  }
+
+  const blockers = getLiveBlockers(property.blockers);
+  const forecastDaysLate =
+    getRiskDelay(property.risk) +
+    getStageDelay(property.currentStage) +
+    blockers.reduce((sum, blocker) => sum + getBlockerSeverity(blocker), 0);
+
+  const forecastCompletion = addDays(property.projectedCompletion, forecastDaysLate);
+  const forecastConfidence =
+    typeof property.timelineConfidence === "number"
+      ? property.timelineConfidence
+      : Math.max(40, Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5)));
 
   return {
-    totalActions,
-    delayDaysAvoided,
-    vacancySavings,
-    avgResponseMinutes,
-    byType,
+    forecastCompletion,
+    forecastDaysLate,
+    forecastConfidence,
   };
 }
 
+function getConfidenceMeta(score) {
+  if (score >= 85) return { label: "High", tone: "emerald" };
+  if (score >= 70) return { label: "Moderate", tone: "amber" };
+  return { label: "Low", tone: "red" };
+}
+
+function groupByMarket(properties) {
+  return Array.from(new Set(properties.map((p) => p.market))).map((market) => {
+    const rows = properties.filter((p) => p.market === market);
+    const avgRisk = rows.length
+      ? Math.round(rows.reduce((sum, row) => sum + row.risk, 0) / rows.length)
+      : 0;
+    const avgForecastDelay = rows.length
+      ? Number(
+          (
+            rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0) / rows.length
+          ).toFixed(1)
+        )
+      : 0;
+
+    return {
+      market,
+      turns: rows.length,
+      avgRisk,
+      avgForecastDelay,
+      blocked: rows.filter((r) => r.turnStatus === "Blocked").length,
+    };
+  });
+}
+
+function buildFallbackBottleneck(properties) {
+  const stageMap = new Map();
+
+  properties.forEach((property) => {
+    const stage = property.currentStage || "Unknown";
+    if (!stageMap.has(stage)) {
+      stageMap.set(stage, { stage, count: 0, totalDays: 0 });
+    }
+    const current = stageMap.get(stage);
+    current.count += 1;
+    current.totalDays += property.daysInStage || 0;
+  });
+
+  const rows = Array.from(stageMap.values()).map((row) => ({
+    stage: row.stage,
+    count: row.count,
+    avgDaysInStage: row.count ? Number((row.totalDays / row.count).toFixed(1)) : 0,
+  }));
+
+  if (!rows.length) return null;
+
+  return rows.sort((a, b) => b.avgDaysInStage - a.avgDaysInStage)[0];
+}
+
 export default function OverviewTab({
-  properties,
+  properties = [],
   kpis,
   selectedMarket,
   setSelectedMarket,
   setActiveTab,
   actionHistory = [],
+  hasImportedData = false,
+  topStageBottleneck = null,
+  lastImportCount = 0,
 }) {
-  const blockedTurns = properties.filter((p) => p.turnStatus === "Blocked");
-  const highRiskTurns = properties.filter((p) => p.risk >= 75);
-  const readyTurns = properties.filter((p) => p.readiness >= 90);
-  const ownerApprovalTurns = properties.filter((p) => p.currentStage === "Owner Approval");
-  const pastDueTurns = properties.filter(
-    (p) => new Date(p.projectedCompletion) < new Date("2026-05-07")
+  const enrichedProperties = useMemo(
+    () => properties.map((property) => ({ ...property, ...buildForecast(property) })),
+    [properties]
   );
 
-  const avgRisk = Math.round(avg(properties.map((p) => p.risk)));
-  const avgReadiness = Math.round(avg(properties.map((p) => p.readiness)));
-  const avgConfidence = Math.round(avg(properties.map((p) => p.timelineConfidence || 0)));
+  const forecastSummary = useMemo(() => {
+    const total = enrichedProperties.length || 1;
+    const totalDelay = enrichedProperties.reduce(
+      (sum, property) => sum + (property.forecastDaysLate || 0),
+      0
+    );
+    const avgDelay = Number((totalDelay / total).toFixed(1));
+    const delayedTurns = enrichedProperties.filter((p) => p.forecastDaysLate >= 2).length;
+    const highDelayTurns = enrichedProperties.filter((p) => p.forecastDaysLate >= 4).length;
+    const avgConfidence = Math.round(
+      enrichedProperties.reduce((sum, property) => sum + (property.forecastConfidence || 0), 0) /
+        total
+    );
 
-  const actionRollup = getActionRollup(actionHistory);
+    const mostDelayed =
+      [...enrichedProperties].sort(
+        (a, b) => (b.forecastDaysLate || 0) - (a.forecastDaysLate || 0)
+      )[0] || null;
 
-  const marketSummary = Array.from(new Set(properties.map((p) => p.market)))
-    .map((market) => {
-      const rows = properties.filter((p) => p.market === market);
-      return {
-        market,
-        turns: rows.length,
-        blocked: rows.filter((r) => r.turnStatus === "Blocked").length,
-        avgRisk: Math.round(avg(rows.map((r) => r.risk))),
-        avgReadiness: Math.round(avg(rows.map((r) => r.readiness))),
-        highRisk: rows.filter((r) => r.risk >= 75).length,
-        watch: rows.filter((r) => r.risk >= 60 && r.risk < 75).length,
-        healthy: rows.filter((r) => r.risk < 60).length,
-      };
-    })
-    .sort((a, b) => b.avgRisk - a.avgRisk);
-
-  const stageOrder = [
-    "Pre-Leasing",
-    "Pre-Move Out Inspection",
-    "Move Out Inspection",
-    "Scope Review",
-    "Owner Approval",
-    "Dispatch",
-    "Pending RRI",
-    "Rent Ready Open",
-  ];
-
-  const stageChart = stageOrder.map((stage) => {
-    const rows = properties.filter((p) => p.currentStage === stage);
     return {
-      stage,
-      count: rows.length,
-      avgDays: Number(avg(rows.map((r) => r.daysInStage || 0)).toFixed(1)),
-      blocked: rows.filter((r) => r.turnStatus === "Blocked").length,
+      totalDelay,
+      avgDelay,
+      delayedTurns,
+      highDelayTurns,
+      avgConfidence,
+      mostDelayed,
     };
-  });
+  }, [enrichedProperties]);
 
-  const marketChart = marketSummary.map((market) => ({
-    market: market.market,
-    count: market.turns,
-    avgRisk: market.avgRisk,
-  }));
+  const marketSummary = useMemo(
+    () =>
+      groupByMarket(enrichedProperties).sort(
+        (a, b) => b.avgForecastDelay - a.avgForecastDelay || b.avgRisk - a.avgRisk
+      ),
+    [enrichedProperties]
+  );
 
-  const nextActions = [
-    blockedTurns.length
-      ? {
-          title: "Resolve blocked turns",
-          body: `${blockedTurns.length} blocked turn${blockedTurns.length > 1 ? "s are" : " is"} likely to drive ECD slippage.`,
-          tab: "Dashboard",
-          tone: "red",
-        }
-      : null,
-    ownerApprovalTurns.length
-      ? {
-          title: "Work the approval backlog",
-          body: `${ownerApprovalTurns.length} turn${ownerApprovalTurns.length > 1 ? "s are" : " is"} sitting in Owner Approval.`,
-          tab: "Control Center",
-          tone: "amber",
-        }
-      : null,
-    readyTurns.length
-      ? {
-          title: "Fast-track ready turns",
-          body: `${readyTurns.length} turn${readyTurns.length > 1 ? "s are" : " is"} high-readiness and could move quickly.`,
-          tab: "Forecast",
-          tone: "emerald",
-        }
-      : null,
-    actionRollup.totalActions > 0
-      ? {
-          title: "Review action impact",
-          body: `${actionRollup.totalActions} actions have already avoided ${actionRollup.delayDaysAvoided} delay days and saved $${actionRollup.vacancySavings}.`,
-          tab: "Analytics",
-          tone: "blue",
-        }
-      : null,
-    {
-      title: "Review vendor capacity",
-      body: "Use the Vendors tab to rebalance market load and reduce dispatch friction.",
-      tab: "Vendors",
-      tone: "blue",
-    },
-  ].filter(Boolean);
+  const recentActions = useMemo(() => {
+    return actionHistory.slice(0, 5);
+  }, [actionHistory]);
 
-  const tabCards = [
-    {
-      title: "Dashboard",
-      desc: "Daily operating priorities, selected property command panel, blockers, simulation preview, and action center.",
-      cta: "Open Dashboard",
-    },
-    {
-      title: "Control Center",
-      desc: "Manage active turns, stage pipeline, ECD edits, vendor assignments, and queue filters.",
-      cta: "Open Control Center",
-    },
-    {
-      title: "Forecast",
-      desc: "See upcoming turns, predicted scope, vendor recommendations, delay exposure, and bundling opportunities.",
-      cta: "Open Forecast",
-    },
-    {
-      title: "Vendors",
-      desc: "Compare vendor scorecards, market coverage, capacity risk, and sourcing insights.",
-      cta: "Open Vendors",
-    },
-    {
-      title: "Analytics",
-      desc: "Understand bottlenecks, delay drivers, vendor performance, operator impact, and portfolio trends.",
-      cta: "Open Analytics",
-    },
-  ];
+  const bottleneck = topStageBottleneck || buildFallbackBottleneck(enrichedProperties);
 
-  const maxStageCount = maxOrOne(stageChart.map((x) => x.count));
-  const maxStageDays = maxOrOne(stageChart.map((x) => x.avgDays));
-  const maxMarketCount = maxOrOne(marketChart.map((x) => x.count));
+  const portfolioConfidence = getConfidenceMeta(forecastSummary.avgConfidence);
+
+  const sourceLabel = hasImportedData ? "Imported dataset" : "Demo dataset";
+  const sourceTone = hasImportedData ? "blue" : "amber";
 
   return (
     <div className="space-y-6">
-      <div>
-        <div className="text-3xl font-semibold text-slate-900">Overview</div>
-        <div className="mt-1 text-sm text-slate-500">
-          Executive summary of portfolio health, operating pressure, and quantified action impact.
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <div className="text-3xl font-semibold text-slate-900">Overview</div>
+          <div className="mt-1 text-sm text-slate-500">
+            Portfolio narrative layer across operations, forecast pressure, and current data source.
+          </div>
         </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Pill tone={sourceTone}>{sourceLabel}</Pill>
+          <Pill tone={portfolioConfidence.tone}>
+            Confidence: {portfolioConfidence.label}
+          </Pill>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Open Turns</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {kpis?.allOpenTurns ?? properties.length}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            Current portfolio in scope
+          </div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Blocked Turns</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {kpis?.blockedTurns ?? properties.filter((p) => p.turnStatus === "Blocked").length}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            Requiring active intervention
+          </div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.avgDelay}d
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            Average modeled variance to ECD
+          </div>
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {forecastSummary.totalDelay}
+          </div>
+          <div className="mt-1 text-sm text-slate-500">
+            Total modeled slippage across the portfolio
+          </div>
+        </Card>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-7">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Portfolio Summary</div>
-            <div className="mt-1 text-sm text-slate-500">
-              A concise readout of current turn performance, modeled risk, and operational intervention impact.
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Data Source</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Current workspace context and imported data status.
+                </div>
+              </div>
+
+              <Pill tone={sourceTone}>{sourceLabel}</Pill>
             </div>
 
-            <div className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
               <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Open Turns</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {kpis.allOpenTurns}
+                <div className="text-sm font-semibold text-slate-900">Active market filter</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {selectedMarket || "All Markets"}
                 </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Blocked</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {kpis.blockedTurns}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Risk</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">{avgRisk}</div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Readiness</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {avgReadiness}/100
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-blue-700">Actions Completed</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {actionRollup.totalActions}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-emerald-700">Delay Days Avoided</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {actionRollup.delayDaysAvoided}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-amber-700">Vacancy Savings</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  ${actionRollup.vacancySavings}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {actionRollup.avgResponseMinutes}m
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-6 grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">TurnIQ Summary</div>
-                <div className="mt-3 text-sm leading-6 text-slate-700">
-                  TurnIQ is currently managing <strong>{kpis.allOpenTurns} open turns</strong> with{" "}
-                  <strong>{kpis.blockedTurns} blocked</strong>,{" "}
-                  <strong>{kpis.scopeReviewsPending} scope reviews pending</strong>, and{" "}
-                  <strong>{kpis.ecdPastDue} past due</strong>. Portfolio readiness averages{" "}
-                  <strong>{avgReadiness}/100</strong>, modeled confidence sits at{" "}
-                  <strong>{avgConfidence}%</strong>, and completed operator actions have already
-                  avoided <strong>{actionRollup.delayDaysAvoided} delay days</strong>.
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">What is broken?</div>
-                <div className="mt-3 text-sm leading-6 text-slate-700">
-                  The biggest current pressure points are{" "}
-                  <strong>
-                    {blockedTurns.length ? `${blockedTurns.length} blocked turns` : "no blocked turns"}
-                  </strong>
-                  ,{" "}
-                  <strong>
-                    {ownerApprovalTurns.length
-                      ? `${ownerApprovalTurns.length} turn${ownerApprovalTurns.length > 1 ? "s" : ""} in Owner Approval`
-                      : "no approval backlog"}
-                  </strong>
-                  , and{" "}
-                  <strong>
-                    {pastDueTurns.length
-                      ? `${pastDueTurns.length} past-due ECD${pastDueTurns.length > 1 ? "s" : ""}`
-                      : "no past-due ECDs"}
-                  </strong>
-                  . See{" "}
+                <div className="mt-3 flex gap-2">
                   <button
-                    onClick={() => setActiveTab("Dashboard")}
-                    className="font-medium text-blue-700 hover:underline"
+                    onClick={() => setSelectedMarket?.("All Markets")}
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
                   >
-                    Dashboard
-                  </button>{" "}
-                  for triage and{" "}
+                    Reset market
+                  </button>
                   <button
-                    onClick={() => setActiveTab("Control Center")}
-                    className="font-medium text-blue-700 hover:underline"
+                    onClick={() => setActiveTab?.("Import")}
+                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
                   >
-                    Control Center
-                  </button>{" "}
-                  for execution.
+                    Go to Import
+                  </button>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-sm font-semibold text-slate-900">Import impact</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {hasImportedData ? "Live imported data" : "Sample dataset"}
+                </div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {hasImportedData
+                    ? `Imported turns are currently driving portfolio analytics${
+                        lastImportCount > 0 ? ` • last import added ${lastImportCount}` : ""
+                      }.`
+                    : "The workspace is currently using the built-in demo portfolio."}
                 </div>
               </div>
             </div>
@@ -315,316 +322,275 @@ export default function OverviewTab({
 
         <div className="xl:col-span-5">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Immediate Next Actions</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Recommended operating moves based on current portfolio pressure.
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Forecast Summary</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Portfolio-wide forecast pressure and confidence.
+                </div>
+              </div>
+
+              <Pill tone={portfolioConfidence.tone}>
+                {portfolioConfidence.label}
+              </Pill>
             </div>
 
-            <div className="mt-5 space-y-3">
-              {nextActions.map((item, idx) => (
-                <div
-                  key={`${item.title}-${idx}`}
-                  className={`rounded-2xl border p-4 ${
-                    item.tone === "red"
-                      ? "border-red-200 bg-red-50"
-                      : item.tone === "amber"
-                      ? "border-amber-200 bg-amber-50"
-                      : item.tone === "emerald"
-                      ? "border-emerald-200 bg-emerald-50"
-                      : "border-blue-200 bg-blue-50"
-                  }`}
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="font-semibold text-slate-900">{item.title}</div>
-                    <Pill tone={item.tone}>{item.tab}</Pill>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Delayed Turns</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {forecastSummary.delayedTurns}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">High Delay Risk</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {forecastSummary.highDelayTurns}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {forecastSummary.avgConfidence}%
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Most Delayed</div>
+                <div className="mt-2 text-lg font-semibold text-slate-900">
+                  {forecastSummary.mostDelayed?.name || "—"}
+                </div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {forecastSummary.mostDelayed
+                    ? `+${forecastSummary.mostDelayed.forecastDaysLate}d vs ECD`
+                    : "No delay modeled"}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-4 flex gap-2">
+              <button
+                onClick={() => setActiveTab?.("Forecast")}
+                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+              >
+                View Forecast
+              </button>
+              <button
+                onClick={() => setActiveTab?.("Dashboard")}
+                className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+              >
+                Open Dashboard
+              </button>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-5">
+          <Card className="h-full">
+            <div className="text-xl font-semibold text-slate-900">Bottleneck Stage</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Current stage creating the greatest time drag in the portfolio.
+            </div>
+
+            {bottleneck ? (
+              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                <div className="text-sm font-semibold text-amber-900">
+                  {bottleneck.stage}
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {bottleneck.avgDaysInStage} days
+                </div>
+                <div className="mt-1 text-sm text-amber-800">
+                  Average days in stage
+                </div>
+                {"count" in bottleneck ? (
+                  <div className="mt-2 text-sm text-slate-600">
+                    {bottleneck.count} turns currently in this stage
                   </div>
+                ) : null}
 
-                  <div className="mt-2 text-sm text-slate-700">{item.body}</div>
-
+                <div className="mt-4">
                   <button
-                    onClick={() => setActiveTab(item.tab)}
-                    className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                    onClick={() => setActiveTab?.("Control Center")}
+                    className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
                   >
-                    Open {item.tab}
+                    Investigate in Control Center
                   </button>
                 </div>
-              ))}
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                No bottleneck stage available.
+              </div>
+            )}
+          </Card>
+        </div>
+
+        <div className="xl:col-span-7">
+          <Card className="h-full">
+            <div className="text-xl font-semibold text-slate-900">Market Snapshot</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Market-level risk and forecast pressure across the current dataset.
+            </div>
+
+            <div className="mt-5 overflow-x-auto">
+              <table className="min-w-full text-sm">
+                <thead className="bg-slate-50 text-left text-slate-500">
+                  <tr>
+                    <th className="px-3 py-2 font-medium">Market</th>
+                    <th className="px-3 py-2 font-medium">Turns</th>
+                    <th className="px-3 py-2 font-medium">Blocked</th>
+                    <th className="px-3 py-2 font-medium">Avg Risk</th>
+                    <th className="px-3 py-2 font-medium">Avg Forecast Delay</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {marketSummary.map((row) => (
+                    <tr key={row.market} className="border-t border-slate-100">
+                      <td className="px-3 py-3 font-medium text-slate-900">{row.market}</td>
+                      <td className="px-3 py-3">{row.turns}</td>
+                      <td className="px-3 py-3">{row.blocked}</td>
+                      <td className="px-3 py-3">
+                        <Pill
+                          tone={
+                            row.avgRisk >= 75
+                              ? "red"
+                              : row.avgRisk >= 60
+                              ? "amber"
+                              : "emerald"
+                          }
+                        >
+                          {row.avgRisk}
+                        </Pill>
+                      </td>
+                      <td className="px-3 py-3">
+                        <Pill
+                          tone={
+                            row.avgForecastDelay >= 4
+                              ? "red"
+                              : row.avgForecastDelay >= 2
+                              ? "amber"
+                              : "emerald"
+                          }
+                        >
+                          {row.avgForecastDelay}d
+                        </Pill>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </Card>
         </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-6">
+        <div className="xl:col-span-8">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Current Open Turns by Stage</div>
+            <div className="text-xl font-semibold text-slate-900">Recent Workflow Activity</div>
             <div className="mt-1 text-sm text-slate-500">
-              Active turn distribution across the operating workflow.
+              Most recent operator actions and turn changes captured by the workspace.
             </div>
 
-            <div className="mt-5 space-y-4">
-              {stageChart.map((item) => (
-                <div key={item.stage}>
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-800">{item.stage}</div>
-                    <div className="text-xs text-slate-500">
-                      {item.count} turns • {item.blocked} blocked
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-slate-100">
-                    <div
-                      className="h-3 rounded-full bg-blue-500"
-                      style={{ width: `${(item.count / maxStageCount) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Current Open Turns by Market</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Market-level turn concentration and risk pressure.
-            </div>
-
-            <div className="mt-5 space-y-4">
-              {marketChart.map((item) => (
-                <div key={item.market}>
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-800">{item.market}</div>
-                    <div className="flex items-center gap-2">
-                      <div className="text-xs text-slate-500">{item.count} turns</div>
-                      <Pill tone={getToneFromRisk(item.avgRisk)}>{item.avgRisk}</Pill>
-                    </div>
-                  </div>
-                  <div className="h-3 rounded-full bg-slate-100">
-                    <div
-                      className={`h-3 rounded-full ${
-                        item.avgRisk >= 75
-                          ? "bg-red-500"
-                          : item.avgRisk >= 60
-                          ? "bg-amber-400"
-                          : "bg-emerald-500"
-                      }`}
-                      style={{ width: `${(item.count / maxMarketCount) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Avg Days in Current Stage</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Average stage aging by workflow step.
-            </div>
-
-            <div className="mt-5 space-y-4">
-              {stageChart.map((item) => (
-                <div key={`${item.stage}-days`}>
-                  <div className="mb-1 flex items-center justify-between gap-3">
-                    <div className="text-sm font-medium text-slate-800">{item.stage}</div>
-                    <div className="text-xs text-slate-500">{item.avgDays} days</div>
-                  </div>
-                  <div className="h-3 rounded-full bg-slate-100">
-                    <div
-                      className={`h-3 rounded-full ${
-                        item.avgDays === maxStageDays ? "bg-amber-500" : "bg-slate-700"
-                      }`}
-                      style={{ width: `${(item.avgDays / maxStageDays) * 100}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Risk Mix by Market</div>
-            <div className="mt-1 text-sm text-slate-500">
-              How each market splits across high-risk, watch, and healthy turns.
-            </div>
-
-            <div className="mt-5 space-y-4">
-              {marketSummary.map((market) => {
-                const total = market.turns || 1;
-                const highPct = (market.highRisk / total) * 100;
-                const watchPct = (market.watch / total) * 100;
-                const healthyPct = (market.healthy / total) * 100;
-
-                return (
-                  <div key={`${market.market}-riskmix`}>
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-800">{market.market}</div>
-                      <div className="text-xs text-slate-500">
-                        {market.highRisk} high • {market.watch} watch • {market.healthy} healthy
+            {recentActions.length ? (
+              <div className="mt-5 space-y-3">
+                {recentActions.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-slate-200 p-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-900">
+                          {item.title || item.actionType || "Completed action"}
+                        </div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {item.propertyName || "Property"} • {item.market || "Unknown market"}
+                        </div>
+                      </div>
+                      <div className="text-xs text-slate-400">
+                        {item.timestamp
+                          ? new Date(item.timestamp).toLocaleString()
+                          : "Recent"}
                       </div>
                     </div>
 
-                    <div className="flex h-3 overflow-hidden rounded-full bg-slate-100">
-                      <div className="bg-red-500" style={{ width: `${highPct}%` }} />
-                      <div className="bg-amber-400" style={{ width: `${watchPct}%` }} />
-                      <div className="bg-emerald-500" style={{ width: `${healthyPct}%` }} />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {typeof item.daysAvoided === "number" ? (
+                        <Pill tone="emerald">Days avoided: {item.daysAvoided}</Pill>
+                      ) : null}
+                      {typeof item.vacancySavings === "number" ? (
+                        <Pill tone="blue">Vacancy saved: ${item.vacancySavings}</Pill>
+                      ) : null}
+                      {typeof item.responseMinutes === "number" ? (
+                        <Pill tone="amber">Response: {item.responseMinutes}m</Pill>
+                      ) : null}
                     </div>
                   </div>
-                );
-              })}
-            </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                No recent actions logged yet.
+              </div>
+            )}
           </Card>
         </div>
-      </div>
 
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-6">
+        <div className="xl:col-span-4">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Market Summary</div>
+            <div className="text-xl font-semibold text-slate-900">Quick Navigation</div>
             <div className="mt-1 text-sm text-slate-500">
-              Markets ranked by current average turn risk.
+              Jump straight into the operating surfaces that matter.
             </div>
 
             <div className="mt-5 space-y-3">
-              {marketSummary.map((market) => (
-                <button
-                  key={market.market}
-                  onClick={() =>
-                    setSelectedMarket(selectedMarket === market.market ? "All Markets" : market.market)
-                  }
-                  className="block w-full text-left"
-                >
-                  <div
-                    className={`rounded-2xl border p-4 transition hover:border-blue-300 ${
-                      selectedMarket === market.market
-                        ? "border-blue-300 bg-blue-50"
-                        : "border-slate-200 bg-white"
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">{market.market}</div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {market.turns} turns • {market.blocked} blocked
-                        </div>
-                      </div>
-                      <Pill tone={getToneFromRisk(market.avgRisk)}>{market.avgRisk}</Pill>
-                    </div>
-
-                    <div className="mt-4">
-                      <div className="mb-1 text-xs uppercase tracking-wide text-slate-500">
-                        Avg Readiness
-                      </div>
-                      <ProgressBar value={market.avgReadiness} tone="blue" />
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Portfolio Risk Mix</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Distribution of active turns by current risk classification.
-            </div>
-
-            <div className="mt-5">
-              <div className="flex h-5 overflow-hidden rounded-full bg-slate-100">
-                <div
-                  className="bg-red-500"
-                  style={{
-                    width: `${
-                      properties.length ? (highRiskTurns.length / properties.length) * 100 : 0
-                    }%`,
-                  }}
-                />
-                <div
-                  className="bg-amber-400"
-                  style={{
-                    width: `${
-                      properties.length
-                        ? ((properties.filter((p) => p.risk >= 60 && p.risk < 75).length /
-                            properties.length) *
-                            100)
-                        : 0
-                    }%`,
-                  }}
-                />
-                <div
-                  className="bg-emerald-500"
-                  style={{
-                    width: `${
-                      properties.length
-                        ? ((properties.filter((p) => p.risk < 60).length / properties.length) * 100)
-                        : 0
-                    }%`,
-                  }}
-                />
-              </div>
-
-              <div className="mt-5 grid gap-4 sm:grid-cols-3">
-                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                  <div className="text-xs uppercase tracking-wide text-red-700">High Risk</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {highRiskTurns.length}
-                  </div>
+              <button
+                onClick={() => setActiveTab?.("Dashboard")}
+                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
+              >
+                <div className="font-semibold text-slate-900">Dashboard</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Manage priorities, recommendations, and selected property controls.
                 </div>
-
-                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                  <div className="text-xs uppercase tracking-wide text-amber-700">Watch</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {properties.filter((p) => p.risk >= 60 && p.risk < 75).length}
-                  </div>
-                </div>
-
-                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                  <div className="text-xs uppercase tracking-wide text-emerald-700">Healthy</div>
-                  <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    {properties.filter((p) => p.risk < 60).length}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-5 rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Readiness Progress</div>
-                <div className="mt-3">
-                  <ProgressBar value={avgReadiness} tone="blue" />
-                </div>
-                <div className="mt-2 text-sm text-slate-500">
-                  Portfolio readiness currently averages {avgReadiness}/100.
-                </div>
-              </div>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <div>
-        <div className="mb-4 text-xl font-semibold text-slate-900">Where to go next</div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          {tabCards.map((tab) => (
-            <Card key={tab.title} className="h-full">
-              <div className="text-lg font-semibold text-slate-900">{tab.title}</div>
-              <div className="mt-2 text-sm leading-6 text-slate-600">{tab.desc}</div>
+              </button>
 
               <button
-                onClick={() => setActiveTab(tab.title)}
-                className="mt-4 rounded-xl border border-slate-200 px-3 py-2 text-sm text-slate-700 hover:border-blue-300 hover:text-blue-700"
+                onClick={() => setActiveTab?.("Control Center")}
+                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
               >
-                {tab.cta}
+                <div className="font-semibold text-slate-900">Control Center</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Edit stage, ECD, vendor assignments, and execution queue details.
+                </div>
               </button>
-            </Card>
-          ))}
+
+              <button
+                onClick={() => setActiveTab?.("Forecast")}
+                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
+              >
+                <div className="font-semibold text-slate-900">Forecast</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Review modeled completion, confidence, and scenario simulation.
+                </div>
+              </button>
+
+              <button
+                onClick={() => setActiveTab?.("Import")}
+                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
+              >
+                <div className="font-semibold text-slate-900">Import</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Upload, replace, append, or revert the active turn dataset.
+                </div>
+              </button>
+            </div>
+          </Card>
         </div>
       </div>
     </div>

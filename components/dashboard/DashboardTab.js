@@ -68,7 +68,25 @@ function getLiveBlockers(blockers = []) {
   );
 }
 
+function getConfidenceLabel(score) {
+  if (score >= 85) return { label: "High", tone: "emerald" };
+  if (score >= 70) return { label: "Moderate", tone: "amber" };
+  return { label: "Low", tone: "red" };
+}
+
 function buildForecast(property) {
+  if (
+    property.forecastCompletion &&
+    typeof property.forecastDaysLate === "number" &&
+    typeof property.forecastConfidence === "number"
+  ) {
+    return {
+      forecastCompletion: property.forecastCompletion,
+      forecastDaysLate: property.forecastDaysLate,
+      forecastConfidence: property.forecastConfidence,
+    };
+  }
+
   const blockers = getLiveBlockers(property.blockers);
   const forecastDaysLate =
     getRiskDelay(property.risk) +
@@ -76,15 +94,87 @@ function buildForecast(property) {
     blockers.reduce((sum, blocker) => sum + getBlockerSeverity(blocker), 0);
 
   const forecastCompletion = addDays(property.projectedCompletion, forecastDaysLate);
-  const forecastConfidence = Math.max(
-    40,
-    Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5))
-  );
+  const forecastConfidence =
+    typeof property.timelineConfidence === "number"
+      ? property.timelineConfidence
+      : Math.max(40, Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5)));
 
   return {
     forecastCompletion,
     forecastDaysLate,
     forecastConfidence,
+  };
+}
+
+function buildStageBottleneck(properties) {
+  const stageMap = new Map();
+
+  properties.forEach((property) => {
+    const stage = property.currentStage || "Unknown";
+    if (!stageMap.has(stage)) {
+      stageMap.set(stage, { stage, count: 0, totalDays: 0 });
+    }
+    const current = stageMap.get(stage);
+    current.count += 1;
+    current.totalDays += property.daysInStage || 0;
+  });
+
+  const rows = Array.from(stageMap.values()).map((row) => ({
+    stage: row.stage,
+    count: row.count,
+    avgDaysInStage: row.count ? Number((row.totalDays / row.count).toFixed(1)) : 0,
+  }));
+
+  if (!rows.length) return null;
+
+  return rows.sort((a, b) => b.avgDaysInStage - a.avgDaysInStage)[0];
+}
+
+function buildTurnIQCallout({ properties, topStageBottleneck }) {
+  if (!properties?.length) return null;
+
+  const enriched = properties.map((p) => ({ ...p, ...buildForecast(p) }));
+  const highestRisk = [...enriched].sort((a, b) => b.risk - a.risk)[0];
+  const blockedCount = enriched.filter((p) => p.turnStatus === "Blocked").length;
+  const forecastLate = enriched.filter((p) => p.forecastDaysLate >= 2).length;
+  const totalDelay = enriched.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
+
+  if (topStageBottleneck?.stage === "Owner Approval") {
+    return {
+      title: "Approval Bottleneck",
+      message: `Owner Approval is the primary bottleneck, averaging ${topStageBottleneck.avgDaysInStage} days and impacting ${topStageBottleneck.count || 0} turns. Clearing approvals should reduce portfolio slippage fastest.`,
+      tone: "amber",
+    };
+  }
+
+  if (blockedCount > Math.max(1, Math.round(enriched.length * 0.25))) {
+    return {
+      title: "Blocked Turns Risk",
+      message: `${blockedCount} turns are currently blocked. This is the biggest immediate unlock point and is contributing meaningfully to modeled delay.`,
+      tone: "red",
+    };
+  }
+
+  if (forecastLate >= Math.max(2, Math.round(enriched.length * 0.3))) {
+    return {
+      title: "Forecast Pressure Building",
+      message: `${forecastLate} turns are forecasted 2+ days late, creating ${totalDelay} total days of modeled slippage across the portfolio.`,
+      tone: "amber",
+    };
+  }
+
+  if (highestRisk?.risk >= 80) {
+    return {
+      title: "High Risk Turn",
+      message: `${highestRisk.name} is driving portfolio risk (${highestRisk.risk}) and is likely to miss current ECD without intervention.`,
+      tone: "red",
+    };
+  }
+
+  return {
+    title: "Stable Execution",
+    message: "No critical bottlenecks detected. Focus on maintaining execution velocity and clearing small blockers early.",
+    tone: "emerald",
   };
 }
 
@@ -392,17 +482,11 @@ function buildPerformanceMetrics(actionLog) {
       )
     : 0;
 
-  const byType = {};
-  completed.forEach((item) => {
-    byType[item.actionType] = (byType[item.actionType] || 0) + 1;
-  });
-
   return {
     totalCompleted,
     totalDaysAvoided,
     totalVacancySaved,
     avgResponseMinutes,
-    byType,
   };
 }
 
@@ -421,6 +505,7 @@ export default function DashboardTab({
   updateProperty,
   formatMoney,
   getToneFromRisk,
+  topStageBottleneck,
 }) {
   const [draftNote, setDraftNote] = useState("");
   const [horizon, setHorizon] = useState("Today");
@@ -434,9 +519,31 @@ export default function DashboardTab({
     [properties, horizon]
   );
 
+  const derivedBottleneck = useMemo(
+    () => topStageBottleneck || buildStageBottleneck(properties),
+    [topStageBottleneck, properties]
+  );
+
+  const callout = useMemo(
+    () =>
+      buildTurnIQCallout({
+        properties: horizonProperties,
+        topStageBottleneck: derivedBottleneck,
+      }),
+    [horizonProperties, derivedBottleneck]
+  );
+
+  const selectedForecast = selectedProperty ? buildForecast(selectedProperty) : null;
+  const selectedConfidenceMeta = selectedForecast
+    ? getConfidenceLabel(selectedForecast.forecastConfidence)
+    : { label: "—", tone: "blue" };
+
   const actions = useMemo(() => generateActions(horizonProperties), [horizonProperties]);
   const priorities = useMemo(() => buildPriorityItems(horizonProperties), [horizonProperties]);
-  const marketHealth = useMemo(() => buildMarketHealth(properties.map((p) => ({ ...p, ...buildForecast(p) }))), [properties]);
+  const marketHealth = useMemo(
+    () => buildMarketHealth(properties.map((p) => ({ ...p, ...buildForecast(p) }))),
+    [properties]
+  );
   const recommendations = useMemo(
     () => buildRecommendations(horizonProperties),
     [horizonProperties]
@@ -690,8 +797,6 @@ export default function DashboardTab({
     batch.forEach((action) => handleActionResolve(action));
   }
 
-  const selectedForecast = selectedProperty ? buildForecast(selectedProperty) : null;
-
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -718,6 +823,21 @@ export default function DashboardTab({
           ))}
         </div>
       </div>
+
+      {callout ? (
+        <div
+          className={`rounded-2xl border p-4 ${
+            callout.tone === "red"
+              ? "border-red-200 bg-red-50"
+              : callout.tone === "amber"
+              ? "border-amber-200 bg-amber-50"
+              : "border-emerald-200 bg-emerald-50"
+          }`}
+        >
+          <div className="font-semibold text-slate-900">{callout.title}</div>
+          <div className="mt-1 text-sm text-slate-700">{callout.message}</div>
+        </div>
+      ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -1070,22 +1190,25 @@ export default function DashboardTab({
             {selectedForecast ? (
               <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Forecast variance
+                  <div className="text-sm font-semibold text-slate-900">Forecast variance</div>
+                  <div className="flex items-center gap-2">
+                    <Pill
+                      tone={
+                        selectedForecast.forecastDaysLate >= 4
+                          ? "red"
+                          : selectedForecast.forecastDaysLate >= 2
+                          ? "amber"
+                          : "emerald"
+                      }
+                    >
+                      {selectedForecast.forecastDaysLate === 0
+                        ? "On time"
+                        : `+${selectedForecast.forecastDaysLate}d`}
+                    </Pill>
+                    <Pill tone={selectedConfidenceMeta.tone}>
+                      {selectedConfidenceMeta.label}
+                    </Pill>
                   </div>
-                  <Pill
-                    tone={
-                      selectedForecast.forecastDaysLate >= 4
-                        ? "red"
-                        : selectedForecast.forecastDaysLate >= 2
-                        ? "amber"
-                        : "emerald"
-                    }
-                  >
-                    {selectedForecast.forecastDaysLate === 0
-                      ? "On time"
-                      : `+${selectedForecast.forecastDaysLate}d`}
-                  </Pill>
                 </div>
                 <div className="mt-2 text-sm text-slate-600">
                   Confidence {selectedForecast.forecastConfidence}% • Forecasted completion{" "}
@@ -1133,6 +1256,36 @@ export default function DashboardTab({
                 </button>
               </div>
             </div>
+
+            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm font-semibold text-slate-900">Performance Snapshot</div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Completed</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">
+                    {performanceMetrics.totalCompleted}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Days Avoided</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">
+                    {performanceMetrics.totalDaysAvoided}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Saved</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">
+                    ${performanceMetrics.totalVacancySaved}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response</div>
+                  <div className="mt-1 text-xl font-semibold text-slate-900">
+                    {performanceMetrics.avgResponseMinutes}m
+                  </div>
+                </div>
+              </div>
+            </div>
           </Card>
         </div>
       </div>
@@ -1169,7 +1322,7 @@ export default function DashboardTab({
           </Card>
         </div>
 
-        <div className="space-y-6 xl:col-span-5">
+        <div className="xl:col-span-5 space-y-6">
           <Card>
             <div className="font-semibold text-slate-900">Primary Blockers</div>
 
@@ -1215,53 +1368,60 @@ export default function DashboardTab({
                     <th className="px-3 py-2 font-medium">Market</th>
                     <th className="px-3 py-2 font-medium">Risk</th>
                     <th className="px-3 py-2 font-medium">Forecast</th>
+                    <th className="px-3 py-2 font-medium">Confidence</th>
                     <th className="px-3 py-2 font-medium">Readiness</th>
                     <th className="px-3 py-2 font-medium">Completion</th>
                   </tr>
                 </thead>
 
                 <tbody>
-                  {horizonProperties.map((row) => (
-                    <tr
-                      key={row.id}
-                      className={`border-b border-slate-50 hover:bg-slate-50 ${
-                        row.id === selectedProperty.id ? "bg-slate-50" : ""
-                      }`}
-                    >
-                      <td className="px-3 py-3">
-                        <button
-                          onClick={() => setSelectedPropertyId(row.id)}
-                          className="text-blue-700 hover:underline"
-                        >
-                          {row.name}
-                        </button>
-                      </td>
-                      <td className="px-3 py-3">{row.market}</td>
-                      <td className="px-3 py-3">
-                        <Pill tone={getToneFromRisk(row.risk)}>{row.risk}</Pill>
-                      </td>
-                      <td className="px-3 py-3">
-                        <Pill
-                          tone={
-                            row.forecastDaysLate >= 4
-                              ? "red"
-                              : row.forecastDaysLate >= 2
-                              ? "amber"
-                              : "emerald"
-                          }
-                        >
-                          {row.forecastDaysLate === 0 ? "On time" : `+${row.forecastDaysLate}d`}
-                        </Pill>
-                      </td>
-                      <td className="w-[160px] px-3 py-3">
-                        <ProgressBar
-                          value={row.readiness}
-                          tone={getReadinessTone(row.readiness)}
-                        />
-                      </td>
-                      <td className="px-3 py-3">{row.projectedCompletion}</td>
-                    </tr>
-                  ))}
+                  {horizonProperties.map((row) => {
+                    const meta = getConfidenceLabel(row.forecastConfidence);
+                    return (
+                      <tr
+                        key={row.id}
+                        className={`border-b border-slate-50 hover:bg-slate-50 ${
+                          row.id === selectedProperty.id ? "bg-slate-50" : ""
+                        }`}
+                      >
+                        <td className="px-3 py-3">
+                          <button
+                            onClick={() => setSelectedPropertyId(row.id)}
+                            className="text-blue-700 hover:underline"
+                          >
+                            {row.name}
+                          </button>
+                        </td>
+                        <td className="px-3 py-3">{row.market}</td>
+                        <td className="px-3 py-3">
+                          <Pill tone={getToneFromRisk(row.risk)}>{row.risk}</Pill>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Pill
+                            tone={
+                              row.forecastDaysLate >= 4
+                                ? "red"
+                                : row.forecastDaysLate >= 2
+                                ? "amber"
+                                : "emerald"
+                            }
+                          >
+                            {row.forecastDaysLate === 0 ? "On time" : `+${row.forecastDaysLate}d`}
+                          </Pill>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Pill tone={meta.tone}>{meta.label}</Pill>
+                        </td>
+                        <td className="w-[160px] px-3 py-3">
+                          <ProgressBar
+                            value={row.readiness}
+                            tone={getReadinessTone(row.readiness)}
+                          />
+                        </td>
+                        <td className="px-3 py-3">{row.projectedCompletion}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

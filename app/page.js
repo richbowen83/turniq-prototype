@@ -768,13 +768,16 @@ if (!hasHydrated) {
 
         {activeTab === "Overview" && (
           <OverviewTab
-            properties={filteredProperties}
-            kpis={kpis}
-            selectedMarket={selectedMarket}
-            setSelectedMarket={setSelectedMarket}
-            setActiveTab={setActiveTab}
-            actionHistory={actionHistory}
-          />
+    properties={filteredProperties}
+    kpis={kpis}
+    selectedMarket={selectedMarket}
+    setSelectedMarket={setSelectedMarket}
+    setActiveTab={setActiveTab}
+    actionHistory={actionHistory}
+    hasImportedData={importedProperties.length > 0}
+    topStageBottleneck={topStageBottleneck}
+    lastImportCount={lastImportCount}
+/>
         )}
       </div>
     </div>
