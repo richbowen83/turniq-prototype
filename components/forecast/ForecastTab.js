@@ -310,27 +310,21 @@ function varianceTone(days) {
 
 function getAppliedPatch(property, recommendation) {
   const currentBlockers = property.blockers || [];
-  const liveBlockers = getLiveBlockers(currentBlockers);
-
   let blockers = currentBlockers;
   let vendor = property.vendor;
   let currentStage = property.currentStage;
   let readinessDelta = 4;
-  let riskDelta = -4;
 
   if (recommendation.type === "approval") {
     blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("approval"));
     currentStage = property.currentStage === "Owner Approval" ? "Dispatch" : property.currentStage;
     readinessDelta = 6;
-    riskDelta = -6;
   } else if (recommendation.type === "appliance") {
     blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("appliance"));
     readinessDelta = 6;
-    riskDelta = -5;
   } else if (recommendation.type === "inspection") {
     blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("inspection"));
     readinessDelta = 5;
-    riskDelta = -4;
   } else if (recommendation.type === "vendor") {
     vendor =
       property.vendor && property.vendor !== "TBD"
@@ -343,28 +337,15 @@ function getAppliedPatch(property, recommendation) {
         ? "Prime Paint"
         : "Sparkle";
     readinessDelta = 7;
-    riskDelta = -6;
   } else if (recommendation.type === "dispatch") {
     readinessDelta = 4;
-    riskDelta = -3;
   } else if (recommendation.type === "access") {
     blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("access"));
     readinessDelta = 6;
-    riskDelta = -5;
   }
 
   if (!getLiveBlockers(blockers).length) {
     blockers = ["No active blockers"];
-  }
-
-  if (liveBlockers.length && getLiveBlockers(blockers).length < liveBlockers.length) {
-    return {
-      blockers,
-      vendor,
-      currentStage,
-      readinessDelta,
-      riskDelta,
-    };
   }
 
   return {
@@ -372,15 +353,18 @@ function getAppliedPatch(property, recommendation) {
     vendor,
     currentStage,
     readinessDelta,
-    riskDelta,
   };
 }
 
 export default function ForecastTab({
   selectedProperty,
   properties,
-  updateProperty,
   setSelectedPropertyId,
+  applyForecastPatch,
+  applyForecastBatch,
+  undoLastForecastAction,
+  canUndoForecastAction,
+  lastForecastUndoLabel,
 }) {
   const [resolveBlockers, setResolveBlockers] = useState(true);
   const [assignVendor, setAssignVendor] = useState(true);
@@ -438,7 +422,7 @@ export default function ForecastTab({
   function applyScenario() {
     if (!currentSelected || !scenario) return;
 
-    updateProperty(currentSelected.id, {
+    const patch = {
       projectedCompletion: scenario.forecastCompletion,
       risk:
         scenario.forecastDaysLate === 0
@@ -464,40 +448,21 @@ export default function ForecastTab({
             ? "Prime Paint"
             : "Sparkle"
           : currentSelected.vendor,
-    });
+    };
+
+    applyForecastPatch(
+      currentSelected.id,
+      patch,
+      `Scenario applied to ${currentSelected.name}`
+    );
   }
 
   function applySingleRecommendation(row) {
     const patchMeta = getAppliedPatch(row, row.recommendation);
 
-    updateProperty(row.id, {
-      projectedCompletion: row.improvedCompletion,
-      risk:
-        row.improvedDelay === 0
-          ? Math.max(0, row.risk - 10)
-          : row.improvedDelay <= 2
-          ? Math.max(0, row.risk - 6)
-          : Math.max(0, row.risk - 3),
-      readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
-      blockers: patchMeta.blockers,
-      vendor: patchMeta.vendor,
-      currentStage: patchMeta.currentStage,
-      turnStatus:
-        row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
-          ? "Ready"
-          : "Monitoring",
-    });
-
-    setSelectedPropertyId(row.id);
-  }
-
-  function handleFixAll() {
-    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
-
-    actionable.forEach((row) => {
-      const patchMeta = getAppliedPatch(row, row.recommendation);
-
-      updateProperty(row.id, {
+    applyForecastPatch(
+      row.id,
+      {
         projectedCompletion: row.improvedCompletion,
         risk:
           row.improvedDelay === 0
@@ -513,8 +478,42 @@ export default function ForecastTab({
           row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
             ? "Ready"
             : "Monitoring",
-      });
+      },
+      `Applied recommendation to ${row.name}`
+    );
+
+    setSelectedPropertyId(row.id);
+  }
+
+  function handleFixAll() {
+    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
+
+    const patches = actionable.map((row) => {
+      const patchMeta = getAppliedPatch(row, row.recommendation);
+
+      return {
+        id: row.id,
+        patch: {
+          projectedCompletion: row.improvedCompletion,
+          risk:
+            row.improvedDelay === 0
+              ? Math.max(0, row.risk - 10)
+              : row.improvedDelay <= 2
+              ? Math.max(0, row.risk - 6)
+              : Math.max(0, row.risk - 3),
+          readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
+          blockers: patchMeta.blockers,
+          vendor: patchMeta.vendor,
+          currentStage: patchMeta.currentStage,
+          turnStatus:
+            row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
+              ? "Ready"
+              : "Monitoring",
+        },
+      };
     });
+
+    applyForecastBatch(patches, "Fix All recommendations");
 
     setFixAllMessage(
       `Applied ${actionable.length} recommendations • ${fixAllSummary.totalDaysSaved} total forecast days saved • ~$${fixAllSummary.totalVacancySaved} vacancy impact avoided`
@@ -533,6 +532,14 @@ export default function ForecastTab({
 
         <div className="flex flex-wrap items-center gap-2">
           <Pill tone="blue">{forecastRows.length} turns modeled</Pill>
+          {canUndoForecastAction ? (
+            <button
+              onClick={undoLastForecastAction}
+              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100"
+            >
+              Undo last action
+            </button>
+          ) : null}
           <button
             onClick={handleFixAll}
             className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
@@ -541,6 +548,12 @@ export default function ForecastTab({
           </button>
         </div>
       </div>
+
+      {canUndoForecastAction && lastForecastUndoLabel ? (
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+          Undo available: {lastForecastUndoLabel}
+        </div>
+      ) : null}
 
       {fixAllMessage ? (
         <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
@@ -636,7 +649,7 @@ export default function ForecastTab({
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">Forecast Queue</div>
             <div className="mt-1 text-sm text-slate-500">
-              Forecast v1.2 adds recommended action, quantified impact, improved ECD, and one-click application.
+              Forecast v1.3 keeps recommendation actions undoable and persistent across refresh.
             </div>
 
             <div className="mt-5 overflow-x-auto">
@@ -815,6 +828,53 @@ export default function ForecastTab({
                   <div className="text-sm font-semibold text-slate-900">Forecast Insight</div>
                   <div className="mt-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-slate-700">
                     {currentSelected.forecastInsight}
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Delay Driver Breakdown
+                  </div>
+                  <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                    <table className="min-w-full text-sm">
+                      <thead className="bg-slate-50 text-left text-slate-500">
+                        <tr>
+                          <th className="px-3 py-2 font-medium">Driver</th>
+                          <th className="px-3 py-2 font-medium">Impact</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {currentSelected.forecastDelayDrivers.map((driver) => (
+                          <tr key={`${driver.label}-${driver.days}`} className="border-t border-slate-100">
+                            <td className="px-3 py-3 text-slate-700">{driver.label}</td>
+                            <td className="px-3 py-3 font-medium text-slate-900">+{driver.days}d</td>
+                          </tr>
+                        ))}
+                        <tr className="border-t border-slate-100 bg-slate-50">
+                          <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
+                          <td className="px-3 py-3 font-semibold text-slate-900">
+                            +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                <div className="mt-6">
+                  <div className="text-sm font-semibold text-slate-900">
+                    Recommended Actions
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {getRecommendedActions(currentSelected).map((rec) => (
+                      <div
+                        key={rec.label}
+                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
+                      >
+                        {rec.label}
+                        {rec.savings > 0 ? ` • saves ~${rec.savings}d` : ""}
+                      </div>
+                    ))}
                   </div>
                 </div>
               </>

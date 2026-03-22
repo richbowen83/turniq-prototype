@@ -262,6 +262,7 @@ export default function Page() {
   const [activeTab, setActiveTab] = useState("Dashboard");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
   const [selectedPropertyId, setSelectedPropertyId] = useState("p1");
+  const [forecastUndoStack, setForecastUndoStack] = useState([]);
   const [properties, setProperties] = useState(INITIAL_PROPERTIES);
   const [notesMap, setNotesMap] = useState(INITIAL_NOTES);
   const [activityMap, setActivityMap] = useState(INITIAL_ACTIVITY);
@@ -309,6 +310,27 @@ export default function Page() {
     setHasHydrated(true);
   }
 }, []);
+
+useEffect(() => {
+  const savedUndo = localStorage.getItem("turniq_forecast_undo_stack");
+  if (savedUndo) {
+    try {
+      const parsed = JSON.parse(savedUndo);
+      if (Array.isArray(parsed)) {
+        setForecastUndoStack(parsed);
+      }
+    } catch (error) {
+      console.error("Failed to load forecast undo stack", error);
+    }
+  }
+}, []);
+
+useEffect(() => {
+  localStorage.setItem(
+    "turniq_forecast_undo_stack",
+    JSON.stringify(forecastUndoStack)
+  );
+}, [forecastUndoStack]);
 
   const activeProperties = useMemo(
     () => (importedProperties.length ? importedProperties : properties),
@@ -461,17 +483,160 @@ export default function Page() {
   }, [filteredProperties, queueFilter, selectedStageFilter, sortBy]);
 
   function updateProperty(id, patch) {
-    if (importedProperties.length) {
-      setImportedProperties((prev) =>
-        prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
-      );
-      return;
-    }
-
-    setProperties((prev) =>
+  if (importedProperties.length) {
+    setImportedProperties((prev) =>
       prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
     );
+    return;
   }
+
+  setProperties((prev) =>
+    prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+  );
+}
+
+function getActiveDatasetInfo() {
+  return {
+    datasetType: importedProperties.length ? "imported" : "demo",
+    rows: importedProperties.length ? importedProperties : properties,
+  };
+}
+
+function applyRowsToDataset(datasetType, nextRows) {
+  if (datasetType === "imported") {
+    setImportedProperties(nextRows);
+  } else {
+    setProperties(nextRows);
+  }
+}
+
+function applyForecastPatch(id, patch, label = "Forecast action") {
+  const { datasetType, rows } = getActiveDatasetInfo();
+
+  const originalRow = rows.find((row) => row.id === id);
+  if (!originalRow) return;
+
+  const nextRows = rows.map((row) =>
+    row.id === id ? { ...row, ...patch } : row
+  );
+
+  applyRowsToDataset(datasetType, nextRows);
+
+  setForecastUndoStack((prev) => [
+    {
+      id: `forecast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: "single",
+      label,
+      datasetType,
+      timestamp: new Date().toISOString(),
+      rows: [{ id, before: originalRow }],
+    },
+    ...prev.slice(0, 19),
+  ]);
+}
+
+function applyForecastBatch(patches, label = "Forecast batch action") {
+  if (!patches?.length) return;
+
+  const { datasetType, rows } = getActiveDatasetInfo();
+  const patchMap = new Map(patches.map((item) => [item.id, item.patch]));
+
+  const beforeRows = rows
+    .filter((row) => patchMap.has(row.id))
+    .map((row) => ({
+      id: row.id,
+      before: row,
+    }));
+
+  if (!beforeRows.length) return;
+
+  const nextRows = rows.map((row) =>
+    patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
+  );
+
+  applyRowsToDataset(datasetType, nextRows);
+
+  setForecastUndoStack((prev) => [
+    {
+      id: `forecast-batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: "batch",
+      label,
+      datasetType,
+      timestamp: new Date().toISOString(),
+      rows: beforeRows,
+    },
+    ...prev.slice(0, 19),
+  ]);
+}
+
+function undoLastForecastAction() {
+  if (!forecastUndoStack.length) return;
+
+  const [latest, ...rest] = forecastUndoStack;
+  const targetRows = latest.datasetType === "imported" ? importedProperties : properties;
+  const restoreMap = new Map(latest.rows.map((item) => [item.id, item.before]));
+
+  const restoredRows = targetRows.map((row) =>
+    restoreMap.has(row.id) ? restoreMap.get(row.id) : row
+  );
+
+  applyRowsToDataset(latest.datasetType, restoredRows);
+  setForecastUndoStack(rest);
+}
+function applyForecastBatch(patches, label = "Forecast batch action") {
+  if (!patches?.length) return;
+
+  const datasetType = importedProperties.length ? "imported" : "demo";
+  const rows = importedProperties.length ? importedProperties : properties;
+
+  const patchMap = new Map(patches.map((item) => [item.id, item.patch]));
+
+  const beforeRows = rows
+    .filter((row) => patchMap.has(row.id))
+    .map((row) => ({
+      id: row.id,
+      before: row,
+    }));
+
+  if (!beforeRows.length) return;
+
+  const nextRows = rows.map((row) =>
+    patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
+  );
+
+  if (datasetType === "imported") {
+    setImportedProperties(nextRows);
+  } else {
+    setProperties(nextRows);
+  }
+
+  setForecastUndoStack((prev) => [
+    {
+      id: `forecast-batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      kind: "batch",
+      label,
+      datasetType,
+      timestamp: new Date().toISOString(),
+      rows: beforeRows,
+    },
+    ...prev.slice(0, 19),
+  ]);
+}
+
+function undoLastForecastAction() {
+  if (!forecastUndoStack.length) return;
+
+  const [latest, ...rest] = forecastUndoStack;
+  const targetRows = latest.datasetType === "imported" ? importedProperties : properties;
+  const restoreMap = new Map(latest.rows.map((item) => [item.id, item.before]));
+
+  const restoredRows = targetRows.map((row) =>
+    restoreMap.has(row.id) ? restoreMap.get(row.id) : row
+  );
+
+  applyRowsToDataset(latest.datasetType, restoredRows);
+  setForecastUndoStack(rest);
+}
 
   function addNote(propertyName, note) {
     if (!note.trim()) return;
@@ -497,7 +662,9 @@ export default function Page() {
     setLastUploadedCount(0);
     setLastSkippedCount(0);
     setLastImportTimestamp(null);
+    setForecastUndoStack([]);
     localStorage.removeItem("turniq_imported_properties");
+    localStorage.removeItem("turniq_forecast_undo_stack");
     setSelectedMarket("All Markets");
     setSelectedPropertyId("p1");
     setActiveTab("Import");
@@ -701,6 +868,7 @@ if (!hasHydrated) {
             updateProperty={updateProperty}
             formatMoney={formatMoney}
             getToneFromRisk={getToneFromRisk}
+            topStageBottleneck={topStageBottleneck}
           />
         )}
 
@@ -730,13 +898,17 @@ if (!hasHydrated) {
         )}
 
         {activeTab === "Forecast" && (
-          <ForecastTab
-            selectedProperty={selectedProperty}
-            properties={filteredProperties}
-            updateProperty={updateProperty}
-            setSelectedPropertyId={setSelectedPropertyId}
-          />
-        )}
+  <ForecastTab
+    selectedProperty={selectedProperty}
+    properties={filteredProperties}
+    setSelectedPropertyId={setSelectedPropertyId}
+    applyForecastPatch={applyForecastPatch}
+    applyForecastBatch={applyForecastBatch}
+    undoLastForecastAction={undoLastForecastAction}
+    canUndoForecastAction={forecastUndoStack.length > 0}
+    lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+  />
+)}
 
         {activeTab === "Analytics" && (
           <AnalyticsTab properties={filteredProperties} actionHistory={actionHistory} />
