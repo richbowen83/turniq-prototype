@@ -1,6 +1,9 @@
 export const metadata = {
-  title: "TurnIQ Prototype",
-  description: "AI-powered turn operations prototype",
+  title: "TurnIQ",
+  description: "AI-powered turn operations",
+  icons: {
+    icon: "/icon.ico",
+  },
 };
 
 import "./globals.css";
