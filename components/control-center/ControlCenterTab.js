@@ -106,7 +106,7 @@ export default function ControlCenterTab({
   return (
     <div className="space-y-6">
       <div>
-        <div className="text-2xl font-semibold text-slate-900">Control Center</div>
+        <div className="text-3xl font-semibold text-slate-900">Control Center</div>
         <div className="mt-1 text-sm text-slate-500">
           The Control Center is where operators manage active turns. It coordinates vendors, tracks job progress, monitors readiness blockers, and ensures each home moves efficiently from move-out to rent ready.
         </div>

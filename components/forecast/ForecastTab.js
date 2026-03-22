@@ -5,6 +5,7 @@ import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
 const DAILY_RENT_ASSUMPTION = 120;
+const SCENARIOS = ["Base Case", "Optimized Case", "Worst Case"];
 
 function toDate(value) {
   const d = new Date(value);
@@ -65,16 +66,23 @@ function getConfidenceLabel(score) {
   return { label: "Low", tone: "red" };
 }
 
+function formatVariance(days) {
+  if (days === 0) return "On time";
+  return `+${days}d`;
+}
+
+function varianceTone(days) {
+  if (days >= 4) return "red";
+  if (days >= 2) return "amber";
+  return "emerald";
+}
+
 function calculateRevenueImpact(properties) {
   let atRisk = 0;
   let recoverable = 0;
 
   properties.forEach((p) => {
-    const delayDays =
-      typeof p.forecastDaysLate === "number"
-        ? p.forecastDaysLate
-        : 0;
-
+    const delayDays = typeof p.forecastDaysLate === "number" ? p.forecastDaysLate : 0;
     const riskWeight = (p.risk || 0) / 100;
     const exposure = delayDays * DAILY_RENT_ASSUMPTION;
 
@@ -98,7 +106,10 @@ function buildForecast(property) {
   const forecastConfidence =
     typeof property.timelineConfidence === "number"
       ? property.timelineConfidence
-      : Math.max(40, Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5)));
+      : Math.max(
+          40,
+          Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5))
+        );
 
   const forecastRiskBand =
     forecastDaysLate >= 4
@@ -116,13 +127,6 @@ function buildForecast(property) {
     })),
   ];
 
-  const forecastInsight =
-    forecastDaysLate >= 4
-      ? "Material slippage risk is modeled. Removing the largest blockers should meaningfully pull forecast completion closer to ECD."
-      : forecastDaysLate >= 2
-      ? "Moderate delay risk is modeled. Targeted intervention on approvals, blockers, or vendor coordination should improve delivery confidence."
-      : "Current forecast remains close to the stated ECD.";
-
   return {
     forecastCompletion,
     forecastDaysLate,
@@ -132,7 +136,6 @@ function buildForecast(property) {
       forecastDelayDrivers.length > 0
         ? forecastDelayDrivers
         : [{ label: "Standard execution variability", days: 0 }],
-    forecastInsight,
   };
 }
 
@@ -165,10 +168,6 @@ function buildForecastRange(property) {
     worstCaseDate: worst.toISOString().slice(0, 10),
     spread: uncertaintyDays + 1,
   };
-}
-
-function getTotalScenarioImpact(drivers = []) {
-  return drivers.reduce((sum, d) => sum + (d.days || 0), 0);
 }
 
 function getRecommendedAction(property) {
@@ -277,105 +276,65 @@ function buildPortfolioForecast(properties) {
   };
 }
 
-function getRecommendedActions(property) {
-  const blockers = getLiveBlockers(property.blockers);
-  const recs = [];
+function buildScenarioForecast(row, scenarioName) {
+  const baseDelay = row.forecastDaysLate || 0;
 
-  if (blockers.some((b) => String(b).toLowerCase().includes("approval"))) {
-    recs.push({ label: "Expedite approval", savings: 2 });
-  }
-  if (!property.vendor || property.vendor === "TBD") {
-    recs.push({ label: "Assign vendor immediately", savings: 2 });
-  }
-  if (
-    blockers.some((b) =>
-      ["access", "inspection", "hvac"].some((term) => String(b).toLowerCase().includes(term))
-    )
-  ) {
-    recs.push({ label: "Resolve highest-severity blocker", savings: 2 });
-  }
-  if (property.risk >= 75) {
-    recs.push({ label: "Apply operator intervention", savings: 1 });
+  if (scenarioName === "Optimized Case") {
+    const nextDelay = Math.max(0, baseDelay - Math.max(1, row.recommendation?.impact || 0) - 1);
+    return {
+      name: scenarioName,
+      forecastDaysLate: nextDelay,
+      forecastCompletion: addDays(row.projectedCompletion, nextDelay),
+      confidence: Math.min(95, (row.forecastConfidence || 75) + 8),
+      revenueImpact: nextDelay * DAILY_RENT_ASSUMPTION,
+      riskTone: varianceTone(nextDelay),
+      daysDeltaVsBase: baseDelay - nextDelay,
+    };
   }
 
-  if (!recs.length) recs.push({ label: "Maintain current plan", savings: 0 });
-
-  return recs.slice(0, 3);
-}
-
-function simulateScenario(property, options) {
-  const current = buildForecast(property);
-  let daysSaved = 0;
-  const actions = [];
-
-  if (options.resolveBlockers) {
-    const blockerSavings = Math.min(
-      3,
-      getLiveBlockers(property.blockers).reduce(
-        (sum, blocker) => sum + getBlockerSeverity(blocker),
-        0
-      )
-    );
-    if (blockerSavings > 0) {
-      daysSaved += blockerSavings;
-      actions.push(`Resolve blockers (-${blockerSavings}d)`);
-    }
+  if (scenarioName === "Worst Case") {
+    const blockerPenalty = Math.max(1, getLiveBlockers(row.blockers).length);
+    const nextDelay = baseDelay + blockerPenalty + 2;
+    return {
+      name: scenarioName,
+      forecastDaysLate: nextDelay,
+      forecastCompletion: addDays(row.projectedCompletion, nextDelay),
+      confidence: Math.max(45, (row.forecastConfidence || 75) - 12),
+      revenueImpact: nextDelay * DAILY_RENT_ASSUMPTION,
+      riskTone: varianceTone(nextDelay),
+      daysDeltaVsBase: baseDelay - nextDelay,
+    };
   }
-
-  if (options.assignVendor) {
-    if (!property.vendor || property.vendor === "TBD") {
-      daysSaved += 2;
-      actions.push("Assign vendor (-2d)");
-    } else {
-      daysSaved += 1;
-      actions.push("Tighten vendor coordination (-1d)");
-    }
-  }
-
-  if (options.expediteApproval && property.currentStage === "Owner Approval") {
-    daysSaved += 2;
-    actions.push("Expedite owner approval (-2d)");
-  }
-
-  if (options.compressSchedule) {
-    daysSaved += 1;
-    actions.push("Compress schedule (-1d)");
-  }
-
-  const nextDelay = Math.max(0, current.forecastDaysLate - daysSaved);
 
   return {
-    actions,
-    daysSaved,
-    forecastDaysLate: nextDelay,
-    forecastCompletion: addDays(property.projectedCompletion, nextDelay),
-    confidence: Math.min(95, current.forecastConfidence + Math.min(12, daysSaved * 3)),
-    riskBand:
-      nextDelay >= 4
-        ? { label: "High Delay Risk", tone: "red" }
-        : nextDelay >= 2
-        ? { label: "Watch", tone: "amber" }
-        : { label: "On Track", tone: "emerald" },
+    name: "Base Case",
+    forecastDaysLate: baseDelay,
+    forecastCompletion: row.forecastCompletion,
+    confidence: row.forecastConfidence,
+    revenueImpact: baseDelay * DAILY_RENT_ASSUMPTION,
+    riskTone: varianceTone(baseDelay),
+    daysDeltaVsBase: 0,
   };
 }
 
-function formatVariance(days) {
-  if (days === 0) return "On time";
-  return `+${days}d`;
-}
-
-function varianceTone(days) {
-  if (days >= 4) return "red";
-  if (days >= 2) return "amber";
-  return "emerald";
-}
-
-function getAppliedPatch(property, recommendation) {
+function getAppliedPatch(property, recommendation, scenarioName) {
   const currentBlockers = property.blockers || [];
   let blockers = currentBlockers;
   let vendor = property.vendor;
   let currentStage = property.currentStage;
   let readinessDelta = 4;
+
+  if (scenarioName === "Worst Case") {
+    return {
+      blockers: getLiveBlockers(currentBlockers).length
+        ? currentBlockers
+        : ["Access issue", "Inspection fail likelihood"],
+      vendor,
+      currentStage,
+      readinessDelta: -6,
+      scenario: "worst",
+    };
+  }
 
   if (recommendation.type === "approval") {
     blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("approval"));
@@ -415,7 +374,12 @@ function getAppliedPatch(property, recommendation) {
     vendor,
     currentStage,
     readinessDelta,
+    scenario: "optimized",
   };
+}
+
+function getTotalScenarioImpact(drivers = []) {
+  return drivers.reduce((sum, d) => sum + (d.days || 0), 0);
 }
 
 export default function ForecastTab({
@@ -428,10 +392,7 @@ export default function ForecastTab({
   canUndoForecastAction,
   lastForecastUndoLabel,
 }) {
-  const [resolveBlockers, setResolveBlockers] = useState(true);
-  const [assignVendor, setAssignVendor] = useState(true);
-  const [expediteApproval, setExpediteApproval] = useState(true);
-  const [compressSchedule, setCompressSchedule] = useState(false);
+  const [activeScenario, setActiveScenario] = useState("Base Case");
   const [fixAllMessage, setFixAllMessage] = useState("");
 
   const forecastRows = useMemo(
@@ -443,156 +404,138 @@ export default function ForecastTab({
     [properties]
   );
 
+  const currentSelected =
+    forecastRows.find((row) => row.id === selectedProperty?.id) || forecastRows[0];
+
+  const scenarioComparisons = useMemo(() => {
+    if (!currentSelected) return [];
+    return SCENARIOS.map((name) => buildScenarioForecast(currentSelected, name));
+  }, [currentSelected]);
+
+  const activeScenarioResult = scenarioComparisons.find((s) => s.name === activeScenario);
+
+  const summary = useMemo(() => buildPortfolioForecast(properties), [properties]);
   const portfolioRevenueImpact = useMemo(
     () => calculateRevenueImpact(forecastRows),
     [forecastRows]
   );
 
-  const currentSelected =
-    forecastRows.find((row) => row.id === selectedProperty?.id) || forecastRows[0];
-
-  const scenario = useMemo(() => {
-    if (!currentSelected) return null;
-    return simulateScenario(currentSelected, {
-      resolveBlockers,
-      assignVendor,
-      expediteApproval,
-      compressSchedule,
-    });
-  }, [
-    currentSelected,
-    resolveBlockers,
-    assignVendor,
-    expediteApproval,
-    compressSchedule,
-  ]);
-
-  const summary = useMemo(() => buildPortfolioForecast(properties), [properties]);
   const confidenceMeta = currentSelected
     ? getConfidenceLabel(currentSelected.forecastConfidence)
     : { label: "—", tone: "blue" };
 
   const maxDelay = Math.max(...forecastRows.map((row) => row.forecastDaysLate), 1);
 
-  const fixAllSummary = useMemo(() => {
-    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
-    const totalDaysSaved = actionable.reduce((sum, row) => sum + row.daysSaved, 0);
-    const totalVacancySaved = actionable.reduce((sum, row) => sum + row.revenueProtected, 0);
+  const optimizedPortfolioSummary = useMemo(() => {
+    const optimizedRows = forecastRows.map((row) =>
+      buildScenarioForecast(row, "Optimized Case")
+    );
+
+    const totalDelay = optimizedRows.reduce((sum, row) => sum + row.forecastDaysLate, 0);
+    const revenueProtected = forecastRows.reduce(
+      (sum, row) => sum + (row.revenueProtected || 0),
+      0
+    );
 
     return {
-      actionableCount: actionable.length,
-      totalDaysSaved,
-      totalVacancySaved,
+      totalDelay,
+      revenueProtected,
+      daysSaved:
+        summary.totalDelay - totalDelay,
     };
-  }, [forecastRows]);
+  }, [forecastRows, summary.totalDelay]);
 
-  function applyScenario() {
-    if (!currentSelected || !scenario) return;
+  function commitScenario(row, scenarioName) {
+    const scenario = buildScenarioForecast(row, scenarioName);
+    const patchMeta = getAppliedPatch(row, row.recommendation, scenarioName);
 
-    const patch = {
-      projectedCompletion: scenario.forecastCompletion,
-      risk:
-        scenario.forecastDaysLate === 0
-          ? Math.max(0, currentSelected.risk - 10)
-          : scenario.forecastDaysLate <= 2
-          ? Math.max(0, currentSelected.risk - 6)
-          : Math.max(0, currentSelected.risk - 3),
-      readiness: Math.min(
-        100,
-        currentSelected.readiness + Math.max(3, scenario.daysSaved * 4)
-      ),
-      blockers:
-        resolveBlockers && getLiveBlockers(currentSelected.blockers).length
-          ? ["No active blockers"]
-          : currentSelected.blockers,
-      vendor:
-        assignVendor && (!currentSelected.vendor || currentSelected.vendor === "TBD")
-          ? currentSelected.market === "Dallas"
-            ? "FloorCo"
-            : currentSelected.market === "Atlanta"
-            ? "ABC Paint"
-            : currentSelected.market === "Phoenix"
-            ? "Prime Paint"
-            : "Sparkle"
-          : currentSelected.vendor,
-    };
-
-    applyForecastPatch(
-      currentSelected.id,
-      patch,
-      `Scenario applied to ${currentSelected.name}`
-    );
-  }
-
-  function applySingleRecommendation(row) {
-    const patchMeta = getAppliedPatch(row, row.recommendation);
+    const patch =
+      scenarioName === "Worst Case"
+        ? {
+            projectedCompletion: scenario.forecastCompletion,
+            risk: Math.min(100, row.risk + 8),
+            readiness: Math.max(0, row.readiness + patchMeta.readinessDelta),
+            blockers: patchMeta.blockers,
+            vendor: patchMeta.vendor,
+            currentStage: patchMeta.currentStage,
+            turnStatus: "Blocked",
+          }
+        : {
+            projectedCompletion: scenario.forecastCompletion,
+            risk:
+              scenario.forecastDaysLate === 0
+                ? Math.max(0, row.risk - 10)
+                : scenario.forecastDaysLate <= 2
+                ? Math.max(0, row.risk - 6)
+                : Math.max(0, row.risk - 3),
+            readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
+            blockers: patchMeta.blockers,
+            vendor: patchMeta.vendor,
+            currentStage: patchMeta.currentStage,
+            turnStatus:
+              scenario.forecastDaysLate === 0 && patchMeta.blockers?.[0] === "No active blockers"
+                ? "Ready"
+                : "Monitoring",
+          };
 
     applyForecastPatch(
       row.id,
-      {
-        projectedCompletion: row.improvedCompletion,
-        risk:
-          row.improvedDelay === 0
-            ? Math.max(0, row.risk - 10)
-            : row.improvedDelay <= 2
-            ? Math.max(0, row.risk - 6)
-            : Math.max(0, row.risk - 3),
-        readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
-        blockers: patchMeta.blockers,
-        vendor: patchMeta.vendor,
-        currentStage: patchMeta.currentStage,
-        turnStatus:
-          row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
-            ? "Ready"
-            : "Monitoring",
-      },
-      `Applied recommendation to ${row.name}`
+      patch,
+      `${scenarioName} committed for ${row.name}`
     );
 
     setSelectedPropertyId(row.id);
   }
 
-  function handleFixAll() {
-    const actionable = forecastRows.filter((row) => row.recommendation.impact > 0);
+  function handleFixAllOptimized() {
     const beforeImpact = calculateRevenueImpact(forecastRows);
 
-    const patches = actionable.map((row) => {
-      const patchMeta = getAppliedPatch(row, row.recommendation);
+    const patches = forecastRows
+      .filter((row) => row.recommendation.impact > 0)
+      .map((row) => {
+        const scenario = buildScenarioForecast(row, "Optimized Case");
+        const patchMeta = getAppliedPatch(row, row.recommendation, "Optimized Case");
 
-      return {
-        id: row.id,
-        patch: {
-          projectedCompletion: row.improvedCompletion,
-          risk:
-            row.improvedDelay === 0
-              ? Math.max(0, row.risk - 10)
-              : row.improvedDelay <= 2
-              ? Math.max(0, row.risk - 6)
-              : Math.max(0, row.risk - 3),
-          readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
-          blockers: patchMeta.blockers,
-          vendor: patchMeta.vendor,
-          currentStage: patchMeta.currentStage,
-          turnStatus:
-            row.improvedDelay === 0 && patchMeta.blockers?.[0] === "No active blockers"
-              ? "Ready"
-              : "Monitoring",
-        },
-      };
-    });
+        return {
+          id: row.id,
+          patch: {
+            projectedCompletion: scenario.forecastCompletion,
+            risk:
+              scenario.forecastDaysLate === 0
+                ? Math.max(0, row.risk - 10)
+                : scenario.forecastDaysLate <= 2
+                ? Math.max(0, row.risk - 6)
+                : Math.max(0, row.risk - 3),
+            readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
+            blockers: patchMeta.blockers,
+            vendor: patchMeta.vendor,
+            currentStage: patchMeta.currentStage,
+            turnStatus:
+              scenario.forecastDaysLate === 0 && patchMeta.blockers?.[0] === "No active blockers"
+                ? "Ready"
+                : "Monitoring",
+          },
+        };
+      });
 
-    applyForecastBatch(patches, "Fix All recommendations");
+    applyForecastBatch(patches, "Fix All optimized scenario");
 
     const afterRows = forecastRows.map((row) => {
       const found = patches.find((p) => p.id === row.id);
-      return found ? { ...row, ...found.patch, forecastDaysLate: row.improvedDelay } : row;
+      if (!found) return row;
+      const optimized = buildScenarioForecast(row, "Optimized Case");
+      return {
+        ...row,
+        ...found.patch,
+        forecastDaysLate: optimized.forecastDaysLate,
+      };
     });
 
     const afterImpact = calculateRevenueImpact(afterRows);
     const removedRisk = Math.max(0, beforeImpact.atRisk - afterImpact.atRisk);
 
     setFixAllMessage(
-      `Applied ${actionable.length} recommendations • ${fixAllSummary.totalDaysSaved} total forecast days saved • ~$${fixAllSummary.totalVacancySaved} vacancy impact protected • $${removedRisk} revenue risk removed`
+      `Optimized plan committed • ${optimizedPortfolioSummary.daysSaved} total delay days saved • ~$${optimizedPortfolioSummary.revenueProtected.toLocaleString()} vacancy impact protected • $${removedRisk.toLocaleString()} revenue risk removed`
     );
   }
 
@@ -600,9 +543,9 @@ export default function ForecastTab({
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
-          <div className="text-3xl font-semibold text-slate-900">AI Turn Optimization Engine</div>
+          <div className="text-3xl font-semibold text-slate-900">Forecast</div>
           <div className="mt-1 text-sm text-slate-500">
-            Project actual rent-ready outcomes, understand delay drivers, and model operator interventions before slippage happens.
+            Compare base, optimized, and downside scenarios before committing portfolio actions.
           </div>
         </div>
 
@@ -617,10 +560,10 @@ export default function ForecastTab({
             </button>
           ) : null}
           <button
-            onClick={handleFixAll}
+            onClick={handleFixAllOptimized}
             className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
           >
-            Fix All
+            Commit optimized plan
           </button>
         </div>
       </div>
@@ -639,21 +582,25 @@ export default function ForecastTab({
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgDelay}d</div>
-          <div className="mt-1 text-sm text-slate-500">Average modeled variance to ECD</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Base Delay</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.totalDelay}d</div>
+          <div className="mt-1 text-sm text-slate-500">Current modeled portfolio slippage</div>
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.totalDelay}</div>
-          <div className="mt-1 text-sm text-slate-500">Total modeled portfolio slippage</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Optimized Delay</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {optimizedPortfolioSummary.totalDelay}d
+          </div>
+          <div className="mt-1 text-sm text-slate-500">If best actions are executed</div>
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Delayed Turns</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.delayed}</div>
-          <div className="mt-1 text-sm text-slate-500">Forecasted 2+ days late</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Days Saved</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {optimizedPortfolioSummary.daysSaved}d
+          </div>
+          <div className="mt-1 text-sm text-slate-500">Optimized vs base case</div>
         </Card>
 
         <Card>
@@ -667,173 +614,223 @@ export default function ForecastTab({
           <div className="mt-2 text-3xl font-semibold text-slate-900">
             ${portfolioRevenueImpact.atRisk.toLocaleString()}
           </div>
-          <div className="mt-1 text-sm text-slate-500">Modeled rent exposure</div>
+          <div className="mt-1 text-sm text-slate-500">Modeled base-case rent exposure</div>
         </Card>
 
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">If All Executed</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">$ Protected</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">
-            ${fixAllSummary.totalVacancySaved.toLocaleString()}
+            ${optimizedPortfolioSummary.revenueProtected.toLocaleString()}
           </div>
-          <div className="mt-1 text-sm text-slate-500">
-            Vacancy impact protected
-          </div>
+          <div className="mt-1 text-sm text-slate-500">If optimized plan is committed</div>
         </Card>
       </div>
 
       {currentSelected ? (
-        <Card>
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="text-xl font-semibold text-slate-900">Forecast Summary</div>
-              <div className="mt-1 text-sm text-slate-500">
-                Modeled delivery range and confidence for {currentSelected.name}.
+        <>
+          <Card>
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">
+                  Scenario Comparison — {currentSelected.name}
+                </div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Compare likely outcomes before applying a plan.
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                {SCENARIOS.map((scenarioName) => (
+                  <button
+                    key={scenarioName}
+                    onClick={() => setActiveScenario(scenarioName)}
+                    className={`rounded-xl px-4 py-2 text-sm ${
+                      activeScenario === scenarioName
+                        ? "bg-slate-900 text-white"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {scenarioName}
+                  </button>
+                ))}
               </div>
             </div>
 
-            <Pill tone={confidenceMeta.tone}>
-              Confidence: {confidenceMeta.label}
-            </Pill>
-          </div>
+            <div className="mt-5 grid gap-4 xl:grid-cols-3">
+              {scenarioComparisons.map((scenario) => (
+                <div
+                  key={scenario.name}
+                  className={`rounded-2xl border p-4 ${
+                    activeScenario === scenario.name
+                      ? "border-slate-900 bg-slate-50"
+                      : "border-slate-200 bg-white"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-semibold text-slate-900">{scenario.name}</div>
+                    <Pill tone={scenario.riskTone}>
+                      {formatVariance(scenario.forecastDaysLate)}
+                    </Pill>
+                  </div>
 
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Expected Completion</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {formatDate(currentSelected.forecastCompletion)}
-              </div>
-            </div>
+                  <div className="mt-4 space-y-3 text-sm">
+                    <div>
+                      <div className="text-slate-500">Forecast Completion</div>
+                      <div className="font-medium text-slate-900">
+                        {formatDate(scenario.forecastCompletion)}
+                      </div>
+                    </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Range</div>
-              <div className="mt-2 text-lg font-semibold text-slate-900">
-                {formatDate(currentSelected.bestCaseDate)} → {formatDate(currentSelected.worstCaseDate)}
-              </div>
-            </div>
+                    <div>
+                      <div className="text-slate-500">Confidence</div>
+                      <div className="font-medium text-slate-900">
+                        {scenario.confidence}%
+                      </div>
+                    </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs uppercase tracking-wide text-slate-500">Risk Exposure</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {formatVariance(currentSelected.forecastDaysLate)}
-              </div>
-            </div>
+                    <div>
+                      <div className="text-slate-500">Revenue Exposure</div>
+                      <div className="font-medium text-slate-900">
+                        ${scenario.revenueImpact.toLocaleString()}
+                      </div>
+                    </div>
 
-            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-              <div className="text-xs uppercase tracking-wide text-emerald-700">Revenue Protected</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                ${currentSelected.revenueProtected.toLocaleString()}
-              </div>
-            </div>
-          </div>
-        </Card>
-      ) : null}
+                    <div>
+                      <div className="text-slate-500">Delta vs Base</div>
+                      <div className="font-medium text-slate-900">
+                        {scenario.daysDeltaVsBase > 0
+                          ? `${scenario.daysDeltaVsBase}d better`
+                          : scenario.daysDeltaVsBase < 0
+                          ? `${Math.abs(scenario.daysDeltaVsBase)}d worse`
+                          : "No change"}
+                      </div>
+                    </div>
+                  </div>
 
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-8">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Forecast Queue</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Decision engine with quantified impact, improved ECD, and estimated dollar protection.
-            </div>
-
-            <div className="mt-5 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-slate-500">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Property</th>
-                    <th className="px-3 py-2 font-medium">Stage</th>
-                    <th className="px-3 py-2 font-medium">ECD</th>
-                    <th className="px-3 py-2 font-medium">Forecast</th>
-                    <th className="px-3 py-2 font-medium">Variance</th>
-                    <th className="px-3 py-2 font-medium">Confidence</th>
-                    <th className="px-3 py-2 font-medium">Recommendation</th>
-                    <th className="px-3 py-2 font-medium">Impact</th>
-                    <th className="px-3 py-2 font-medium">Improved ECD</th>
-                    <th className="px-3 py-2 font-medium">$ Protected</th>
-                    <th className="px-3 py-2 font-medium">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {forecastRows
-                    .slice()
-                    .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
-                    .map((row) => {
-                      const meta = getConfidenceLabel(row.forecastConfidence);
-
-                      return (
-                        <tr
-                          key={row.id}
-                          className={`border-t border-slate-100 ${
-                            currentSelected?.id === row.id ? "bg-slate-50" : "hover:bg-slate-50"
-                          }`}
-                        >
-                          <td className="px-3 py-3">
-                            <button
-                              onClick={() => setSelectedPropertyId(row.id)}
-                              className="font-medium text-blue-700 hover:underline"
-                            >
-                              {row.name}
-                            </button>
-                            <div className="mt-1 text-xs text-slate-500">{row.market}</div>
-                          </td>
-                          <td className="px-3 py-3">{row.currentStage}</td>
-                          <td className="px-3 py-3">{formatDate(row.projectedCompletion)}</td>
-                          <td className="px-3 py-3">{formatDate(row.forecastCompletion)}</td>
-                          <td className="px-3 py-3">
-                            <Pill tone={varianceTone(row.forecastDaysLate)}>
-                              {formatVariance(row.forecastDaysLate)}
-                            </Pill>
-                          </td>
-                          <td className="px-3 py-3">
-                            <Pill tone={meta.tone}>{meta.label}</Pill>
-                          </td>
-                          <td className="px-3 py-3">
-                            <div className="text-slate-700">{row.recommendation.action}</div>
-                            <div className="mt-1 text-xs text-slate-500">{row.recommendation.why}</div>
-                          </td>
-                          <td className="px-3 py-3">
-                            {row.recommendation.impact > 0 ? (
-                              <span className="font-medium text-emerald-600">
-                                -{row.recommendation.impact}d
-                              </span>
-                            ) : (
-                              <span className="text-slate-400">-</span>
-                            )}
-                          </td>
-                          <td className="px-3 py-3">
-                            {row.recommendation.impact > 0
-                              ? formatDate(row.improvedCompletion)
-                              : formatDate(row.projectedCompletion)}
-                          </td>
-                          <td className="px-3 py-3">
-                            ${row.revenueProtected.toLocaleString()}
-                          </td>
-                          <td className="px-3 py-3">
-                            <button
-                              onClick={() => applySingleRecommendation(row)}
-                              disabled={row.recommendation.impact === 0}
-                              className={`rounded-xl px-3 py-2 text-xs ${
-                                row.recommendation.impact > 0
-                                  ? "bg-slate-900 text-white hover:bg-slate-800"
-                                  : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
-                              }`}
-                            >
-                              Apply
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
+                  {scenario.name !== "Base Case" ? (
+                    <div className="mt-4">
+                      <button
+                        onClick={() => commitScenario(currentSelected, scenario.name)}
+                        className={`rounded-xl px-4 py-2 text-sm ${
+                          scenario.name === "Optimized Case"
+                            ? "bg-slate-900 text-white hover:bg-slate-800"
+                            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                        }`}
+                      >
+                        Commit {scenario.name}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
+              ))}
             </div>
           </Card>
-        </div>
 
-        <div className="xl:col-span-4">
-          <Card className="h-full">
-            {currentSelected ? (
-              <>
+          <div className="grid gap-6 xl:grid-cols-12">
+            <div className="xl:col-span-8">
+              <Card className="h-full">
+                <div className="text-xl font-semibold text-slate-900">Scenario Queue</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Each row shows base case plus optimized and worst-case alternatives.
+                </div>
+
+                <div className="mt-5 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead className="bg-slate-50 text-left text-slate-500">
+                      <tr>
+                        <th className="px-3 py-2 font-medium">Property</th>
+                        <th className="px-3 py-2 font-medium">Base</th>
+                        <th className="px-3 py-2 font-medium">Optimized</th>
+                        <th className="px-3 py-2 font-medium">Worst</th>
+                        <th className="px-3 py-2 font-medium">$ Protected</th>
+                        <th className="px-3 py-2 font-medium">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {forecastRows
+                        .slice()
+                        .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
+                        .map((row) => {
+                          const optimized = buildScenarioForecast(row, "Optimized Case");
+                          const worst = buildScenarioForecast(row, "Worst Case");
+
+                          return (
+                            <tr
+                              key={row.id}
+                              className={`border-t border-slate-100 ${
+                                currentSelected?.id === row.id ? "bg-slate-50" : "hover:bg-slate-50"
+                              }`}
+                            >
+                              <td className="px-3 py-3">
+                                <button
+                                  onClick={() => setSelectedPropertyId(row.id)}
+                                  className="font-medium text-blue-700 hover:underline"
+                                >
+                                  {row.name}
+                                </button>
+                                <div className="mt-1 text-xs text-slate-500">
+                                  {row.market} • {row.currentStage}
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3">
+                                <div>{formatDate(row.forecastCompletion)}</div>
+                                <div className="mt-1">
+                                  <Pill tone={varianceTone(row.forecastDaysLate)}>
+                                    {formatVariance(row.forecastDaysLate)}
+                                  </Pill>
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3">
+                                <div>{formatDate(optimized.forecastCompletion)}</div>
+                                <div className="mt-1">
+                                  <Pill tone={optimized.riskTone}>
+                                    {formatVariance(optimized.forecastDaysLate)}
+                                  </Pill>
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3">
+                                <div>{formatDate(worst.forecastCompletion)}</div>
+                                <div className="mt-1">
+                                  <Pill tone={worst.riskTone}>
+                                    {formatVariance(worst.forecastDaysLate)}
+                                  </Pill>
+                                </div>
+                              </td>
+
+                              <td className="px-3 py-3">
+                                ${row.revenueProtected.toLocaleString()}
+                              </td>
+
+                              <td className="px-3 py-3">
+                                <div className="flex flex-col gap-2">
+                                  <button
+                                    onClick={() => commitScenario(row, "Optimized Case")}
+                                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-white hover:bg-slate-800"
+                                  >
+                                    Commit optimized
+                                  </button>
+                                  <button
+                                    onClick={() => commitScenario(row, "Worst Case")}
+                                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs hover:bg-slate-50"
+                                  >
+                                    Stress test
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+              </Card>
+            </div>
+
+            <div className="xl:col-span-4">
+              <Card className="h-full">
                 <div className="flex items-start justify-between gap-4">
                   <div>
                     <div className="text-xl font-semibold text-slate-900">
@@ -844,285 +841,192 @@ export default function ForecastTab({
                     </div>
                   </div>
 
-                  <Pill tone={currentSelected.forecastRiskBand.tone}>
-                    {currentSelected.forecastRiskBand.label}
+                  <Pill tone={confidenceMeta.tone}>
+                    {confidenceMeta.label}
                   </Pill>
                 </div>
 
-                <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl border border-slate-200 p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">ECD</div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {formatDate(currentSelected.projectedCompletion)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Forecast Completion
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {formatDate(currentSelected.forecastCompletion)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                    <div className="text-xs uppercase tracking-wide text-emerald-700">
-                      Improved ECD
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {formatDate(currentSelected.improvedCompletion)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Confidence
-                    </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <div className="text-2xl font-semibold text-slate-900">
-                        {currentSelected.forecastConfidence}%
+                {activeScenarioResult ? (
+                  <>
+                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                      <div className="rounded-2xl border border-slate-200 p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                          Active Scenario
+                        </div>
+                        <div className="mt-2 text-lg font-semibold text-slate-900">
+                          {activeScenarioResult.name}
+                        </div>
                       </div>
-                      <Pill tone={confidenceMeta.tone}>{confidenceMeta.label}</Pill>
-                    </div>
-                  </div>
-                </div>
 
-                <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="text-sm font-semibold text-slate-900">Best Next Action</div>
-                  <div className="mt-2 text-base text-slate-800">
-                    {currentSelected.recommendation.action}
-                  </div>
-                  <div className="mt-2 text-sm text-slate-600">
-                    Expected impact:{" "}
-                    <span className="font-medium text-emerald-700">
-                      -{currentSelected.recommendation.impact}d
-                    </span>{" "}
-                    to modeled delay • ${currentSelected.revenueProtected.toLocaleString()} revenue protected
-                  </div>
-                  <div className="mt-2 text-sm text-slate-500">
-                    Why: {currentSelected.recommendation.why}
-                  </div>
-                  <div className="mt-4">
-                    <button
-                      onClick={() => applySingleRecommendation(currentSelected)}
-                      disabled={currentSelected.recommendation.impact === 0}
-                      className={`rounded-xl px-4 py-2 text-sm ${
-                        currentSelected.recommendation.impact > 0
-                          ? "bg-slate-900 text-white hover:bg-slate-800"
-                          : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
-                      }`}
-                    >
-                      Apply recommendation
-                    </button>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="text-sm font-semibold text-slate-900">Forecast Insight</div>
-                  <div className="mt-2 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm text-slate-700">
-                    {currentSelected.forecastInsight}
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Delay Driver Breakdown
-                  </div>
-                  <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
-                    <table className="min-w-full text-sm">
-                      <thead className="bg-slate-50 text-left text-slate-500">
-                        <tr>
-                          <th className="px-3 py-2 font-medium">Driver</th>
-                          <th className="px-3 py-2 font-medium">Impact</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {currentSelected.forecastDelayDrivers.map((driver) => (
-                          <tr key={`${driver.label}-${driver.days}`} className="border-t border-slate-100">
-                            <td className="px-3 py-3 text-slate-700">{driver.label}</td>
-                            <td className="px-3 py-3 font-medium text-slate-900">+{driver.days}d</td>
-                          </tr>
-                        ))}
-                        <tr className="border-t border-slate-100 bg-slate-50">
-                          <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
-                          <td className="px-3 py-3 font-semibold text-slate-900">
-                            +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-
-                <div className="mt-6">
-                  <div className="text-sm font-semibold text-slate-900">
-                    Recommended Actions
-                  </div>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {getRecommendedActions(currentSelected).map((rec) => (
-                      <div
-                        key={rec.label}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
-                      >
-                        {rec.label}
-                        {rec.savings > 0 ? ` • saves ~${rec.savings}d` : ""}
+                      <div className="rounded-2xl border border-slate-200 p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                          Forecast Completion
+                        </div>
+                        <div className="mt-2 text-lg font-semibold text-slate-900">
+                          {formatDate(activeScenarioResult.forecastCompletion)}
+                        </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </>
-            ) : null}
-          </Card>
-        </div>
-      </div>
+
+                      <div className="rounded-2xl border border-slate-200 p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                          Variance
+                        </div>
+                        <div className="mt-2">
+                          <Pill tone={activeScenarioResult.riskTone}>
+                            {formatVariance(activeScenarioResult.forecastDaysLate)}
+                          </Pill>
+                        </div>
+                      </div>
+
+                      <div className="rounded-2xl border border-slate-200 p-4">
+                        <div className="text-xs uppercase tracking-wide text-slate-500">
+                          Revenue Exposure
+                        </div>
+                        <div className="mt-2 text-lg font-semibold text-slate-900">
+                          ${activeScenarioResult.revenueImpact.toLocaleString()}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Recommended Action
+                      </div>
+                      <div className="mt-2 text-base text-slate-800">
+                        {currentSelected.recommendation.action}
+                      </div>
+                      <div className="mt-2 text-sm text-slate-500">
+                        Why: {currentSelected.recommendation.why}
+                      </div>
+                      <div className="mt-2 text-sm text-slate-600">
+                        Optimized scenario protects ~$
+                        {currentSelected.revenueProtected.toLocaleString()} and improves ECD by{" "}
+                        {currentSelected.daysSaved}d.
+                      </div>
+                    </div>
+
+                    <div className="mt-6">
+                      <div className="text-sm font-semibold text-slate-900">
+                        Delay Driver Breakdown
+                      </div>
+                      <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                        <table className="min-w-full text-sm">
+                          <thead className="bg-slate-50 text-left text-slate-500">
+                            <tr>
+                              <th className="px-3 py-2 font-medium">Driver</th>
+                              <th className="px-3 py-2 font-medium">Impact</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {currentSelected.forecastDelayDrivers.map((driver) => (
+                              <tr
+                                key={`${driver.label}-${driver.days}`}
+                                className="border-t border-slate-100"
+                              >
+                                <td className="px-3 py-3 text-slate-700">{driver.label}</td>
+                                <td className="px-3 py-3 font-medium text-slate-900">
+                                  +{driver.days}d
+                                </td>
+                              </tr>
+                            ))}
+                            <tr className="border-t border-slate-100 bg-slate-50">
+                              <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
+                              <td className="px-3 py-3 font-semibold text-slate-900">
+                                +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                ) : null}
+              </Card>
+            </div>
+          </div>
+        </>
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-5">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Scenario Simulator</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Toggle interventions to see how operator action changes the forecast.
-            </div>
-
-            <div className="mt-5 space-y-3">
-              <label className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
-                <span className="text-sm text-slate-700">Resolve blockers</span>
-                <input
-                  type="checkbox"
-                  checked={resolveBlockers}
-                  onChange={(e) => setResolveBlockers(e.target.checked)}
-                />
-              </label>
-
-              <label className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
-                <span className="text-sm text-slate-700">Assign / tighten vendor path</span>
-                <input
-                  type="checkbox"
-                  checked={assignVendor}
-                  onChange={(e) => setAssignVendor(e.target.checked)}
-                />
-              </label>
-
-              <label className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
-                <span className="text-sm text-slate-700">Expedite approval</span>
-                <input
-                  type="checkbox"
-                  checked={expediteApproval}
-                  onChange={(e) => setExpediteApproval(e.target.checked)}
-                />
-              </label>
-
-              <label className="flex items-center justify-between rounded-2xl border border-slate-200 px-4 py-3">
-                <span className="text-sm text-slate-700">Compress schedule</span>
-                <input
-                  type="checkbox"
-                  checked={compressSchedule}
-                  onChange={(e) => setCompressSchedule(e.target.checked)}
-                />
-              </label>
-            </div>
-
-            {scenario ? (
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="text-sm font-semibold text-slate-900">Simulated Outcome</div>
-
-                <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                  <div className="rounded-2xl bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      New Forecast
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {formatDate(scenario.forecastCompletion)}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Days Saved
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {scenario.daysSaved}d
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 text-sm text-slate-600">
-                  New variance:{" "}
-                  <span className="font-medium text-slate-900">
-                    {formatVariance(scenario.forecastDaysLate)}
-                  </span>{" "}
-                  • Confidence{" "}
-                  <span className="font-medium text-slate-900">
-                    {scenario.confidence}%
-                  </span>
-                </div>
-
-                {!!scenario.actions.length && (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {scenario.actions.map((action) => (
-                      <div
-                        key={action}
-                        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700"
-                      >
-                        {action}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                <div className="mt-5">
-                  <button
-                    onClick={applyScenario}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-                  >
-                    Apply scenario to turn
-                  </button>
-                </div>
-              </div>
-            ) : null}
-          </Card>
-        </div>
-
-        <div className="xl:col-span-7">
+        <div className="xl:col-span-12">
           <Card className="h-full">
             <div className="text-xl font-semibold text-slate-900">
-              Portfolio Delay Distribution
+              Portfolio Scenario Distribution
             </div>
             <div className="mt-1 text-sm text-slate-500">
-              Forecasted slippage by turn, ranked from highest to lowest exposure.
+              Compare how much downside can be removed under optimized execution.
             </div>
 
             <div className="mt-5 space-y-4">
               {forecastRows
                 .slice()
                 .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
-                .map((row) => (
-                  <div key={row.id}>
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-800">{row.name}</div>
-                      <div className="text-xs text-slate-500">
-                        {row.forecastDaysLate}d variance • {row.forecastConfidence}% confidence • $
-                        {row.revenueProtected} protected if actioned
+                .map((row) => {
+                  const optimized = buildScenarioForecast(row, "Optimized Case");
+                  const worst = buildScenarioForecast(row, "Worst Case");
+
+                  return (
+                    <div key={row.id}>
+                      <div className="mb-2 flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium text-slate-800">{row.name}</div>
+                        <div className="text-xs text-slate-500">
+                          Base {row.forecastDaysLate}d • Optimized {optimized.forecastDaysLate}d • Worst{" "}
+                          {worst.forecastDaysLate}d
+                        </div>
+                      </div>
+
+                      <div className="space-y-2">
+                        <div>
+                          <div className="mb-1 text-xs text-slate-500">Base Case</div>
+                          <div className="h-3 rounded-full bg-slate-100">
+                            <div
+                              className={`h-3 rounded-full ${
+                                row.forecastDaysLate >= 4
+                                  ? "bg-red-500"
+                                  : row.forecastDaysLate >= 2
+                                  ? "bg-amber-500"
+                                  : "bg-emerald-500"
+                              }`}
+                              style={{
+                                width: `${Math.max(8, (row.forecastDaysLate / maxDelay) * 100)}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-1 text-xs text-slate-500">Optimized Case</div>
+                          <div className="h-3 rounded-full bg-slate-100">
+                            <div
+                              className="h-3 rounded-full bg-emerald-500"
+                              style={{
+                                width: `${Math.max(
+                                  8,
+                                  (optimized.forecastDaysLate / Math.max(maxDelay, worst.forecastDaysLate)) * 100
+                                )}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <div className="mb-1 text-xs text-slate-500">Worst Case</div>
+                          <div className="h-3 rounded-full bg-slate-100">
+                            <div
+                              className="h-3 rounded-full bg-red-500"
+                              style={{
+                                width: `${Math.max(
+                                  8,
+                                  (worst.forecastDaysLate / Math.max(maxDelay, worst.forecastDaysLate)) * 100
+                                )}%`,
+                              }}
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
-
-                    <div className="h-3 rounded-full bg-slate-100">
-                      <div
-                        className={`h-3 rounded-full ${
-                          row.forecastDaysLate >= 4
-                            ? "bg-red-500"
-                            : row.forecastDaysLate >= 2
-                            ? "bg-amber-500"
-                            : "bg-emerald-500"
-                        }`}
-                        style={{
-                          width: `${Math.max(8, (row.forecastDaysLate / maxDelay) * 100)}%`,
-                        }}
-                      />
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
             </div>
           </Card>
         </div>

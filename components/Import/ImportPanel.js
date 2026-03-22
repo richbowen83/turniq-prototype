@@ -220,9 +220,9 @@ export default function ImportPanel({
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <div className="text-xl font-semibold text-slate-900">Import Data</div>
+          <div className="text-3xl font-semibold text-slate-900">Import</div>
           <div className="mt-1 text-sm text-slate-500">
-            Upload a CSV export and normalize it into TurnIQ’s canonical operating model.
+            Upload and normalize portfolio data into TurnIQ.
           </div>
         </div>
 
