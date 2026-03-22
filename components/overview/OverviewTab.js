@@ -4,6 +4,8 @@ import { useMemo } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
+const DAILY_RENT_ASSUMPTION = 120;
+
 function toDate(value) {
   const d = new Date(value);
   return Number.isNaN(d.getTime()) ? null : d;
@@ -89,506 +91,544 @@ function buildForecast(property) {
   };
 }
 
-function getConfidenceMeta(score) {
-  if (score >= 85) return { label: "High", tone: "emerald" };
-  if (score >= 70) return { label: "Moderate", tone: "amber" };
-  return { label: "Low", tone: "red" };
-}
+function calculateRevenueImpact(properties) {
+  let atRisk = 0;
+  let recoverable = 0;
 
-function groupByMarket(properties) {
-  return Array.from(new Set(properties.map((p) => p.market))).map((market) => {
-    const rows = properties.filter((p) => p.market === market);
-    const avgRisk = rows.length
-      ? Math.round(rows.reduce((sum, row) => sum + row.risk, 0) / rows.length)
-      : 0;
-    const avgForecastDelay = rows.length
-      ? Number(
-          (
-            rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0) / rows.length
-          ).toFixed(1)
-        )
-      : 0;
+  properties.forEach((p) => {
+    const delayDays =
+      typeof p.forecastDaysLate === "number"
+        ? p.forecastDaysLate
+        : (p.delayDrivers || []).reduce((sum, d) => sum + (d.days || 0), 0);
 
-    return {
-      market,
-      turns: rows.length,
-      avgRisk,
-      avgForecastDelay,
-      blocked: rows.filter((r) => r.turnStatus === "Blocked").length,
-    };
-  });
-}
+    const riskWeight = (p.risk || 0) / 100;
+    const exposure = delayDays * DAILY_RENT_ASSUMPTION;
 
-function buildFallbackBottleneck(properties) {
-  const stageMap = new Map();
-
-  properties.forEach((property) => {
-    const stage = property.currentStage || "Unknown";
-    if (!stageMap.has(stage)) {
-      stageMap.set(stage, { stage, count: 0, totalDays: 0 });
-    }
-    const current = stageMap.get(stage);
-    current.count += 1;
-    current.totalDays += property.daysInStage || 0;
+    atRisk += exposure * Math.max(0.25, riskWeight);
+    recoverable += exposure * Math.max(0, 1 - riskWeight * 0.5);
   });
 
-  const rows = Array.from(stageMap.values()).map((row) => ({
-    stage: row.stage,
-    count: row.count,
-    avgDaysInStage: row.count ? Number((row.totalDays / row.count).toFixed(1)) : 0,
-  }));
+  return {
+    atRisk: Math.round(atRisk),
+    recoverable: Math.round(recoverable),
+  };
+}
 
-  if (!rows.length) return null;
+function getToneFromRisk(risk) {
+  if (risk >= 75) return "red";
+  if (risk >= 60) return "amber";
+  return "emerald";
+}
 
-  return rows.sort((a, b) => b.avgDaysInStage - a.avgDaysInStage)[0];
+function buildMarketSummary(properties) {
+  return Array.from(new Set(properties.map((p) => p.market)))
+    .map((market) => {
+      const rows = properties.filter((p) => p.market === market);
+      const avgRisk = rows.length
+        ? Math.round(rows.reduce((sum, row) => sum + row.risk, 0) / rows.length)
+        : 0;
+      const avgDelay = rows.length
+        ? Number(
+            (
+              rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0) / rows.length
+            ).toFixed(1)
+          )
+        : 0;
+
+      return {
+        market,
+        turns: rows.length,
+        blocked: rows.filter((row) => row.turnStatus === "Blocked").length,
+        avgRisk,
+        avgDelay,
+      };
+    })
+    .sort((a, b) => b.avgDelay - a.avgDelay || b.avgRisk - a.avgRisk);
+}
+
+function buildExecutiveNarrative({
+  properties,
+  revenueImpact,
+  topStageBottleneck,
+  actionHistory,
+}) {
+  const highRiskCount = properties.filter((p) => p.risk >= 75).length;
+  const blockedCount = properties.filter((p) => p.turnStatus === "Blocked").length;
+  const totalDelay = properties.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
+  const completedActions = actionHistory.filter((a) => a.kind === "completed");
+  const totalDaysAvoided = completedActions.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+
+  return {
+    headline:
+      highRiskCount > 0
+        ? `${highRiskCount} turns are driving the majority of portfolio risk.`
+        : "Portfolio risk is relatively contained right now.",
+    body: topStageBottleneck
+      ? `${topStageBottleneck.stage} is the primary bottleneck, averaging ${topStageBottleneck.avgDaysInStage} days in stage. Across the active portfolio, TurnIQ is modeling ${totalDelay} total delay days and $${revenueImpact.atRisk.toLocaleString()} of revenue exposure.`
+      : `TurnIQ is modeling ${totalDelay} total delay days and $${revenueImpact.atRisk.toLocaleString()} of revenue exposure across the active portfolio.`,
+    footer:
+      totalDaysAvoided > 0
+        ? `Completed actions have already removed ${totalDaysAvoided} modeled delay days.`
+        : blockedCount > 0
+        ? `${blockedCount} blocked turns need immediate intervention.`
+        : "No blocked turns are currently preventing execution flow.",
+  };
+}
+
+function buildActionSummary(properties) {
+  const blocked = properties.filter((p) => p.turnStatus === "Blocked").length;
+  const approvals = properties.filter((p) => p.currentStage === "Owner Approval").length;
+  const vendorless = properties.filter((p) => !p.vendor || p.vendor === "TBD").length;
+  const highDelay = properties.filter((p) => (p.forecastDaysLate || 0) >= 4).length;
+
+  const actions = [];
+
+  if (blocked > 0) {
+    actions.push({
+      title: "Resolve blocked turns",
+      body: `${blocked} blocked turn${blocked > 1 ? "s are" : " is"} preventing clean execution.`,
+      tone: "red",
+    });
+  }
+
+  if (approvals > 0) {
+    actions.push({
+      title: "Clear owner approvals",
+      body: `${approvals} turn${approvals > 1 ? "s are" : " is"} sitting in Owner Approval.`,
+      tone: "amber",
+    });
+  }
+
+  if (vendorless > 0) {
+    actions.push({
+      title: "Assign execution vendors",
+      body: `${vendorless} turn${vendorless > 1 ? "s still need" : " still needs"} vendor ownership.`,
+      tone: "blue",
+    });
+  }
+
+  if (highDelay > 0) {
+    actions.push({
+      title: "Intervene on delay-heavy turns",
+      body: `${highDelay} turn${highDelay > 1 ? "s are" : " is"} modeled at 4+ days behind ECD.`,
+      tone: "red",
+    });
+  }
+
+  return actions.slice(0, 4);
+}
+
+function buildImpactSummary(properties, actionHistory) {
+  const totalDelay = properties.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
+  const optimizedDelay = properties.reduce((sum, p) => {
+    const recoverableDays = Math.min(
+      p.forecastDaysLate || 0,
+      Math.max(0, Math.ceil(((p.risk || 0) - 50) / 20))
+    );
+    return sum + Math.max(0, (p.forecastDaysLate || 0) - recoverableDays);
+  }, 0);
+
+  const daysSaved = Math.max(0, totalDelay - optimizedDelay);
+  const revenueRecovered = daysSaved * DAILY_RENT_ASSUMPTION;
+
+  const completedActions = actionHistory.filter((a) => a.kind === "completed");
+  const realizedVacancySaved = completedActions.reduce(
+    (sum, a) => sum + (a.vacancySavings || 0),
+    0
+  );
+
+  return {
+    totalDelay,
+    optimizedDelay,
+    daysSaved,
+    revenueRecovered,
+    realizedVacancySaved,
+  };
 }
 
 export default function OverviewTab({
-  properties = [],
+  mode,
+  properties,
   kpis,
   selectedMarket,
   setSelectedMarket,
   setActiveTab,
-  actionHistory = [],
-  hasImportedData = false,
-  topStageBottleneck = null,
-  lastImportCount = 0,
+  actionHistory,
+  hasImportedData,
+  topStageBottleneck,
+  lastImportCount,
 }) {
   const enrichedProperties = useMemo(
     () => properties.map((property) => ({ ...property, ...buildForecast(property) })),
     [properties]
   );
 
-  const forecastSummary = useMemo(() => {
-    const total = enrichedProperties.length || 1;
-    const totalDelay = enrichedProperties.reduce(
-      (sum, property) => sum + (property.forecastDaysLate || 0),
-      0
-    );
-    const avgDelay = Number((totalDelay / total).toFixed(1));
-    const delayedTurns = enrichedProperties.filter((p) => p.forecastDaysLate >= 2).length;
-    const highDelayTurns = enrichedProperties.filter((p) => p.forecastDaysLate >= 4).length;
-    const avgConfidence = Math.round(
-      enrichedProperties.reduce((sum, property) => sum + (property.forecastConfidence || 0), 0) /
-        total
-    );
-
-    const mostDelayed =
-      [...enrichedProperties].sort(
-        (a, b) => (b.forecastDaysLate || 0) - (a.forecastDaysLate || 0)
-      )[0] || null;
-
-    return {
-      totalDelay,
-      avgDelay,
-      delayedTurns,
-      highDelayTurns,
-      avgConfidence,
-      mostDelayed,
-    };
-  }, [enrichedProperties]);
-
-  const marketSummary = useMemo(
-    () =>
-      groupByMarket(enrichedProperties).sort(
-        (a, b) => b.avgForecastDelay - a.avgForecastDelay || b.avgRisk - a.avgRisk
-      ),
+  const revenueImpact = useMemo(
+    () => calculateRevenueImpact(enrichedProperties),
     [enrichedProperties]
   );
 
-  const recentActions = useMemo(() => {
-    return actionHistory.slice(0, 5);
-  }, [actionHistory]);
+  const marketSummary = useMemo(
+    () => buildMarketSummary(enrichedProperties),
+    [enrichedProperties]
+  );
 
-  const bottleneck = topStageBottleneck || buildFallbackBottleneck(enrichedProperties);
+  const executiveNarrative = useMemo(
+    () =>
+      buildExecutiveNarrative({
+        properties: enrichedProperties,
+        revenueImpact,
+        topStageBottleneck,
+        actionHistory,
+      }),
+    [enrichedProperties, revenueImpact, topStageBottleneck, actionHistory]
+  );
 
-  const portfolioConfidence = getConfidenceMeta(forecastSummary.avgConfidence);
+  const actionSummary = useMemo(
+    () => buildActionSummary(enrichedProperties),
+    [enrichedProperties]
+  );
 
-  const sourceLabel = hasImportedData ? "Imported dataset" : "Demo dataset";
-  const sourceTone = hasImportedData ? "blue" : "amber";
+  const impactSummary = useMemo(
+    () => buildImpactSummary(enrichedProperties, actionHistory),
+    [enrichedProperties, actionHistory]
+  );
+
+  const recentActions = useMemo(
+    () => actionHistory.slice(0, 5),
+    [actionHistory]
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-3xl font-semibold text-slate-900">Overview</div>
           <div className="mt-1 text-sm text-slate-500">
-            Portfolio narrative layer across operations, forecast pressure, and current data source.
+            {mode === "presentation"
+              ? "Executive summary of portfolio risk, bottlenecks, and outcome potential."
+              : "Executive summary of portfolio risk, bottlenecks, and outcome potential."}
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <Pill tone={sourceTone}>{sourceLabel}</Pill>
-          <Pill tone={portfolioConfidence.tone}>
-            Confidence: {portfolioConfidence.label}
+          <Pill tone="blue">
+            {selectedMarket === "All Markets" ? "Portfolio View" : selectedMarket}
+          </Pill>
+          <Pill tone={hasImportedData ? "emerald" : "amber"}>
+            {hasImportedData ? "Imported Dataset" : "Demo Dataset"}
           </Pill>
         </div>
       </div>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+          <div className="text-xs uppercase tracking-wide text-red-600">Revenue at Risk</div>
+          <div className="mt-2 text-3xl font-semibold text-red-700">
+            ${revenueImpact.atRisk.toLocaleString()}
+          </div>
+          <div className="mt-1 text-xs text-red-600">
+            Modeled exposure from delays + risk concentration
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+          <div className="text-xs uppercase tracking-wide text-emerald-600">
+            Recoverable Revenue
+          </div>
+          <div className="mt-2 text-3xl font-semibold text-emerald-700">
+            ${revenueImpact.recoverable.toLocaleString()}
+          </div>
+          <div className="mt-1 text-xs text-emerald-600">
+            Potential upside from executing recommendations
+          </div>
+        </div>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            {impactSummary.totalDelay}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            Total modeled portfolio slippage
+          </div>
+        </Card>
+
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Open Turns</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {kpis?.allOpenTurns ?? properties.length}
+            {kpis?.allOpenTurns ?? enrichedProperties.length}
           </div>
-          <div className="mt-1 text-sm text-slate-500">
-            Current portfolio in scope
-          </div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Blocked Turns</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {kpis?.blockedTurns ?? properties.filter((p) => p.turnStatus === "Blocked").length}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">
-            Requiring active intervention
+          <div className="mt-1 text-xs text-slate-500">
+            {hasImportedData && lastImportCount
+              ? `${lastImportCount} recently imported`
+              : "Active turns in current view"}
           </div>
         </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Forecast Delay</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {forecastSummary.avgDelay}d
-          </div>
-          <div className="mt-1 text-sm text-slate-500">
-            Average modeled variance to ECD
-          </div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Days At Risk</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {forecastSummary.totalDelay}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">
-            Total modeled slippage across the portfolio
-          </div>
-        </Card>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-7">
-          <Card className="h-full">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Data Source</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Current workspace context and imported data status.
-                </div>
-              </div>
-
-              <Pill tone={sourceTone}>{sourceLabel}</Pill>
-            </div>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Active market filter</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {selectedMarket || "All Markets"}
-                </div>
-                <div className="mt-3 flex gap-2">
-                  <button
-                    onClick={() => setSelectedMarket?.("All Markets")}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-                  >
-                    Reset market
-                  </button>
-                  <button
-                    onClick={() => setActiveTab?.("Import")}
-                    className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-                  >
-                    Go to Import
-                  </button>
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-sm font-semibold text-slate-900">Import impact</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {hasImportedData ? "Live imported data" : "Sample dataset"}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {hasImportedData
-                    ? `Imported turns are currently driving portfolio analytics${
-                        lastImportCount > 0 ? ` • last import added ${lastImportCount}` : ""
-                      }.`
-                    : "The workspace is currently using the built-in demo portfolio."}
-                </div>
-              </div>
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-5">
-          <Card className="h-full">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Forecast Summary</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Portfolio-wide forecast pressure and confidence.
-                </div>
-              </div>
-
-              <Pill tone={portfolioConfidence.tone}>
-                {portfolioConfidence.label}
-              </Pill>
-            </div>
-
-            <div className="mt-5 grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Delayed Turns</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {forecastSummary.delayedTurns}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">High Delay Risk</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {forecastSummary.highDelayTurns}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {forecastSummary.avgConfidence}%
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Most Delayed</div>
-                <div className="mt-2 text-lg font-semibold text-slate-900">
-                  {forecastSummary.mostDelayed?.name || "—"}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {forecastSummary.mostDelayed
-                    ? `+${forecastSummary.mostDelayed.forecastDaysLate}d vs ECD`
-                    : "No delay modeled"}
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex gap-2">
-              <button
-                onClick={() => setActiveTab?.("Forecast")}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-              >
-                View Forecast
-              </button>
-              <button
-                onClick={() => setActiveTab?.("Dashboard")}
-                className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-              >
-                Open Dashboard
-              </button>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-5">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Bottleneck Stage</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Current stage creating the greatest time drag in the portfolio.
-            </div>
-
-            {bottleneck ? (
-              <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                <div className="text-sm font-semibold text-amber-900">
-                  {bottleneck.stage}
-                </div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {bottleneck.avgDaysInStage} days
-                </div>
-                <div className="mt-1 text-sm text-amber-800">
-                  Average days in stage
-                </div>
-                {"count" in bottleneck ? (
-                  <div className="mt-2 text-sm text-slate-600">
-                    {bottleneck.count} turns currently in this stage
-                  </div>
-                ) : null}
-
-                <div className="mt-4">
-                  <button
-                    onClick={() => setActiveTab?.("Control Center")}
-                    className="rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm text-amber-900 hover:bg-amber-100"
-                  >
-                    Investigate in Control Center
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                No bottleneck stage available.
-              </div>
-            )}
-          </Card>
-        </div>
-
-        <div className="xl:col-span-7">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Market Snapshot</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Market-level risk and forecast pressure across the current dataset.
-            </div>
-
-            <div className="mt-5 overflow-x-auto">
-              <table className="min-w-full text-sm">
-                <thead className="bg-slate-50 text-left text-slate-500">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Market</th>
-                    <th className="px-3 py-2 font-medium">Turns</th>
-                    <th className="px-3 py-2 font-medium">Blocked</th>
-                    <th className="px-3 py-2 font-medium">Avg Risk</th>
-                    <th className="px-3 py-2 font-medium">Avg Forecast Delay</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {marketSummary.map((row) => (
-                    <tr key={row.market} className="border-t border-slate-100">
-                      <td className="px-3 py-3 font-medium text-slate-900">{row.market}</td>
-                      <td className="px-3 py-3">{row.turns}</td>
-                      <td className="px-3 py-3">{row.blocked}</td>
-                      <td className="px-3 py-3">
-                        <Pill
-                          tone={
-                            row.avgRisk >= 75
-                              ? "red"
-                              : row.avgRisk >= 60
-                              ? "amber"
-                              : "emerald"
-                          }
-                        >
-                          {row.avgRisk}
-                        </Pill>
-                      </td>
-                      <td className="px-3 py-3">
-                        <Pill
-                          tone={
-                            row.avgForecastDelay >= 4
-                              ? "red"
-                              : row.avgForecastDelay >= 2
-                              ? "amber"
-                              : "emerald"
-                          }
-                        >
-                          {row.avgForecastDelay}d
-                        </Pill>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-8">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Recent Workflow Activity</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Most recent operator actions and turn changes captured by the workspace.
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+              TurnIQ Executive Narrative
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {executiveNarrative.headline}
+            </div>
+            <div className="mt-3 text-sm leading-6 text-slate-700">
+              {executiveNarrative.body}
+            </div>
+            <div className="mt-3 text-sm text-slate-500">
+              {executiveNarrative.footer}
             </div>
 
-            {recentActions.length ? (
-              <div className="mt-5 space-y-3">
-                {recentActions.map((item) => (
-                  <div
-                    key={item.id}
-                    className="rounded-2xl border border-slate-200 p-4"
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">
-                          {item.title || item.actionType || "Completed action"}
-                        </div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {item.propertyName || "Property"} • {item.market || "Unknown market"}
-                        </div>
-                      </div>
-                      <div className="text-xs text-slate-400">
-                        {item.timestamp
-                          ? new Date(item.timestamp).toLocaleString()
-                          : "Recent"}
-                      </div>
-                    </div>
-
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {typeof item.daysAvoided === "number" ? (
-                        <Pill tone="emerald">Days avoided: {item.daysAvoided}</Pill>
-                      ) : null}
-                      {typeof item.vacancySavings === "number" ? (
-                        <Pill tone="blue">Vacancy saved: ${item.vacancySavings}</Pill>
-                      ) : null}
-                      {typeof item.responseMinutes === "number" ? (
-                        <Pill tone="amber">Response: {item.responseMinutes}m</Pill>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
+            <div className="mt-5 flex flex-wrap gap-2">
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                {kpis?.blockedTurns ?? enrichedProperties.filter((p) => p.turnStatus === "Blocked").length} blocked turns
               </div>
-            ) : (
-              <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                No recent actions logged yet.
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                {kpis?.highRisk ?? enrichedProperties.filter((p) => p.risk >= 75).length} high-risk turns
               </div>
-            )}
-          </Card>
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                {impactSummary.daysSaved} modeled days recoverable
+              </div>
+              <div className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs text-slate-700">
+                ${impactSummary.revenueRecovered.toLocaleString()} modeled upside
+              </div>
+            </div>
+          </div>
         </div>
 
         <div className="xl:col-span-4">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Quick Navigation</div>
+            <div className="text-xl font-semibold text-slate-900">Primary Bottleneck</div>
             <div className="mt-1 text-sm text-slate-500">
-              Jump straight into the operating surfaces that matter.
+              Where TurnIQ sees the most friction right now
             </div>
 
-            <div className="mt-5 space-y-3">
-              <button
-                onClick={() => setActiveTab?.("Dashboard")}
-                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
-              >
-                <div className="font-semibold text-slate-900">Dashboard</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Manage priorities, recommendations, and selected property controls.
+            {topStageBottleneck ? (
+              <div className="mt-5 space-y-4">
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-xs uppercase tracking-wide text-amber-700">Stage</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {topStageBottleneck.stage}
+                  </div>
                 </div>
-              </button>
 
-              <button
-                onClick={() => setActiveTab?.("Control Center")}
-                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
-              >
-                <div className="font-semibold text-slate-900">Control Center</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Edit stage, ECD, vendor assignments, and execution queue details.
-                </div>
-              </button>
+                <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Avg Days in Stage
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {topStageBottleneck.avgDaysInStage}
+                    </div>
+                  </div>
 
-              <button
-                onClick={() => setActiveTab?.("Forecast")}
-                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
-              >
-                <div className="font-semibold text-slate-900">Forecast</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Review modeled completion, confidence, and scenario simulation.
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">
+                      Blocked Turns
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold text-slate-900">
+                      {kpis?.blockedTurns ?? 0}
+                    </div>
+                  </div>
                 </div>
-              </button>
 
-              <button
-                onClick={() => setActiveTab?.("Import")}
-                className="block w-full rounded-2xl border border-slate-200 p-4 text-left hover:bg-slate-50"
-              >
-                <div className="font-semibold text-slate-900">Import</div>
+                <button
+                  onClick={() => setActiveTab("Control Center")}
+                  className="w-full rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                >
+                  Open Control Center
+                </button>
+              </div>
+            ) : (
+              <div className="mt-4 text-sm text-slate-500">
+                No dominant bottleneck identified.
+              </div>
+            )}
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-6">
+          <Card className="h-full">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Recommended Actions</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Upload, replace, append, or revert the active turn dataset.
+                  Highest-leverage interventions to reduce delay and exposure
                 </div>
+              </div>
+              <button
+                onClick={() => setActiveTab("Dashboard")}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                Open Dashboard
               </button>
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {actionSummary.length ? (
+                actionSummary.map((item) => (
+                  <div
+                    key={item.title}
+                    className={`rounded-2xl border p-4 ${
+                      item.tone === "red"
+                        ? "border-red-200 bg-red-50"
+                        : item.tone === "amber"
+                        ? "border-amber-200 bg-amber-50"
+                        : "border-blue-200 bg-blue-50"
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                    <div className="mt-2 text-sm text-slate-700">{item.body}</div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  No urgent action recommendations at the moment.
+                </div>
+              )}
+            </div>
+          </Card>
+        </div>
+
+        <div className="xl:col-span-6">
+          <Card className="h-full">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Outcome Summary</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  What Forecast suggests TurnIQ can unlock
+                </div>
+              </div>
+              <button
+                onClick={() => setActiveTab("Forecast")}
+                className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+              >
+                Open Forecast
+              </button>
+            </div>
+
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Delay Days Recoverable
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {impactSummary.daysSaved}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Modeled Revenue Recovered
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  ${impactSummary.revenueRecovered.toLocaleString()}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Optimized Delay
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {impactSummary.optimizedDelay}
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-slate-200 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Realized Vacancy Saved
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  ${impactSummary.realizedVacancySaved.toLocaleString()}
+                </div>
+              </div>
+            </div>
+          </Card>
+        </div>
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-7">
+          <Card className="h-full">
+            <div className="text-xl font-semibold text-slate-900">Market Snapshot</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Portfolio risk and delay by market
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {marketSummary.map((row) => (
+                <button
+                  key={row.market}
+                  onClick={() =>
+                    setSelectedMarket(selectedMarket === row.market ? "All Markets" : row.market)
+                  }
+                  className="block w-full text-left"
+                >
+                  <div
+                    className={`rounded-2xl border p-4 transition hover:border-blue-300 ${
+                      selectedMarket === row.market
+                        ? "border-blue-300 bg-blue-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-semibold text-slate-900">{row.market}</div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {row.turns} turns • {row.blocked} blocked • avg delay {row.avgDelay}d
+                        </div>
+                      </div>
+                      <Pill tone={getToneFromRisk(row.avgRisk)}>{row.avgRisk}</Pill>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </Card>
+        </div>
+
+        <div className="xl:col-span-5">
+          <Card className="h-full">
+            <div className="text-xl font-semibold text-slate-900">Recent Action Log</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Latest changes and completed interventions
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {recentActions.length ? (
+                recentActions.map((item) => (
+                  <div
+                    key={item.id}
+                    className="rounded-2xl border border-slate-200 bg-slate-50 p-4"
+                  >
+                    <div className="text-sm font-semibold text-slate-900">
+                      {item.title || item.actionType || "Action"}
+                    </div>
+                    <div className="mt-1 text-sm text-slate-600">
+                      {item.propertyName
+                        ? `${item.propertyName}${item.market ? ` • ${item.market}` : ""}`
+                        : "Portfolio activity"}
+                    </div>
+                    <div className="mt-2 text-xs text-slate-500">
+                      {item.daysAvoided ? `${item.daysAvoided} day(s) avoided • ` : ""}
+                      {item.vacancySavings
+                        ? `$${item.vacancySavings.toLocaleString()} protected`
+                        : "Tracked activity"}
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  No recent action history yet.
+                </div>
+              )}
             </div>
           </Card>
         </div>
