@@ -782,7 +782,7 @@ if (!hasHydrated) {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="sticky top-0 z-20 border-b border-slate-200 bg-slate-50/95 backdrop-blur">
+      <div className="sticky top-0 z-20 bg-slate-50/95 backdrop-blur">
         <div className="mx-auto max-w-7xl space-y-4 px-6 py-3">
           <AppHeader
             selectedMarket={selectedMarket}
@@ -872,11 +872,9 @@ if (!hasHydrated) {
         </div>
       </div>
 
-      <div className="border-b border-slate-200 bg-white">
-        <div className="mx-auto max-w-7xl px-6">
-          <TabNav tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
-        </div>
-      </div>
+      <div className="mx-auto max-w-7xl px-6 py-4">
+  <TabNav tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+</div>
 
       <div className="mx-auto max-w-7xl px-6 py-4">
         {activeTab === "Dashboard" && (
