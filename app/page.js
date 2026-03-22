@@ -281,6 +281,7 @@ export default function Page() {
   const [lastUploadedCount, setLastUploadedCount] = useState(0);
   const [lastSkippedCount, setLastSkippedCount] = useState(0);
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
+  const [mode, setMode] = useState("operator");
 
   useEffect(() => {
   if (!hasHydrated) return;
@@ -789,17 +790,43 @@ if (!hasHydrated) {
             markets={markets}
           />
 
-          <div className="flex items-center justify-between gap-3">
-            <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-              {activeDatasetLabel}
-            </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+  <div className="flex items-center gap-2">
+    <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+      {activeDatasetLabel}
+    </div>
 
-            {lastImportTimestamp ? (
-              <div className="text-xs text-slate-500">
-                Last import: {new Date(lastImportTimestamp).toLocaleString()}
-              </div>
-            ) : null}
-          </div>
+    <div className="flex items-center gap-2">
+      <button
+        onClick={() => setMode("operator")}
+        className={`rounded-xl px-3 py-2 text-xs ${
+          mode === "operator"
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        Operator
+      </button>
+
+      <button
+        onClick={() => setMode("presentation")}
+        className={`rounded-xl px-3 py-2 text-xs ${
+          mode === "presentation"
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        Presentation
+      </button>
+    </div>
+  </div>
+
+  {lastImportTimestamp ? (
+    <div className="text-xs text-slate-500">
+      Last import: {new Date(lastImportTimestamp).toLocaleString()}
+    </div>
+  ) : null}
+</div>
 
           <GlobalKpiStrip
             kpis={kpis}
@@ -854,6 +881,7 @@ if (!hasHydrated) {
       <div className="mx-auto max-w-7xl px-6 py-4">
         {activeTab === "Dashboard" && (
           <DashboardTab
+            mode={mode}
             properties={filteredProperties}
             selectedProperty={selectedProperty}
             setSelectedPropertyId={setSelectedPropertyId}
@@ -899,6 +927,7 @@ if (!hasHydrated) {
 
         {activeTab === "Forecast" && (
   <ForecastTab
+    mode={mode}
     selectedProperty={selectedProperty}
     properties={filteredProperties}
     setSelectedPropertyId={setSelectedPropertyId}
@@ -940,6 +969,7 @@ if (!hasHydrated) {
 
         {activeTab === "Overview" && (
           <OverviewTab
+    mode={mode}
     properties={filteredProperties}
     kpis={kpis}
     selectedMarket={selectedMarket}

@@ -150,7 +150,6 @@ function buildStageBottleneck(properties) {
   }));
 
   if (!rows.length) return null;
-
   return rows.sort((a, b) => b.avgDaysInStage - a.avgDaysInStage)[0];
 }
 
@@ -564,19 +563,40 @@ function buildImpactBanner(properties, actionHistory) {
   const totalDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
   const totalVacancySaved = completed.reduce((sum, a) => sum + (a.vacancySavings || 0), 0);
   const impactedTurns = new Set(completed.map((a) => a.propertyId)).size;
-  const blockedCount = properties.filter((p) => p.turnStatus === "Blocked").length;
   const readinessLift = completed.reduce((sum, a) => sum + Math.max(0, a.readinessDelta || 0), 0);
 
   return {
     totalDaysAvoided,
     totalVacancySaved,
     impactedTurns,
-    blockedCount,
     readinessLift,
   };
 }
 
+function buildPresentationNarrative({
+  properties,
+  forecastSummary,
+  revenueImpact,
+  topStageBottleneck,
+}) {
+  const highRiskCount = properties.filter((p) => p.risk >= 75).length;
+  const blockedCount = properties.filter((p) => p.turnStatus === "Blocked").length;
+
+  return [
+    `${highRiskCount} turns are currently driving the majority of portfolio risk.`,
+    topStageBottleneck
+      ? `${topStageBottleneck.stage} is the primary bottleneck, averaging ${topStageBottleneck.avgDaysInStage} days in stage.`
+      : "No single bottleneck is dominating the workflow.",
+    `The portfolio is carrying ${forecastSummary.totalDelay} modeled delay days and $${revenueImpact.atRisk.toLocaleString()} of revenue exposure.`,
+    `Executing the recommended actions should recover a meaningful portion of that exposure and improve readiness across the queue.`,
+    blockedCount > 0
+      ? `${blockedCount} blocked turns need immediate intervention.`
+      : "There are no blocked turns currently preventing execution flow.",
+  ];
+}
+
 export default function DashboardTab({
+  mode,
   properties,
   selectedProperty,
   setSelectedPropertyId,
@@ -621,6 +641,23 @@ export default function DashboardTab({
     [topStageBottleneck, properties]
   );
 
+  const forecastSummary = useMemo(() => {
+    const total = horizonProperties.length || 1;
+    const totalDelay = horizonProperties.reduce(
+      (sum, property) => sum + (property.forecastDaysLate || 0),
+      0
+    );
+    const avgForecastDelay = Number((totalDelay / total).toFixed(1));
+    const forecastLateCount = horizonProperties.filter((p) => p.forecastDaysLate >= 2).length;
+    const highDelayCount = horizonProperties.filter((p) => p.forecastDaysLate >= 4).length;
+    return {
+      avgForecastDelay,
+      forecastLateCount,
+      highDelayCount,
+      totalDelay,
+    };
+  }, [horizonProperties]);
+
   const callout = useMemo(
     () =>
       buildTurnIQCalloutV2({
@@ -657,6 +694,17 @@ export default function DashboardTab({
     [actionHistory]
   );
 
+  const presentationNarrative = useMemo(
+    () =>
+      buildPresentationNarrative({
+        properties: horizonProperties,
+        forecastSummary,
+        revenueImpact,
+        topStageBottleneck: derivedBottleneck,
+      }),
+    [horizonProperties, forecastSummary, revenueImpact, derivedBottleneck]
+  );
+
   const previewAction = actions.find((a) => a.id === previewActionId) || actions[0] || null;
 
   const activityFeed = useMemo(() => {
@@ -674,23 +722,6 @@ export default function DashboardTab({
 
     return [...activityEvents, ...noteEvents].reverse().slice(0, 8);
   }, [notes, activity]);
-
-  const forecastSummary = useMemo(() => {
-    const total = horizonProperties.length || 1;
-    const totalDelay = horizonProperties.reduce(
-      (sum, property) => sum + (property.forecastDaysLate || 0),
-      0
-    );
-    const avgForecastDelay = Number((totalDelay / total).toFixed(1));
-    const forecastLateCount = horizonProperties.filter((p) => p.forecastDaysLate >= 2).length;
-    const highDelayCount = horizonProperties.filter((p) => p.forecastDaysLate >= 4).length;
-    return {
-      avgForecastDelay,
-      forecastLateCount,
-      highDelayCount,
-      totalDelay,
-    };
-  }, [horizonProperties]);
 
   function logCompletedAction(target, action) {
     addActionHistory({
@@ -907,25 +938,31 @@ export default function DashboardTab({
         <div>
           <div className="text-3xl font-semibold text-slate-900">Dashboard</div>
           <div className="mt-1 text-sm text-slate-500">
-            Prioritize work, surface TurnIQ recommendations, and manage the portfolio from one control surface.
+            {mode === "presentation"
+              ? "Executive view of portfolio risk, revenue exposure, and recommended interventions."
+              : "Prioritize work, surface TurnIQ recommendations, and manage the portfolio from one control surface."}
           </div>
         </div>
 
-        <div className="flex flex-wrap gap-2">
-          {HORIZONS.map((item) => (
-            <button
-              key={item}
-              onClick={() => setHorizon(item)}
-              className={`rounded-xl px-4 py-2 text-sm ${
-                horizon === item
-                  ? "bg-slate-900 text-white"
-                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-              }`}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
+        {mode === "operator" ? (
+          <div className="flex flex-wrap gap-2">
+            {HORIZONS.map((item) => (
+              <button
+                key={item}
+                onClick={() => setHorizon(item)}
+                className={`rounded-xl px-4 py-2 text-sm ${
+                  horizon === item
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                }`}
+              >
+                {item}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <Pill tone="blue">{selectedMarket === "All Markets" ? "Portfolio View" : selectedMarket}</Pill>
+        )}
       </div>
 
       <div
@@ -989,6 +1026,22 @@ export default function DashboardTab({
 
           <div className="mt-4 text-xs text-slate-500">
             Estimates based on modeled delay, risk weighting, and assumed daily rent impact.
+          </div>
+        </div>
+      ) : null}
+
+      {mode === "presentation" ? (
+        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+            TurnIQ Narrative
+          </div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">
+            Where TurnIQ sees the opportunity
+          </div>
+          <div className="mt-4 space-y-2 text-sm leading-6 text-slate-700">
+            {presentationNarrative.map((line) => (
+              <div key={line}>• {line}</div>
+            ))}
           </div>
         </div>
       ) : null}
@@ -1064,37 +1117,43 @@ export default function DashboardTab({
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <div className="text-xl font-semibold text-slate-900">Recommended Actions</div>
+            <div className="text-xl font-semibold text-slate-900">
+              {mode === "presentation" ? "TurnIQ Recommended Interventions" : "Recommended Actions"}
+            </div>
             <div className="mt-1 text-sm text-slate-500">
-              AI-generated operator actions to reduce delay risk and keep turns moving.
+              {mode === "presentation"
+                ? "The highest-leverage actions to reduce delay and revenue exposure."
+                : "AI-generated operator actions to reduce delay risk and keep turns moving."}
             </div>
           </div>
           <Pill tone="blue">{actions.length} actions</Pill>
         </div>
 
-        <div className="mb-4 flex flex-wrap gap-2">
-          <button
-            onClick={handleBatchResolveBlocked}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-          >
-            Resolve all blocked
-          </button>
-          <button
-            onClick={handleBatchApproveScope}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-          >
-            Approve all scope reviews
-          </button>
-          <button
-            onClick={handleBatchAssignVendor}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
-          >
-            Assign all vendorless turns
-          </button>
-        </div>
+        {mode === "operator" ? (
+          <div className="mb-4 flex flex-wrap gap-2">
+            <button
+              onClick={handleBatchResolveBlocked}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Resolve all blocked
+            </button>
+            <button
+              onClick={handleBatchApproveScope}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Approve all scope reviews
+            </button>
+            <button
+              onClick={handleBatchAssignVendor}
+              className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Assign all vendorless turns
+            </button>
+          </div>
+        ) : null}
 
         <div className="grid gap-6 xl:grid-cols-12">
-          <div className="xl:col-span-8 space-y-3">
+          <div className={mode === "presentation" ? "xl:col-span-12 space-y-3" : "xl:col-span-8 space-y-3"}>
             {actions.map((action) => (
               <div
                 key={action.id}
@@ -1123,79 +1182,92 @@ export default function DashboardTab({
                 </div>
 
                 <div className="flex gap-2">
-                  <button
-                    onClick={() => handleActionResolve(action)}
-                    className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-                  >
-                    {getActionButtonLabel(action.type)}
-                  </button>
-                  <button
-                    onClick={() => handleActionView(action)}
-                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-                  >
-                    View
-                  </button>
+                  {mode === "operator" ? (
+                    <>
+                      <button
+                        onClick={() => handleActionResolve(action)}
+                        className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                      >
+                        {getActionButtonLabel(action.type)}
+                      </button>
+                      <button
+                        onClick={() => handleActionView(action)}
+                        className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                      >
+                        View
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => handleActionView(action)}
+                      className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                    >
+                      View driver
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
           </div>
 
-          <div className="xl:col-span-4">
-            <Card className="h-full bg-slate-50">
-              <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
-              <div className="mt-1 text-sm text-slate-500">
-                {previewAction
-                  ? `Projected impact for ${previewAction.propertyName}`
-                  : "Select an action to preview operator impact"}
-              </div>
-
-              {previewAction ? (
-                <div className="mt-5 space-y-4">
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Expected ECD Change
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {previewAction.simulation?.ecdDeltaDays < 0
-                        ? `${Math.abs(previewAction.simulation.ecdDeltaDays)} days faster`
-                        : `${previewAction.simulation?.ecdDeltaDays || 0} days`}
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Readiness Lift
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      +{previewAction.simulation?.readinessDelta || 0} pts
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Risk Reduction
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      {previewAction.simulation?.riskDelta || 0} pts
-                    </div>
-                  </div>
-
-                  <div className="rounded-2xl border border-slate-200 bg-white p-4">
-                    <div className="text-xs uppercase tracking-wide text-slate-500">
-                      Vacancy Savings
-                    </div>
-                    <div className="mt-2 text-2xl font-semibold text-slate-900">
-                      ${previewAction.simulation?.vacancySavings || 0}
-                    </div>
-                  </div>
+          {mode === "operator" ? (
+            <div className="xl:col-span-4">
+              <Card className="h-full bg-slate-50">
+                <div className="text-lg font-semibold text-slate-900">Simulation Preview</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  {previewAction
+                    ? `Projected impact for ${previewAction.propertyName}`
+                    : "Select an action to preview operator impact"}
                 </div>
-              ) : (
-                <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
-                  Open an action to preview projected outcome before execution.
-                </div>
-              )}
-            </Card>
-          </div>
+
+                {previewAction ? (
+                  <div className="mt-5 space-y-4">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Expected ECD Change
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {previewAction.simulation?.ecdDeltaDays < 0
+                          ? `${Math.abs(previewAction.simulation.ecdDeltaDays)} days faster`
+                          : `${previewAction.simulation?.ecdDeltaDays || 0} days`}
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Readiness Lift
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        +{previewAction.simulation?.readinessDelta || 0} pts
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Risk Reduction
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {previewAction.simulation?.riskDelta || 0} pts
+                      </div>
+                    </div>
+
+                    <div className="rounded-2xl border border-slate-200 bg-white p-4">
+                      <div className="text-xs uppercase tracking-wide text-slate-500">
+                        Vacancy Savings
+                      </div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        ${previewAction.simulation?.vacancySavings || 0}
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-5 rounded-2xl border border-dashed border-slate-200 bg-white p-6 text-sm text-slate-500">
+                    Open an action to preview projected outcome before execution.
+                  </div>
+                )}
+              </Card>
+            </div>
+          ) : null}
         </div>
       </Card>
 
@@ -1204,7 +1276,9 @@ export default function DashboardTab({
           <Card className="h-full">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
-                <div className="text-xl font-semibold text-slate-900">Priorities</div>
+                <div className="text-xl font-semibold text-slate-900">
+                  {mode === "presentation" ? "Priority Homes" : "Priorities"}
+                </div>
                 <div className="mt-1 text-sm text-slate-500">
                   Highest-urgency turns based on blockers, risk, and forecast pressure.
                 </div>
@@ -1283,382 +1357,388 @@ export default function DashboardTab({
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">TurnIQ Recommendations</div>
-            <div className="mt-1 text-sm text-slate-500">
-              AI recommendations based on blockers, approvals, readiness, and forecast variance.
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {recommendations.map((item, idx) => (
-                <div
-                  key={`${item.title}-${idx}`}
-                  className={`rounded-2xl border p-4 ${
-                    item.tone === "red"
-                      ? "border-red-200 bg-red-50"
-                      : item.tone === "amber"
-                      ? "border-amber-200 bg-amber-50"
-                      : item.tone === "emerald"
-                      ? "border-emerald-200 bg-emerald-50"
-                      : "border-blue-200 bg-blue-50"
-                  }`}
-                >
-                  <div className="text-sm font-semibold text-slate-900">{item.title}</div>
-                  <div className="mt-2 text-sm text-slate-700">{item.body}</div>
-
-                  {!!item.homes?.length && (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {item.homes.map((home) => (
-                        <button
-                          key={home.id}
-                          onClick={() => setSelectedPropertyId(home.id)}
-                          className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 hover:border-blue-300 hover:text-blue-700"
-                        >
-                          {home.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Selected Property</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Operator control panel for the selected home.
-            </div>
-
-            <div className="mt-4 flex items-start justify-between gap-4">
-              <div>
-                <div className="text-2xl font-semibold text-slate-900">
-                  {selectedProperty.name}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {selectedProperty.market} • Turn Owner: {selectedProperty.turnOwner} • Lease End:{" "}
-                  {selectedProperty.leaseEnd}
-                </div>
-                <div className="mt-2 text-sm font-medium text-slate-700">
-                  Stage: {selectedProperty.currentStage}
-                </div>
+      {mode === "operator" ? (
+        <div className="grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-6">
+            <Card className="h-full">
+              <div className="text-xl font-semibold text-slate-900">TurnIQ Recommendations</div>
+              <div className="mt-1 text-sm text-slate-500">
+                AI recommendations based on blockers, approvals, readiness, and forecast variance.
               </div>
 
-              <Pill tone={getToneFromRisk(selectedProperty.risk)}>
-                {selectedProperty.turnStatus}
-              </Pill>
-            </div>
+              <div className="mt-4 space-y-3">
+                {recommendations.map((item, idx) => (
+                  <div
+                    key={`${item.title}-${idx}`}
+                    className={`rounded-2xl border p-4 ${
+                      item.tone === "red"
+                        ? "border-red-200 bg-red-50"
+                        : item.tone === "amber"
+                        ? "border-amber-200 bg-amber-50"
+                        : item.tone === "emerald"
+                        ? "border-emerald-200 bg-emerald-50"
+                        : "border-blue-200 bg-blue-50"
+                    }`}
+                  >
+                    <div className="text-sm font-semibold text-slate-900">{item.title}</div>
+                    <div className="mt-2 text-sm text-slate-700">{item.body}</div>
 
-            <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Readiness</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {selectedProperty.readiness}/100
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Risk</div>
-                <div className="mt-2 text-3xl font-semibold text-slate-900">
-                  {selectedProperty.risk}/100
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">ECD</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {selectedProperty.projectedCompletion}
-                </div>
-              </div>
-
-              <div className="rounded-2xl border border-slate-200 p-4">
-                <div className="text-xs uppercase tracking-wide text-slate-500">Forecast</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {selectedForecast ? formatDate(selectedForecast.forecastCompletion) : "—"}
-                </div>
-              </div>
-            </div>
-
-            {selectedForecast ? (
-              <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="text-sm font-semibold text-slate-900">Forecast variance</div>
-                  <div className="flex items-center gap-2">
-                    <Pill
-                      tone={
-                        selectedForecast.forecastDaysLate >= 4
-                          ? "red"
-                          : selectedForecast.forecastDaysLate >= 2
-                          ? "amber"
-                          : "emerald"
-                      }
-                    >
-                      {selectedForecast.forecastDaysLate === 0
-                        ? "On time"
-                        : `+${selectedForecast.forecastDaysLate}d`}
-                    </Pill>
-                    <Pill tone={selectedConfidenceMeta.tone}>
-                      {selectedConfidenceMeta.label}
-                    </Pill>
-                  </div>
-                </div>
-                <div className="mt-2 text-sm text-slate-600">
-                  Confidence {selectedForecast.forecastConfidence}% • Forecasted completion{" "}
-                  {formatDate(selectedForecast.forecastCompletion)}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="mt-6">
-              <div className="mb-2 text-sm font-semibold text-slate-900">Operator Actions</div>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  onClick={handleResolveBlockers}
-                  className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
-                >
-                  Resolve Pending Blockers
-                </button>
-
-                <button
-                  onClick={handleApproveScope}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  Approve Scope
-                </button>
-
-                <button
-                  onClick={handleAssignVendor}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  Assign Vendor
-                </button>
-
-                <button
-                  onClick={handleStartTurn}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  Start Turn
-                </button>
-
-                <button
-                  onClick={handleCompleteTurn}
-                  className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
-                >
-                  Complete Turn
-                </button>
-              </div>
-            </div>
-
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-sm font-semibold text-slate-900">Performance Snapshot</div>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Completed</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">
-                    {performanceMetrics.totalCompleted}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Days Avoided</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">
-                    {performanceMetrics.totalDaysAvoided}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Saved</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">
-                    ${performanceMetrics.totalVacancySaved}
-                  </div>
-                </div>
-                <div>
-                  <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response</div>
-                  <div className="mt-1 text-xl font-semibold text-slate-900">
-                    {performanceMetrics.avgResponseMinutes}m
-                  </div>
-                </div>
-              </div>
-            </div>
-          </Card>
-        </div>
-      </div>
-
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-7">
-          <Card className="h-full">
-            <div className="font-semibold text-slate-900">AI Turn Timeline Prediction</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Confidence: {selectedProperty.timelineConfidence}%
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {selectedProperty.timeline.map((step) => (
-                <div
-                  key={step.key}
-                  className="grid grid-cols-[110px_1fr_70px] items-center gap-3 text-sm"
-                >
-                  <div className="text-slate-800">{step.label}</div>
-                  <ProgressBar
-                    value={step.progress}
-                    tone={
-                      step.progress >= 100
-                        ? "emerald"
-                        : step.progress > 0
-                        ? "blue"
-                        : "gray"
-                    }
-                  />
-                  <div className="text-slate-500">{step.date}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-5 space-y-6">
-          <Card>
-            <div className="font-semibold text-slate-900">Primary Blockers</div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {selectedProperty.blockers?.map((b) => (
-                <Pill key={b} tone="amber">
-                  {b}
-                </Pill>
-              ))}
-            </div>
-
-            <div className="mt-5">
-              <div className="mb-2 text-sm font-medium text-slate-900">Readiness Progress</div>
-              <ProgressBar
-                value={selectedProperty.readiness}
-                tone={getReadinessTone(selectedProperty.readiness)}
-              />
-            </div>
-          </Card>
-
-          <Card>
-            <div className="text-sm font-semibold uppercase tracking-wide text-blue-800">
-              TurnIQ Insight
-            </div>
-            <div className="mt-3 text-base text-slate-800">{selectedProperty.insight}</div>
-          </Card>
-        </div>
-      </div>
-
-      <div className="grid items-start gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-7">
-          <Card className="h-full">
-            <div className="mb-4 flex items-center justify-between gap-4">
-              <div className="text-lg font-semibold text-slate-900">Active Turn Queue</div>
-              <div className="text-sm text-slate-500">Click a property to update the panel</div>
-            </div>
-
-            <div className="max-h-[420px] overflow-y-auto">
-              <table className="min-w-full text-sm">
-                <thead className="border-b border-slate-100 text-left text-slate-500">
-                  <tr>
-                    <th className="px-3 py-2 font-medium">Property</th>
-                    <th className="px-3 py-2 font-medium">Market</th>
-                    <th className="px-3 py-2 font-medium">Risk</th>
-                    <th className="px-3 py-2 font-medium">Forecast</th>
-                    <th className="px-3 py-2 font-medium">Confidence</th>
-                    <th className="px-3 py-2 font-medium">Readiness</th>
-                    <th className="px-3 py-2 font-medium">Completion</th>
-                  </tr>
-                </thead>
-
-                <tbody>
-                  {horizonProperties.map((row) => {
-                    const meta = getConfidenceLabel(row.forecastConfidence);
-                    return (
-                      <tr
-                        key={row.id}
-                        className={`border-b border-slate-50 hover:bg-slate-50 ${
-                          row.id === selectedProperty.id ? "bg-slate-50" : ""
-                        }`}
-                      >
-                        <td className="px-3 py-3">
+                    {!!item.homes?.length && (
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        {item.homes.map((home) => (
                           <button
-                            onClick={() => setSelectedPropertyId(row.id)}
-                            className="text-blue-700 hover:underline"
+                            key={home.id}
+                            onClick={() => setSelectedPropertyId(home.id)}
+                            className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-700 hover:border-blue-300 hover:text-blue-700"
                           >
-                            {row.name}
+                            {home.name}
                           </button>
-                        </td>
-                        <td className="px-3 py-3">{row.market}</td>
-                        <td className="px-3 py-3">
-                          <Pill tone={getToneFromRisk(row.risk)}>{row.risk}</Pill>
-                        </td>
-                        <td className="px-3 py-3">
-                          <Pill
-                            tone={
-                              row.forecastDaysLate >= 4
-                                ? "red"
-                                : row.forecastDaysLate >= 2
-                                ? "amber"
-                                : "emerald"
-                            }
-                          >
-                            {row.forecastDaysLate === 0 ? "On time" : `+${row.forecastDaysLate}d`}
-                          </Pill>
-                        </td>
-                        <td className="px-3 py-3">
-                          <Pill tone={meta.tone}>{meta.label}</Pill>
-                        </td>
-                        <td className="w-[160px] px-3 py-3">
-                          <ProgressBar
-                            value={row.readiness}
-                            tone={getReadinessTone(row.readiness)}
-                          />
-                        </td>
-                        <td className="px-3 py-3">{row.projectedCompletion}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </Card>
-        </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
 
-        <div className="xl:col-span-5">
-          <Card>
-            <div className="mb-3 text-lg font-semibold text-slate-900">Activity Feed</div>
-            <div className="space-y-3">
-              {activityFeed.map((item) => (
-                <div
-                  key={item.id}
-                  className={`rounded-xl border p-4 ${
-                    item.type === "note"
-                      ? "border-blue-200 bg-blue-50"
-                      : "border-slate-200 bg-white"
-                  }`}
-                >
-                  <div className="text-sm text-slate-800">{item.text}</div>
+          <div className="xl:col-span-6">
+            <Card className="h-full">
+              <div className="text-xl font-semibold text-slate-900">Selected Property</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Operator control panel for the selected home.
+              </div>
+
+              <div className="mt-4 flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-2xl font-semibold text-slate-900">
+                    {selectedProperty.name}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    {selectedProperty.market} • Turn Owner: {selectedProperty.turnOwner} • Lease End:{" "}
+                    {selectedProperty.leaseEnd}
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-slate-700">
+                    Stage: {selectedProperty.currentStage}
+                  </div>
                 </div>
-              ))}
-            </div>
 
-            <div className="mt-4 flex gap-2">
-              <input
-                value={draftNote}
-                onChange={(e) => setDraftNote(e.target.value)}
-                placeholder="Leave a note"
-                className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
-              />
-              <button
-                onClick={handleAddNote}
-                className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-              >
-                Add
-              </button>
-            </div>
-          </Card>
+                <Pill tone={getToneFromRisk(selectedProperty.risk)}>
+                  {selectedProperty.turnStatus}
+                </Pill>
+              </div>
+
+              <div className="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Readiness</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {selectedProperty.readiness}/100
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Risk</div>
+                  <div className="mt-2 text-3xl font-semibold text-slate-900">
+                    {selectedProperty.risk}/100
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">ECD</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {selectedProperty.projectedCompletion}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-200 p-4">
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Forecast</div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {selectedForecast ? formatDate(selectedForecast.forecastCompletion) : "—"}
+                  </div>
+                </div>
+              </div>
+
+              {selectedForecast ? (
+                <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-slate-900">Forecast variance</div>
+                    <div className="flex items-center gap-2">
+                      <Pill
+                        tone={
+                          selectedForecast.forecastDaysLate >= 4
+                            ? "red"
+                            : selectedForecast.forecastDaysLate >= 2
+                            ? "amber"
+                            : "emerald"
+                        }
+                      >
+                        {selectedForecast.forecastDaysLate === 0
+                          ? "On time"
+                          : `+${selectedForecast.forecastDaysLate}d`}
+                      </Pill>
+                      <Pill tone={selectedConfidenceMeta.tone}>
+                        {selectedConfidenceMeta.label}
+                      </Pill>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-sm text-slate-600">
+                    Confidence {selectedForecast.forecastConfidence}% • Forecasted completion{" "}
+                    {formatDate(selectedForecast.forecastCompletion)}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-6">
+                <div className="mb-2 text-sm font-semibold text-slate-900">Operator Actions</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={handleResolveBlockers}
+                    className="rounded-xl bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700"
+                  >
+                    Resolve Pending Blockers
+                  </button>
+
+                  <button
+                    onClick={handleApproveScope}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    Approve Scope
+                  </button>
+
+                  <button
+                    onClick={handleAssignVendor}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    Assign Vendor
+                  </button>
+
+                  <button
+                    onClick={handleStartTurn}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    Start Turn
+                  </button>
+
+                  <button
+                    onClick={handleCompleteTurn}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm hover:bg-slate-50"
+                  >
+                    Complete Turn
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-sm font-semibold text-slate-900">Performance Snapshot</div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Completed</div>
+                    <div className="mt-1 text-xl font-semibold text-slate-900">
+                      {performanceMetrics.totalCompleted}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Days Avoided</div>
+                    <div className="mt-1 text-xl font-semibold text-slate-900">
+                      {performanceMetrics.totalDaysAvoided}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Saved</div>
+                    <div className="mt-1 text-xl font-semibold text-slate-900">
+                      ${performanceMetrics.totalVacancySaved}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response</div>
+                    <div className="mt-1 text-xl font-semibold text-slate-900">
+                      {performanceMetrics.avgResponseMinutes}m
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
         </div>
-      </div>
+      ) : null}
+
+      {mode === "operator" ? (
+        <div className="grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-7">
+            <Card className="h-full">
+              <div className="font-semibold text-slate-900">AI Turn Timeline Prediction</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Confidence: {selectedProperty.timelineConfidence}%
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {selectedProperty.timeline.map((step) => (
+                  <div
+                    key={step.key}
+                    className="grid grid-cols-[110px_1fr_70px] items-center gap-3 text-sm"
+                  >
+                    <div className="text-slate-800">{step.label}</div>
+                    <ProgressBar
+                      value={step.progress}
+                      tone={
+                        step.progress >= 100
+                          ? "emerald"
+                          : step.progress > 0
+                          ? "blue"
+                          : "gray"
+                      }
+                    />
+                    <div className="text-slate-500">{step.date}</div>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+
+          <div className="xl:col-span-5 space-y-6">
+            <Card>
+              <div className="font-semibold text-slate-900">Primary Blockers</div>
+
+              <div className="mt-3 flex flex-wrap gap-2">
+                {selectedProperty.blockers?.map((b) => (
+                  <Pill key={b} tone="amber">
+                    {b}
+                  </Pill>
+                ))}
+              </div>
+
+              <div className="mt-5">
+                <div className="mb-2 text-sm font-medium text-slate-900">Readiness Progress</div>
+                <ProgressBar
+                  value={selectedProperty.readiness}
+                  tone={getReadinessTone(selectedProperty.readiness)}
+                />
+              </div>
+            </Card>
+
+            <Card>
+              <div className="text-sm font-semibold uppercase tracking-wide text-blue-800">
+                TurnIQ Insight
+              </div>
+              <div className="mt-3 text-base text-slate-800">{selectedProperty.insight}</div>
+            </Card>
+          </div>
+        </div>
+      ) : null}
+
+      {mode === "operator" ? (
+        <div className="grid items-start gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-7">
+            <Card className="h-full">
+              <div className="mb-4 flex items-center justify-between gap-4">
+                <div className="text-lg font-semibold text-slate-900">Active Turn Queue</div>
+                <div className="text-sm text-slate-500">Click a property to update the panel</div>
+              </div>
+
+              <div className="max-h-[420px] overflow-y-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="border-b border-slate-100 text-left text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Property</th>
+                      <th className="px-3 py-2 font-medium">Market</th>
+                      <th className="px-3 py-2 font-medium">Risk</th>
+                      <th className="px-3 py-2 font-medium">Forecast</th>
+                      <th className="px-3 py-2 font-medium">Confidence</th>
+                      <th className="px-3 py-2 font-medium">Readiness</th>
+                      <th className="px-3 py-2 font-medium">Completion</th>
+                    </tr>
+                  </thead>
+
+                  <tbody>
+                    {horizonProperties.map((row) => {
+                      const meta = getConfidenceLabel(row.forecastConfidence);
+                      return (
+                        <tr
+                          key={row.id}
+                          className={`border-b border-slate-50 hover:bg-slate-50 ${
+                            row.id === selectedProperty.id ? "bg-slate-50" : ""
+                          }`}
+                        >
+                          <td className="px-3 py-3">
+                            <button
+                              onClick={() => setSelectedPropertyId(row.id)}
+                              className="text-blue-700 hover:underline"
+                            >
+                              {row.name}
+                            </button>
+                          </td>
+                          <td className="px-3 py-3">{row.market}</td>
+                          <td className="px-3 py-3">
+                            <Pill tone={getToneFromRisk(row.risk)}>{row.risk}</Pill>
+                          </td>
+                          <td className="px-3 py-3">
+                            <Pill
+                              tone={
+                                row.forecastDaysLate >= 4
+                                  ? "red"
+                                  : row.forecastDaysLate >= 2
+                                  ? "amber"
+                                  : "emerald"
+                              }
+                            >
+                              {row.forecastDaysLate === 0 ? "On time" : `+${row.forecastDaysLate}d`}
+                            </Pill>
+                          </td>
+                          <td className="px-3 py-3">
+                            <Pill tone={meta.tone}>{meta.label}</Pill>
+                          </td>
+                          <td className="w-[160px] px-3 py-3">
+                            <ProgressBar
+                              value={row.readiness}
+                              tone={getReadinessTone(row.readiness)}
+                            />
+                          </td>
+                          <td className="px-3 py-3">{row.projectedCompletion}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+
+          <div className="xl:col-span-5">
+            <Card>
+              <div className="mb-3 text-lg font-semibold text-slate-900">Activity Feed</div>
+              <div className="space-y-3">
+                {activityFeed.map((item) => (
+                  <div
+                    key={item.id}
+                    className={`rounded-xl border p-4 ${
+                      item.type === "note"
+                        ? "border-blue-200 bg-blue-50"
+                        : "border-slate-200 bg-white"
+                    }`}
+                  >
+                    <div className="text-sm text-slate-800">{item.text}</div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="mt-4 flex gap-2">
+                <input
+                  value={draftNote}
+                  onChange={(e) => setDraftNote(e.target.value)}
+                  placeholder="Leave a note"
+                  className="flex-1 rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                />
+                <button
+                  onClick={handleAddNote}
+                  className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+                >
+                  Add
+                </button>
+              </div>
+            </Card>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

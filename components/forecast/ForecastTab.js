@@ -383,6 +383,7 @@ function getTotalScenarioImpact(drivers = []) {
 }
 
 export default function ForecastTab({
+  mode,
   selectedProperty,
   properties,
   setSelectedPropertyId,
@@ -392,7 +393,7 @@ export default function ForecastTab({
   canUndoForecastAction,
   lastForecastUndoLabel,
 }) {
-  const [activeScenario, setActiveScenario] = useState("Base Case");
+  const [activeScenario, setActiveScenario] = useState("Optimized Case");
   const [fixAllMessage, setFixAllMessage] = useState("");
 
   const forecastRows = useMemo(
@@ -440,8 +441,7 @@ export default function ForecastTab({
     return {
       totalDelay,
       revenueProtected,
-      daysSaved:
-        summary.totalDelay - totalDelay,
+      daysSaved: summary.totalDelay - totalDelay,
     };
   }, [forecastRows, summary.totalDelay]);
 
@@ -567,6 +567,33 @@ export default function ForecastTab({
           </button>
         </div>
       </div>
+
+      {mode === "presentation" ? (
+        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
+          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-800">
+            Forecast Impact
+          </div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">
+            TurnIQ can recover {optimizedPortfolioSummary.daysSaved} delay days
+          </div>
+          <div className="mt-2 text-sm leading-6 text-slate-700">
+            Under the optimized scenario, the portfolio moves from {summary.totalDelay} modeled delay
+            days to {optimizedPortfolioSummary.totalDelay}. That represents approximately $
+            {optimizedPortfolioSummary.revenueProtected.toLocaleString()} of vacancy impact protected.
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
+              Base delay: {summary.totalDelay}d
+            </div>
+            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
+              Optimized delay: {optimizedPortfolioSummary.totalDelay}d
+            </div>
+            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
+              Revenue at risk: ${portfolioRevenueImpact.atRisk.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {canUndoForecastAction && lastForecastUndoLabel ? (
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
@@ -707,7 +734,7 @@ export default function ForecastTab({
                     </div>
                   </div>
 
-                  {scenario.name !== "Base Case" ? (
+                  {mode === "operator" && scenario.name !== "Base Case" ? (
                     <div className="mt-4">
                       <button
                         onClick={() => commitScenario(currentSelected, scenario.name)}
@@ -727,11 +754,15 @@ export default function ForecastTab({
           </Card>
 
           <div className="grid gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-8">
+            <div className={mode === "presentation" ? "xl:col-span-12" : "xl:col-span-8"}>
               <Card className="h-full">
-                <div className="text-xl font-semibold text-slate-900">Scenario Queue</div>
+                <div className="text-xl font-semibold text-slate-900">
+                  {mode === "presentation" ? "Portfolio Scenario Comparison" : "Scenario Queue"}
+                </div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Each row shows base case plus optimized and worst-case alternatives.
+                  {mode === "presentation"
+                    ? "Base, optimized, and downside scenarios across the portfolio."
+                    : "Each row shows base case plus optimized and worst-case alternatives."}
                 </div>
 
                 <div className="mt-5 overflow-x-auto">
@@ -743,7 +774,9 @@ export default function ForecastTab({
                         <th className="px-3 py-2 font-medium">Optimized</th>
                         <th className="px-3 py-2 font-medium">Worst</th>
                         <th className="px-3 py-2 font-medium">$ Protected</th>
-                        <th className="px-3 py-2 font-medium">Action</th>
+                        {mode === "operator" ? (
+                          <th className="px-3 py-2 font-medium">Action</th>
+                        ) : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -804,22 +837,24 @@ export default function ForecastTab({
                                 ${row.revenueProtected.toLocaleString()}
                               </td>
 
-                              <td className="px-3 py-3">
-                                <div className="flex flex-col gap-2">
-                                  <button
-                                    onClick={() => commitScenario(row, "Optimized Case")}
-                                    className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-white hover:bg-slate-800"
-                                  >
-                                    Commit optimized
-                                  </button>
-                                  <button
-                                    onClick={() => commitScenario(row, "Worst Case")}
-                                    className="rounded-xl border border-slate-200 px-3 py-2 text-xs hover:bg-slate-50"
-                                  >
-                                    Stress test
-                                  </button>
-                                </div>
-                              </td>
+                              {mode === "operator" ? (
+                                <td className="px-3 py-3">
+                                  <div className="flex flex-col gap-2">
+                                    <button
+                                      onClick={() => commitScenario(row, "Optimized Case")}
+                                      className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-white hover:bg-slate-800"
+                                    >
+                                      Commit optimized
+                                    </button>
+                                    <button
+                                      onClick={() => commitScenario(row, "Worst Case")}
+                                      className="rounded-xl border border-slate-200 px-3 py-2 text-xs hover:bg-slate-50"
+                                    >
+                                      Stress test
+                                    </button>
+                                  </div>
+                                </td>
+                              ) : null}
                             </tr>
                           );
                         })}
@@ -829,122 +864,136 @@ export default function ForecastTab({
               </Card>
             </div>
 
-            <div className="xl:col-span-4">
-              <Card className="h-full">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-xl font-semibold text-slate-900">
-                      {currentSelected.name}
+            {mode === "operator" ? (
+              <div className="xl:col-span-4">
+                <Card className="h-full">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <div className="text-xl font-semibold text-slate-900">
+                        {currentSelected.name}
+                      </div>
+                      <div className="mt-1 text-sm text-slate-500">
+                        {currentSelected.market} • {currentSelected.currentStage}
+                      </div>
                     </div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      {currentSelected.market} • {currentSelected.currentStage}
-                    </div>
+
+                    <Pill tone={confidenceMeta.tone}>
+                      {confidenceMeta.label}
+                    </Pill>
                   </div>
 
-                  <Pill tone={confidenceMeta.tone}>
-                    {confidenceMeta.label}
-                  </Pill>
-                </div>
+                  {activeScenarioResult ? (
+                    <>
+                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-500">
+                            Active Scenario
+                          </div>
+                          <div className="mt-2 text-lg font-semibold text-slate-900">
+                            {activeScenarioResult.name}
+                          </div>
+                        </div>
 
-                {activeScenarioResult ? (
-                  <>
-                    <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
-                          Active Scenario
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-500">
+                            Forecast Completion
+                          </div>
+                          <div className="mt-2 text-lg font-semibold text-slate-900">
+                            {formatDate(activeScenarioResult.forecastCompletion)}
+                          </div>
                         </div>
-                        <div className="mt-2 text-lg font-semibold text-slate-900">
-                          {activeScenarioResult.name}
+
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-500">
+                            Variance
+                          </div>
+                          <div className="mt-2">
+                            <Pill tone={activeScenarioResult.riskTone}>
+                              {formatVariance(activeScenarioResult.forecastDaysLate)}
+                            </Pill>
+                          </div>
+                        </div>
+
+                        <div className="rounded-2xl border border-slate-200 p-4">
+                          <div className="text-xs uppercase tracking-wide text-slate-500">
+                            Revenue Exposure
+                          </div>
+                          <div className="mt-2 text-lg font-semibold text-slate-900">
+                            ${activeScenarioResult.revenueImpact.toLocaleString()}
+                          </div>
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
-                          Forecast Completion
+                      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                        <div className="text-sm font-semibold text-slate-900">
+                          Recommended Action
                         </div>
-                        <div className="mt-2 text-lg font-semibold text-slate-900">
-                          {formatDate(activeScenarioResult.forecastCompletion)}
+                        <div className="mt-2 text-base text-slate-800">
+                          {currentSelected.recommendation.action}
                         </div>
-                      </div>
-
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
-                          Variance
+                        <div className="mt-2 text-sm text-slate-500">
+                          Why: {currentSelected.recommendation.why}
                         </div>
-                        <div className="mt-2">
-                          <Pill tone={activeScenarioResult.riskTone}>
-                            {formatVariance(activeScenarioResult.forecastDaysLate)}
-                          </Pill>
+                        <div className="mt-2 text-sm text-slate-600">
+                          Optimized scenario protects ~$
+                          {currentSelected.revenueProtected.toLocaleString()} and improves ECD by{" "}
+                          {currentSelected.daysSaved}d.
                         </div>
                       </div>
 
-                      <div className="rounded-2xl border border-slate-200 p-4">
-                        <div className="text-xs uppercase tracking-wide text-slate-500">
-                          Revenue Exposure
+                      <div className="mt-6">
+                        <div className="text-sm font-semibold text-slate-900">
+                          Delay Driver Breakdown
                         </div>
-                        <div className="mt-2 text-lg font-semibold text-slate-900">
-                          ${activeScenarioResult.revenueImpact.toLocaleString()}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                      <div className="text-sm font-semibold text-slate-900">
-                        Recommended Action
-                      </div>
-                      <div className="mt-2 text-base text-slate-800">
-                        {currentSelected.recommendation.action}
-                      </div>
-                      <div className="mt-2 text-sm text-slate-500">
-                        Why: {currentSelected.recommendation.why}
-                      </div>
-                      <div className="mt-2 text-sm text-slate-600">
-                        Optimized scenario protects ~$
-                        {currentSelected.revenueProtected.toLocaleString()} and improves ECD by{" "}
-                        {currentSelected.daysSaved}d.
-                      </div>
-                    </div>
-
-                    <div className="mt-6">
-                      <div className="text-sm font-semibold text-slate-900">
-                        Delay Driver Breakdown
-                      </div>
-                      <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
-                        <table className="min-w-full text-sm">
-                          <thead className="bg-slate-50 text-left text-slate-500">
-                            <tr>
-                              <th className="px-3 py-2 font-medium">Driver</th>
-                              <th className="px-3 py-2 font-medium">Impact</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {currentSelected.forecastDelayDrivers.map((driver) => (
-                              <tr
-                                key={`${driver.label}-${driver.days}`}
-                                className="border-t border-slate-100"
-                              >
-                                <td className="px-3 py-3 text-slate-700">{driver.label}</td>
-                                <td className="px-3 py-3 font-medium text-slate-900">
-                                  +{driver.days}d
+                        <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
+                          <table className="min-w-full text-sm">
+                            <thead className="bg-slate-50 text-left text-slate-500">
+                              <tr>
+                                <th className="px-3 py-2 font-medium">Driver</th>
+                                <th className="px-3 py-2 font-medium">Impact</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {currentSelected.forecastDelayDrivers.map((driver) => (
+                                <tr
+                                  key={`${driver.label}-${driver.days}`}
+                                  className="border-t border-slate-100"
+                                >
+                                  <td className="px-3 py-3 text-slate-700">{driver.label}</td>
+                                  <td className="px-3 py-3 font-medium text-slate-900">
+                                    +{driver.days}d
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="border-t border-slate-100 bg-slate-50">
+                                <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
+                                <td className="px-3 py-3 font-semibold text-slate-900">
+                                  +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
                                 </td>
                               </tr>
-                            ))}
-                            <tr className="border-t border-slate-100 bg-slate-50">
-                              <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
-                              <td className="px-3 py-3 font-semibold text-slate-900">
-                                +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
-                              </td>
-                            </tr>
-                          </tbody>
-                        </table>
+                            </tbody>
+                          </table>
+                        </div>
                       </div>
-                    </div>
-                  </>
-                ) : null}
-              </Card>
-            </div>
+                    </>
+                  ) : null}
+                </Card>
+              </div>
+            ) : null}
           </div>
         </>
+      ) : null}
+
+      {mode === "presentation" ? (
+        <Card>
+          <div className="text-xl font-semibold text-slate-900">TurnIQ Narrative</div>
+          <div className="mt-2 text-sm leading-6 text-slate-700">
+            The optimized scenario demonstrates how the portfolio can move from modeled slippage to
+            a tighter execution path by focusing on approvals, blockers, and vendor ownership. The
+            goal is not just better forecast accuracy — it is measurable reduction in delay days and
+            revenue exposure.
+          </div>
+        </Card>
       ) : null}
 
       <div className="grid gap-6 xl:grid-cols-12">
