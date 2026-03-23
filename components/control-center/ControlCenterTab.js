@@ -46,6 +46,7 @@ const SAVED_VIEWS = [
   "Pending Approvals",
   "Vendorless Turns",
   "Over SLA",
+  "Critical Priority",
 ];
 
 function formatDate(dateStr) {
@@ -65,14 +66,17 @@ function getPrimaryBlocker(row) {
 
 function getNextAction(row) {
   if (row.nextAction) return row.nextAction;
+
   const blocker = getPrimaryBlocker(row).toLowerCase();
 
   if (row.currentStage === "Owner Approval") return "Chase owner approval";
   if (blocker.includes("appliance")) return "Confirm appliance ETA";
   if (blocker.includes("vendor")) return "Confirm vendor schedule";
   if (blocker.includes("access")) return "Resolve blocker";
+  if (blocker.includes("trade")) return "Resolve blocker";
   if (!row.vendor || row.vendor === "TBD") return "Confirm vendor schedule";
   if (row.turnStatus === "Blocked") return "Resolve blocker";
+
   return "Prepare for dispatch";
 }
 
@@ -86,22 +90,28 @@ function isStale(row) {
   return (row.daysInStage || 0) >= 6 && row.turnStatus !== "Ready";
 }
 
+function getStageSla(stage) {
+  return STAGE_SLA[stage] || 3;
+}
+
 function isOverSla(row) {
-  const sla = STAGE_SLA[row.currentStage] || 3;
-  return (row.daysInStage || 0) > sla;
+  return (row.daysInStage || 0) > getStageSla(row.currentStage);
+}
+
+function getDaysOverSla(row) {
+  return Math.max(0, (row.daysInStage || 0) - getStageSla(row.currentStage));
 }
 
 function buildPriority(row) {
   let score = 0;
   const reasons = [];
-  const blocker = getPrimaryBlocker(row);
 
   if (row.turnStatus === "Blocked") {
     score += 40;
     reasons.push("Blocked");
   }
 
-  const daysOver = Math.max(0, (row.daysInStage || 0) - (row.stageSla || 0));
+  const daysOver = getDaysOverSla(row);
   if (daysOver > 0) {
     score += Math.min(25, daysOver * 5);
     reasons.push(`${daysOver}d over SLA`);
@@ -133,29 +143,76 @@ function buildPriority(row) {
     reasons.push("No vendor");
   }
 
+  const blocker = getPrimaryBlocker(row);
   if (blocker !== "None") {
     score += 6;
     reasons.push(blocker);
   }
 
+  let label = "Low";
+  let tone = "emerald";
+
   if (score >= 60) {
-    return { score, label: "Critical", tone: "red", whyNow: reasons.slice(0, 3).join(" + ") };
+    label = "Critical";
+    tone = "red";
+  } else if (score >= 35) {
+    label = "High";
+    tone = "amber";
+  } else if (score >= 18) {
+    label = "Medium";
+    tone = "blue";
   }
-  if (score >= 35) {
-    return { score, label: "High", tone: "amber", whyNow: reasons.slice(0, 3).join(" + ") };
+
+  return {
+    score,
+    label,
+    tone,
+    whyNow: reasons.slice(0, 4).join(" + ") || "Routine monitoring",
+  };
+}
+
+function buildImpact(row) {
+  let daysRecovered = 0;
+  let revenueRecovered = 0;
+
+  const daysOver = getDaysOverSla(row);
+
+  if (row.turnStatus === "Blocked") {
+    daysRecovered += 2;
+    revenueRecovered += 800;
   }
-  if (score >= 18) {
-    return { score, label: "Medium", tone: "blue", whyNow: reasons.slice(0, 3).join(" + ") };
+
+  if (row.currentStage === "Owner Approval") {
+    daysRecovered += 2;
+    revenueRecovered += 600;
   }
-  return { score, label: "Low", tone: "emerald", whyNow: reasons.slice(0, 2).join(" + ") || "Routine monitoring" };
+
+  if (daysOver > 0) {
+    daysRecovered += Math.min(4, daysOver);
+    revenueRecovered += daysOver * 250;
+  }
+
+  if ((row.risk || 0) >= 75) {
+    revenueRecovered += 500;
+  }
+
+  if (row.stale) {
+    daysRecovered += 1;
+    revenueRecovered += 250;
+  }
+
+  return {
+    daysRecovered,
+    revenueRecovered,
+  };
 }
 
 function buildEnrichedRows(rows) {
   return rows.map((row) => {
     const blocker = getPrimaryBlocker(row);
     const nextAction = getNextAction(row);
-    const stageSla = STAGE_SLA[row.currentStage] || 3;
-    const overdue = isOverSla({ ...row, stageSla });
+    const stageSla = getStageSla(row.currentStage);
+    const overdue = isOverSla(row);
     const stale = isStale(row);
 
     const base = {
@@ -175,6 +232,7 @@ function buildEnrichedRows(rows) {
     return {
       ...base,
       priority: buildPriority(base),
+      impact: buildImpact(base),
     };
   });
 }
@@ -204,7 +262,7 @@ function buildStageBuckets(rows) {
 
     const overdueCount = stageRows.filter((row) => row.overdue).length;
     const blockedCount = stageRows.filter((row) => row.turnStatus === "Blocked").length;
-    const sla = STAGE_SLA[stage] || 3;
+    const sla = getStageSla(stage);
 
     let tone = "emerald";
     if (overdueCount > 0) tone = "red";
@@ -247,6 +305,10 @@ function applySavedView(rows, queueFilter) {
     return rows.filter((row) => row.overdue);
   }
 
+  if (queueFilter === "Critical Priority") {
+    return rows.filter((row) => row.priority.label === "Critical");
+  }
+
   return rows;
 }
 
@@ -287,6 +349,7 @@ export default function ControlCenterTab({
   selectedPropertyId,
   setSelectedPropertyId,
   updateProperty,
+  applyForecastPatch,
 }) {
   const [draftNotes, setDraftNotes] = useState({});
 
@@ -308,15 +371,27 @@ export default function ControlCenterTab({
     const overdue = workingRows.filter((row) => row.overdue).length;
     const stale = workingRows.filter((row) => row.stale).length;
     const escalated = workingRows.filter((row) => row.escalationFlag).length;
+    const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
 
-    return { blocked, overdue, stale, escalated };
+    return { blocked, overdue, stale, escalated, critical };
   }, [workingRows]);
 
   const topActions = useMemo(() => {
-    return [...workingRows]
+    return [...enrichedRows]
       .sort((a, b) => b.priority.score - a.priority.score)
       .slice(0, 5);
-  }, [workingRows]);
+  }, [enrichedRows]);
+
+  const portfolioImpact = useMemo(() => {
+    return topActions.reduce(
+      (acc, row) => {
+        acc.daysRecovered += row.impact.daysRecovered;
+        acc.revenueRecovered += row.impact.revenueRecovered;
+        return acc;
+      },
+      { daysRecovered: 0, revenueRecovered: 0 }
+    );
+  }, [topActions]);
 
   function patchRow(id, patch) {
     updateProperty(id, patch);
@@ -359,24 +434,105 @@ export default function ControlCenterTab({
   }
 
   function handleResolve(id) {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+
+    const targetDays = Math.min(1, getStageSla(row.currentStage));
+
     patchRow(id, {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
       escalationFlag: false,
       nextAction: "Prepare for dispatch",
+      daysInStage: targetDays,
     });
+
+    if (applyForecastPatch) {
+      applyForecastPatch(
+        id,
+        {
+          daysInStage: targetDays,
+          risk: Math.max(35, row.risk - 10),
+        },
+        "Resolve control center issue"
+      );
+    }
   }
 
   function handleFlagReady(id) {
+    const row = rows.find((r) => r.id === id);
+    if (!row) return;
+
     patchRow(id, {
       turnStatus: "Ready",
       nextAction: "Ready for execution",
       escalationFlag: false,
+      daysInStage: 0,
     });
+
+    if (applyForecastPatch) {
+      applyForecastPatch(
+        id,
+        {
+          daysInStage: 0,
+          risk: Math.max(25, row.risk - 12),
+        },
+        "Mark ready from control center"
+      );
+    }
   }
 
   function handleOpenRow(id) {
     setSelectedPropertyId(id);
+  }
+
+  function handleApplyTopAction(row) {
+    const targetDays = Math.max(0, row.stageSla - 1);
+
+    if (row.turnStatus === "Blocked") {
+      handleResolve(row.id);
+      return;
+    }
+
+    if (row.currentStage === "Owner Approval") {
+      patchRow(row.id, {
+        currentStage: "Dispatch",
+        daysInStage: 0,
+        nextAction: "Confirm vendor schedule",
+        turnStatus: "Monitoring",
+        blockers: ["No active blockers"],
+      });
+
+      if (applyForecastPatch) {
+        applyForecastPatch(
+          row.id,
+          {
+            currentStage: "Dispatch",
+            daysInStage: 0,
+            risk: Math.max(35, row.risk - 8),
+          },
+          "Advance owner approval to dispatch"
+        );
+      }
+      return;
+    }
+
+    patchRow(row.id, {
+      daysInStage: targetDays,
+      turnStatus: "Monitoring",
+      nextAction: "Prepare for dispatch",
+    });
+
+    if (applyForecastPatch) {
+      applyForecastPatch(
+        row.id,
+        {
+          daysInStage: targetDays,
+          risk: Math.max(35, row.risk - 6),
+        },
+        "Apply top action from control center"
+      );
+    }
   }
 
   return (
@@ -426,6 +582,12 @@ export default function ControlCenterTab({
         </Card>
 
         <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Critical Priority</div>
+          <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.critical}</div>
+          <div className="mt-1 text-sm text-slate-500">Immediate attention required</div>
+        </Card>
+
+        <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Blocked</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.blocked}</div>
           <div className="mt-1 text-sm text-slate-500">Need direct intervention</div>
@@ -436,15 +598,32 @@ export default function ControlCenterTab({
           <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.overdue}</div>
           <div className="mt-1 text-sm text-slate-500">Problem-child turns surfacing</div>
         </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Escalated</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {queueSummary.escalated}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">Flagged for follow-up</div>
-        </Card>
       </div>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-xl font-semibold text-slate-900">Portfolio Impact (Top 5 Actions)</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Estimated value unlocked by executing the highest-priority actions.
+            </div>
+          </div>
+          <div className="flex gap-8">
+            <div>
+              <div className="text-3xl font-semibold text-slate-900">
+                {portfolioImpact.daysRecovered}
+              </div>
+              <div className="text-sm text-slate-500">Days recovered</div>
+            </div>
+            <div>
+              <div className="text-3xl font-semibold text-slate-900">
+                ${portfolioImpact.revenueRecovered.toLocaleString()}
+              </div>
+              <div className="text-sm text-slate-500">Revenue recovered</div>
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -510,7 +689,7 @@ export default function ControlCenterTab({
           <div>
             <div className="text-xl font-semibold text-slate-900">Top Actions Today</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI-ranked interventions based on risk, blockage, SLA drift, and execution friction.
+              AI-ranked interventions based on blockage, SLA drift, risk, and execution friction.
             </div>
           </div>
           <Pill tone="blue">{topActions.length} actions</Pill>
@@ -518,27 +697,37 @@ export default function ControlCenterTab({
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           {topActions.map((row) => (
-            <button
+            <div
               key={row.id}
-              onClick={() => handleOpenRow(row.id)}
-              className="text-left"
+              className="flex min-h-[300px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
             >
-              <div className="rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300">
-                <div className="flex items-start justify-between gap-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
                   <div className="font-medium text-slate-900">{row.name}</div>
-                  <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+                  <div className="mt-1 text-xs text-slate-500">
+                    {row.currentStage} • {row.market}
+                  </div>
                 </div>
-                <div className="mt-1 text-xs text-slate-500">
-                  {row.market} • {row.currentStage}
-                </div>
-                <div className="mt-3 text-sm font-medium text-slate-800">
-                  {row.nextAction}
-                </div>
-                <div className="mt-2 text-xs text-slate-500">
-                  {row.priority.whyNow}
-                </div>
+                <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
               </div>
-            </button>
+
+              <div className="mt-3 text-sm font-medium text-slate-900">
+                {row.nextAction}
+              </div>
+              <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
+              <div className="mt-3 text-sm text-slate-700">
+                +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
+              </div>
+
+              <div className="mt-auto pt-4">
+                <button
+                  onClick={() => handleApplyTopAction(row)}
+                  className="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
+                >
+                  Apply Action
+                </button>
+              </div>
+            </div>
           ))}
         </div>
       </Card>
