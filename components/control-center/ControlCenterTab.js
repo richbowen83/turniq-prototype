@@ -48,12 +48,6 @@ const SAVED_VIEWS = [
   "Over SLA",
 ];
 
-function getStageTone(overdueCount, avgDays, sla) {
-  if (overdueCount > 0) return "red";
-  if (avgDays > sla) return "amber";
-  return "emerald";
-}
-
 function formatDate(dateStr) {
   if (!dateStr) return "—";
   const date = new Date(dateStr);
@@ -97,25 +91,90 @@ function isOverSla(row) {
   return (row.daysInStage || 0) > sla;
 }
 
+function buildPriority(row) {
+  let score = 0;
+  const reasons = [];
+  const blocker = getPrimaryBlocker(row);
+
+  if (row.turnStatus === "Blocked") {
+    score += 40;
+    reasons.push("Blocked");
+  }
+
+  const daysOver = Math.max(0, (row.daysInStage || 0) - (row.stageSla || 0));
+  if (daysOver > 0) {
+    score += Math.min(25, daysOver * 5);
+    reasons.push(`${daysOver}d over SLA`);
+  }
+
+  if ((row.risk || 0) >= 85) {
+    score += 20;
+    reasons.push("Very high risk");
+  } else if ((row.risk || 0) >= 75) {
+    score += 14;
+    reasons.push("High risk");
+  } else if ((row.risk || 0) >= 60) {
+    score += 8;
+    reasons.push("Elevated risk");
+  }
+
+  if (row.currentStage === "Owner Approval") {
+    score += 12;
+    reasons.push("Pending approval");
+  }
+
+  if (row.stale) {
+    score += 10;
+    reasons.push("Stale");
+  }
+
+  if (!row.vendor || row.vendor === "TBD") {
+    score += 8;
+    reasons.push("No vendor");
+  }
+
+  if (blocker !== "None") {
+    score += 6;
+    reasons.push(blocker);
+  }
+
+  if (score >= 60) {
+    return { score, label: "Critical", tone: "red", whyNow: reasons.slice(0, 3).join(" + ") };
+  }
+  if (score >= 35) {
+    return { score, label: "High", tone: "amber", whyNow: reasons.slice(0, 3).join(" + ") };
+  }
+  if (score >= 18) {
+    return { score, label: "Medium", tone: "blue", whyNow: reasons.slice(0, 3).join(" + ") };
+  }
+  return { score, label: "Low", tone: "emerald", whyNow: reasons.slice(0, 2).join(" + ") || "Routine monitoring" };
+}
+
 function buildEnrichedRows(rows) {
   return rows.map((row) => {
     const blocker = getPrimaryBlocker(row);
     const nextAction = getNextAction(row);
-    const sla = STAGE_SLA[row.currentStage] || 3;
-    const overdue = (row.daysInStage || 0) > sla;
+    const stageSla = STAGE_SLA[row.currentStage] || 3;
+    const overdue = isOverSla({ ...row, stageSla });
+    const stale = isStale(row);
 
-    return {
+    const base = {
       ...row,
       blocker,
       nextAction,
       followUpDate: row.followUpDate || "",
       escalationFlag: row.escalationFlag || false,
-      stale: isStale(row),
+      stale,
       overdue,
-      stageSla: sla,
+      stageSla,
       systemLink:
         row.systemLink ||
         `https://pms.example/turns/${encodeURIComponent(row.id)}`,
+    };
+
+    return {
+      ...base,
+      priority: buildPriority(base),
     };
   });
 }
@@ -147,6 +206,10 @@ function buildStageBuckets(rows) {
     const blockedCount = stageRows.filter((row) => row.turnStatus === "Blocked").length;
     const sla = STAGE_SLA[stage] || 3;
 
+    let tone = "emerald";
+    if (overdueCount > 0) tone = "red";
+    else if (avgDays > sla) tone = "amber";
+
     return {
       stage,
       count,
@@ -154,7 +217,7 @@ function buildStageBuckets(rows) {
       overdueCount,
       blockedCount,
       sla,
-      tone: getStageTone(overdueCount, avgDays, sla),
+      tone,
     };
   });
 }
@@ -190,7 +253,9 @@ function applySavedView(rows, queueFilter) {
 function sortRows(rows, sortBy) {
   const sorted = [...rows];
 
-  if (sortBy === "Risk") {
+  if (sortBy === "Priority") {
+    sorted.sort((a, b) => b.priority.score - a.priority.score);
+  } else if (sortBy === "Risk") {
     sorted.sort((a, b) => b.risk - a.risk);
   } else if (sortBy === "Open Days") {
     sorted.sort((a, b) => b.openDays - a.openDays);
@@ -245,6 +310,12 @@ export default function ControlCenterTab({
     const escalated = workingRows.filter((row) => row.escalationFlag).length;
 
     return { blocked, overdue, stale, escalated };
+  }, [workingRows]);
+
+  const topActions = useMemo(() => {
+    return [...workingRows]
+      .sort((a, b) => b.priority.score - a.priority.score)
+      .slice(0, 5);
   }, [workingRows]);
 
   function patchRow(id, patch) {
@@ -434,6 +505,44 @@ export default function ControlCenterTab({
         </div>
       </Card>
 
+      <Card>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-xl font-semibold text-slate-900">Top Actions Today</div>
+            <div className="mt-1 text-sm text-slate-500">
+              AI-ranked interventions based on risk, blockage, SLA drift, and execution friction.
+            </div>
+          </div>
+          <Pill tone="blue">{topActions.length} actions</Pill>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+          {topActions.map((row) => (
+            <button
+              key={row.id}
+              onClick={() => handleOpenRow(row.id)}
+              className="text-left"
+            >
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 hover:border-slate-300">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="font-medium text-slate-900">{row.name}</div>
+                  <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">
+                  {row.market} • {row.currentStage}
+                </div>
+                <div className="mt-3 text-sm font-medium text-slate-800">
+                  {row.nextAction}
+                </div>
+                <div className="mt-2 text-xs text-slate-500">
+                  {row.priority.whyNow}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </Card>
+
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-9">
           <Card>
@@ -447,7 +556,7 @@ export default function ControlCenterTab({
 
               <div className="flex flex-wrap items-center gap-2">
                 <div className="text-sm text-slate-500">Sort by</div>
-                {["Risk", "Days in Stage", "Open Days", "ECD", "Stage"].map((option) => (
+                {["Priority", "Risk", "Days in Stage", "Open Days", "ECD", "Stage"].map((option) => (
                   <button
                     key={option}
                     onClick={() => setSortBy(option)}
@@ -464,10 +573,12 @@ export default function ControlCenterTab({
             </div>
 
             <div className="overflow-x-auto">
-              <table className="min-w-[1280px] text-sm">
+              <table className="min-w-[1460px] text-sm">
                 <thead className="bg-slate-50 text-left text-slate-500">
                   <tr>
                     <th className="px-3 py-2 font-medium">Turn</th>
+                    <th className="px-3 py-2 font-medium">Priority</th>
+                    <th className="px-3 py-2 font-medium">Why Now</th>
                     <th className="px-3 py-2 font-medium">Stage</th>
                     <th className="px-3 py-2 font-medium">Days</th>
                     <th className="px-3 py-2 font-medium">Owner</th>
@@ -486,7 +597,7 @@ export default function ControlCenterTab({
                       key={row.id}
                       className={`border-t border-slate-100 align-top leading-tight ${
                         row.id === selectedPropertyId ? "bg-slate-50" : ""
-                      } ${row.overdue ? "bg-red-50/40" : ""}`}
+                      } ${row.priority.label === "Critical" ? "bg-red-50/30" : ""}`}
                     >
                       <td className="px-3 py-3">
                         <button onClick={() => handleOpenRow(row.id)} className="text-left">
@@ -496,6 +607,19 @@ export default function ControlCenterTab({
                         </button>
                         <div className="mt-1 text-xs text-slate-500">
                           {row.market} • Risk {row.risk} • {row.turnStatus}
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-3">
+                        <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+                        <div className="mt-1 text-xs text-slate-500">
+                          Score {row.priority.score}
+                        </div>
+                      </td>
+
+                      <td className="px-3 py-3">
+                        <div className="w-[180px] text-sm text-slate-700">
+                          {row.priority.whyNow}
                         </div>
                       </td>
 
@@ -647,7 +771,7 @@ export default function ControlCenterTab({
 
                   {!workingRows.length ? (
                     <tr>
-                      <td colSpan={11} className="px-3 py-10 text-center text-sm text-slate-500">
+                      <td colSpan={13} className="px-3 py-10 text-center text-sm text-slate-500">
                         No turns match the current filters.
                       </td>
                     </tr>
@@ -704,7 +828,10 @@ export default function ControlCenterTab({
 
             <div className="mt-4 space-y-3">
               {operatorSummary.map((item) => (
-                <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
+                <div
+                  key={item.owner}
+                  className="rounded-2xl border border-slate-200 p-4"
+                >
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium text-slate-900">{item.owner}</div>

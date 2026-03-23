@@ -269,7 +269,7 @@ export default function Page() {
   const [actionHistory, setActionHistory] = useState(INITIAL_ACTION_HISTORY);
   const [queueFilter, setQueueFilter] = useState("All Open Turns");
   const [selectedStageFilter, setSelectedStageFilter] = useState(null);
-  const [sortBy, setSortBy] = useState("Days in Stage");
+  const [sortBy, setSortBy] = useState("Priority");
   const [dirtyRowIds, setDirtyRowIds] = useState([]);
   const [savedRowIds, setSavedRowIds] = useState([]);
   const [importedProperties, setImportedProperties] = useState([]);
