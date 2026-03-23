@@ -535,55 +535,6 @@ function applyForecastPatch(id, patch, label = "Forecast action") {
     ...prev.slice(0, 19),
   ]);
 }
-
-function applyForecastBatch(patches, label = "Forecast batch action") {
-  if (!patches?.length) return;
-
-  const { datasetType, rows } = getActiveDatasetInfo();
-  const patchMap = new Map(patches.map((item) => [item.id, item.patch]));
-
-  const beforeRows = rows
-    .filter((row) => patchMap.has(row.id))
-    .map((row) => ({
-      id: row.id,
-      before: row,
-    }));
-
-  if (!beforeRows.length) return;
-
-  const nextRows = rows.map((row) =>
-    patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
-  );
-
-  applyRowsToDataset(datasetType, nextRows);
-
-  setForecastUndoStack((prev) => [
-    {
-      id: `forecast-batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      kind: "batch",
-      label,
-      datasetType,
-      timestamp: new Date().toISOString(),
-      rows: beforeRows,
-    },
-    ...prev.slice(0, 19),
-  ]);
-}
-
-function undoLastForecastAction() {
-  if (!forecastUndoStack.length) return;
-
-  const [latest, ...rest] = forecastUndoStack;
-  const targetRows = latest.datasetType === "imported" ? importedProperties : properties;
-  const restoreMap = new Map(latest.rows.map((item) => [item.id, item.before]));
-
-  const restoredRows = targetRows.map((row) =>
-    restoreMap.has(row.id) ? restoreMap.get(row.id) : row
-  );
-
-  applyRowsToDataset(latest.datasetType, restoredRows);
-  setForecastUndoStack(rest);
-}
 function applyForecastBatch(patches, label = "Forecast batch action") {
   if (!patches?.length) return;
 
