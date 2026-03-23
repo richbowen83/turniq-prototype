@@ -316,6 +316,13 @@ export default function ControlCenterTab({
           <div className="mt-1 text-sm text-slate-500">
             Work the live turn pipeline directly from TurnIQ.
           </div>
+          <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+            <span className="flex items-center gap-1">
+              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+              Live
+            </span>
+            <span>Last updated: {new Date().toLocaleTimeString()}</span>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -501,8 +508,14 @@ export default function ControlCenterTab({
                         <Pill tone={row.overdue ? "red" : "blue"}>
                           {row.daysInStage || 0}d
                         </Pill>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {row.overdue ? "Over SLA" : "Within SLA"}
+                        <div className="mt-1 text-xs">
+                          {row.overdue ? (
+                            <span className="font-medium text-red-600">
+                              {row.daysInStage - row.stageSla}d over SLA
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">Within SLA</span>
+                          )}
                         </div>
                       </td>
 
@@ -529,17 +542,25 @@ export default function ControlCenterTab({
                       </td>
 
                       <td className="px-3 py-3">
-                        <select
-                          value={row.nextAction}
-                          onChange={(e) => handleNextActionChange(row.id, e.target.value)}
-                          className="w-[172px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
-                        >
-                          {NEXT_ACTION_OPTIONS.map((option) => (
-                            <option key={option} value={option}>
-                              {option}
-                            </option>
-                          ))}
-                        </select>
+                        <div className="space-y-1">
+                          <select
+                            value={row.nextAction}
+                            onChange={(e) => handleNextActionChange(row.id, e.target.value)}
+                            className="w-[172px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                          >
+                            {NEXT_ACTION_OPTIONS.map((option) => (
+                              <option key={option} value={option}>
+                                {option}
+                              </option>
+                            ))}
+                          </select>
+
+                          {(row.overdue || row.turnStatus === "Blocked") && (
+                            <div className="text-xs font-medium text-red-600">
+                              Action required
+                            </div>
+                          )}
+                        </div>
                       </td>
 
                       <td className="px-3 py-3">
@@ -683,10 +704,7 @@ export default function ControlCenterTab({
 
             <div className="mt-4 space-y-3">
               {operatorSummary.map((item) => (
-                <div
-                  key={item.owner}
-                  className="rounded-2xl border border-slate-200 p-4"
-                >
+                <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium text-slate-900">{item.owner}</div>
