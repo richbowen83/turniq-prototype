@@ -750,8 +750,8 @@ if (!hasHydrated) {
             markets={markets}
           />
 
-<div className="mt-4 max-w-lg text-sm text-slate-600">
-  TurnIQ is a control tower for turns operations, connecting to your PMS to turn fragmented data into a live workspace for faster turn execution.
+<div className="mt-5 max-w-3xl text-base text-slate-800">
+  TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
 </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
