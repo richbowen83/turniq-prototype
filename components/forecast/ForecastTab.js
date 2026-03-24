@@ -4,386 +4,249 @@ import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
-const DAILY_RENT_ASSUMPTION = 120;
-const SCENARIOS = ["Base Case", "Optimized Case", "Worst Case"];
+const MARKET_DAILY_RENT = {
+  Dallas: 92,
+  Phoenix: 88,
+  Atlanta: 81,
+  Nashville: 84,
+  Columbus: 78,
+  Cincinnati: 76,
+  Birmingham: 72,
+  Huntsville: 75,
+  Charleston: 86,
+};
 
-function toDate(value) {
-  const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? null : d;
-}
+function getDailyRentValue(row) {
+  if (typeof row.dailyRentValue === "number" && row.dailyRentValue > 0) {
+    return row.dailyRentValue;
+  }
 
-function addDays(dateStr, days) {
-  const d = toDate(dateStr);
-  if (!d) return "";
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  if (typeof row.monthlyRentValue === "number" && row.monthlyRentValue > 0) {
+    return Number((row.monthlyRentValue / 30).toFixed(2));
+  }
+
+  return MARKET_DAILY_RENT[row.market] || 80;
 }
 
 function formatDate(dateStr) {
-  const d = toDate(dateStr);
-  if (!d) return "—";
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  if (!dateStr) return "—";
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return "—";
+  return date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
 }
 
-function getRiskDelay(risk) {
-  if (risk >= 85) return 4;
-  if (risk >= 75) return 3;
-  if (risk >= 65) return 2;
-  if (risk >= 55) return 1;
-  return 0;
+function addDays(dateStr, days) {
+  const date = new Date(dateStr);
+  if (Number.isNaN(date.getTime())) return "—";
+  date.setDate(date.getDate() + days);
+  return formatDate(date.toISOString());
 }
 
-function getStageDelay(stage) {
-  if (stage === "Owner Approval") return 3;
-  if (stage === "Dispatch") return 2;
-  if (stage === "Scope Review") return 2;
-  if (stage === "Move Out Inspection") return 1;
-  return 0;
+function scenarioTone(name) {
+  if (name === "Optimized Case") return "emerald";
+  if (name === "Worst Case") return "red";
+  return "blue";
 }
 
-function getBlockerSeverity(blocker) {
-  const b = String(blocker || "").toLowerCase();
-  if (
-    b.includes("approval") ||
-    b.includes("access") ||
-    b.includes("hvac") ||
-    b.includes("inspection")
-  ) {
-    return 2;
-  }
-  return 1;
-}
-
-function getLiveBlockers(blockers = []) {
-  return blockers.filter(
-    (b) => b && b !== "No active blockers" && b !== "No major blockers"
-  );
-}
-
-function getConfidenceLabel(score) {
-  if (score >= 85) return { label: "High", tone: "emerald" };
-  if (score >= 70) return { label: "Moderate", tone: "amber" };
-  return { label: "Low", tone: "red" };
-}
-
-function formatVariance(days) {
-  if (days === 0) return "On time";
-  return `+${days}d`;
-}
-
-function varianceTone(days) {
-  if (days >= 4) return "red";
-  if (days >= 2) return "amber";
+function severityTone(severity) {
+  if (severity === "High") return "red";
+  if (severity === "Moderate") return "amber";
   return "emerald";
 }
 
-function calculateRevenueImpact(properties) {
-  let atRisk = 0;
-  let recoverable = 0;
+function getScenarioDelay(row, scenario) {
+  const base = row.daysInStage || 0;
 
-  properties.forEach((p) => {
-    const delayDays = typeof p.forecastDaysLate === "number" ? p.forecastDaysLate : 0;
-    const riskWeight = (p.risk || 0) / 100;
-    const exposure = delayDays * DAILY_RENT_ASSUMPTION;
+  if (scenario === "Base Case") return base;
 
-    atRisk += exposure * Math.max(0.25, riskWeight);
-    recoverable += exposure * Math.max(0, 1 - riskWeight * 0.5);
-  });
+  if (scenario === "Optimized Case") {
+    if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
+      return Math.max(0, base - 3);
+    }
+    if (row.turnStatus === "Blocked") {
+      return Math.max(0, base - 2);
+    }
+    if ((row.risk || 0) >= 75) {
+      return Math.max(0, base - 2);
+    }
+    return Math.max(0, base - 1);
+  }
 
-  return {
-    atRisk: Math.round(atRisk),
-    recoverable: Math.round(recoverable),
-  };
+  if (scenario === "Worst Case") {
+    if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
+      return base + 5;
+    }
+    if (row.turnStatus === "Blocked") {
+      return base + 4;
+    }
+    if ((row.risk || 0) >= 75) {
+      return base + 4;
+    }
+    return base + 3;
+  }
+
+  return base;
 }
 
-function buildForecast(property) {
-  const blockers = getLiveBlockers(property.blockers);
-  const riskDelay = getRiskDelay(property.risk);
-  const stageDelay = getStageDelay(property.currentStage);
-  const blockerDelay = blockers.reduce((sum, blocker) => sum + getBlockerSeverity(blocker), 0);
-  const forecastDaysLate = riskDelay + stageDelay + blockerDelay;
-  const forecastCompletion = addDays(property.projectedCompletion, forecastDaysLate);
-  const forecastConfidence =
-    typeof property.timelineConfidence === "number"
-      ? property.timelineConfidence
-      : Math.max(
-          40,
-          Math.min(95, Math.round(100 - property.risk * 0.5 - blockers.length * 5))
-        );
+function getScenarioConfidence(row, scenario) {
+  const base = row.timelineConfidence || 80;
 
-  const forecastRiskBand =
-    forecastDaysLate >= 4
-      ? { label: "High Delay Risk", tone: "red" }
-      : forecastDaysLate >= 2
-      ? { label: "Watch", tone: "amber" }
-      : { label: "On Track", tone: "emerald" };
+  if (scenario === "Base Case") return Math.min(99, Math.max(35, base));
+  if (scenario === "Optimized Case") return Math.min(99, Math.max(35, base + 8));
+  if (scenario === "Worst Case") return Math.min(99, Math.max(35, base - 12));
 
-  const forecastDelayDrivers = [
-    ...(riskDelay > 0 ? [{ label: `Risk score pressure (${property.risk})`, days: riskDelay }] : []),
-    ...(stageDelay > 0 ? [{ label: `${property.currentStage} stage pressure`, days: stageDelay }] : []),
-    ...blockers.map((blocker) => ({
-      label: blocker,
-      days: getBlockerSeverity(blocker),
-    })),
-  ];
-
-  return {
-    forecastCompletion,
-    forecastDaysLate,
-    forecastConfidence,
-    forecastRiskBand,
-    forecastDelayDrivers:
-      forecastDelayDrivers.length > 0
-        ? forecastDelayDrivers
-        : [{ label: "Standard execution variability", days: 0 }],
-  };
+  return base;
 }
 
-function buildForecastRange(property) {
-  const base = toDate(property.projectedCompletion);
-  if (!base) {
-    return {
-      bestCaseDate: "",
-      expectedDate: "",
-      worstCaseDate: "",
-      spread: 0,
-    };
-  }
-
-  const blockers = getLiveBlockers(property.blockers);
-  const uncertaintyDays = Math.max(
-    1,
-    Math.round(property.risk / 35) + Math.min(3, blockers.length)
-  );
-
-  const best = new Date(base);
-  best.setDate(best.getDate() - 1);
-
-  const worst = new Date(base);
-  worst.setDate(worst.getDate() + uncertaintyDays);
-
-  return {
-    bestCaseDate: best.toISOString().slice(0, 10),
-    expectedDate: base.toISOString().slice(0, 10),
-    worstCaseDate: worst.toISOString().slice(0, 10),
-    spread: uncertaintyDays + 1,
-  };
+function getScenarioExposure(row, delayDays) {
+  return Math.round(getDailyRentValue(row) * delayDays);
 }
 
-function getRecommendedAction(property) {
-  const blockers = getLiveBlockers(property.blockers);
+function buildDelayDrivers(row) {
+  const sourceDrivers =
+    Array.isArray(row.delayDrivers) && row.delayDrivers.length
+      ? row.delayDrivers
+      : [];
 
-  if (blockers.some((b) => b.toLowerCase().includes("approval"))) {
-    return {
-      action: "Expedite owner approval",
-      impact: 2,
-      type: "approval",
-      why: "Approval lag is stalling dispatch and extending modeled vacancy.",
-    };
+  if (sourceDrivers.length) {
+    return sourceDrivers.map((driver) => ({
+      label: driver.label,
+      days: driver.days || 0,
+    }));
   }
 
-  if (blockers.some((b) => b.toLowerCase().includes("appliance"))) {
-    return {
-      action: "Switch / expedite appliance vendor",
-      impact: 2,
-      type: "appliance",
-      why: "Appliance timing is materially influencing expected completion.",
-    };
-  }
+  const derived = [];
+  if (row.turnStatus === "Blocked") derived.push({ label: "Blocked workflow", days: 2 });
+  if (row.currentStage === "Owner Approval")
+    derived.push({ label: "Owner approval delay", days: 2 });
+  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance")))
+    derived.push({ label: "Appliance ETA", days: 1 });
+  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("trade")))
+    derived.push({ label: "Trade coordination", days: 1 });
+  if ((row.risk || 0) >= 75) derived.push({ label: "Execution risk buffer", days: 1 });
 
-  if (blockers.some((b) => b.toLowerCase().includes("inspection"))) {
-    return {
-      action: "Pre-clear inspection issues",
-      impact: 1,
-      type: "inspection",
-      why: "Inspection failure risk is adding avoidable delay variance.",
-    };
-  }
-
-  if (!property.vendor || property.vendor === "TBD") {
-    return {
-      action: "Assign execution vendor",
-      impact: 2,
-      type: "vendor",
-      why: "Clear vendor ownership improves execution certainty and dispatch timing.",
-    };
-  }
-
-  if (property.currentStage === "Dispatch") {
-    return {
-      action: "Re-sequence vendor scheduling",
-      impact: 1,
-      type: "dispatch",
-      why: "Dispatch-stage coordination can compress the active work window.",
-    };
-  }
-
-  if (blockers.some((b) => b.toLowerCase().includes("access"))) {
-    return {
-      action: "Resolve access / lockbox issue",
-      impact: 2,
-      type: "access",
-      why: "Access issues create hard stoppages and immediate lost days.",
-    };
-  }
-
-  return {
-    action: "Monitor",
-    impact: 0,
-    type: "monitor",
-    why: "No high-leverage intervention is currently required.",
-  };
+  return derived.length ? derived : [{ label: "Routine variance", days: 1 }];
 }
 
-function buildDecisionForecast(property) {
-  const forecast = buildForecast(property);
-  const range = buildForecastRange(property);
-  const recommendation = getRecommendedAction(property);
-  const improvedDelay = Math.max(0, forecast.forecastDaysLate - recommendation.impact);
-  const improvedCompletion = addDays(property.projectedCompletion, improvedDelay);
-  const daysSaved = forecast.forecastDaysLate - improvedDelay;
-  const revenueProtected = daysSaved * DAILY_RENT_ASSUMPTION;
+function buildScenarioModel(row) {
+  const baseDelay = getScenarioDelay(row, "Base Case");
+  const optimizedDelay = getScenarioDelay(row, "Optimized Case");
+  const worstDelay = getScenarioDelay(row, "Worst Case");
 
-  return {
-    ...forecast,
-    ...range,
-    recommendation,
-    improvedDelay,
-    improvedCompletion,
-    daysSaved,
-    revenueProtected,
-  };
-}
-
-function buildPortfolioForecast(properties) {
-  const rows = properties.map((p) => {
-    const forecast = buildForecast(p);
-    return { ...p, ...forecast };
-  });
-
-  const totalDelay = rows.reduce((sum, row) => sum + (row.forecastDaysLate || 0), 0);
-  const avgDelay = Number((totalDelay / (rows.length || 1)).toFixed(1));
-  const avgConfidence = Math.round(
-    rows.reduce((sum, row) => sum + (row.forecastConfidence || 0), 0) / (rows.length || 1)
-  );
-
-  return {
-    totalDelay,
-    avgDelay,
-    avgConfidence,
-    onTrack: rows.filter((row) => row.forecastDaysLate <= 1).length,
-    delayed: rows.filter((row) => row.forecastDaysLate >= 2).length,
-  };
-}
-
-function buildScenarioForecast(row, scenarioName) {
-  const baseDelay = row.forecastDaysLate || 0;
-
-  if (scenarioName === "Optimized Case") {
-    const nextDelay = Math.max(0, baseDelay - Math.max(1, row.recommendation?.impact || 0) - 1);
-    return {
-      name: scenarioName,
-      forecastDaysLate: nextDelay,
-      forecastCompletion: addDays(row.projectedCompletion, nextDelay),
-      confidence: Math.min(95, (row.forecastConfidence || 75) + 8),
-      revenueImpact: nextDelay * DAILY_RENT_ASSUMPTION,
-      riskTone: varianceTone(nextDelay),
-      daysDeltaVsBase: baseDelay - nextDelay,
-    };
-  }
-
-  if (scenarioName === "Worst Case") {
-    const blockerPenalty = Math.max(1, getLiveBlockers(row.blockers).length);
-    const nextDelay = baseDelay + blockerPenalty + 2;
-    return {
-      name: scenarioName,
-      forecastDaysLate: nextDelay,
-      forecastCompletion: addDays(row.projectedCompletion, nextDelay),
-      confidence: Math.max(45, (row.forecastConfidence || 75) - 12),
-      revenueImpact: nextDelay * DAILY_RENT_ASSUMPTION,
-      riskTone: varianceTone(nextDelay),
-      daysDeltaVsBase: baseDelay - nextDelay,
-    };
-  }
-
-  return {
+  const base = {
     name: "Base Case",
-    forecastDaysLate: baseDelay,
-    forecastCompletion: row.forecastCompletion,
-    confidence: row.forecastConfidence,
-    revenueImpact: baseDelay * DAILY_RENT_ASSUMPTION,
-    riskTone: varianceTone(baseDelay),
-    daysDeltaVsBase: 0,
+    delayDays: baseDelay,
+    completion: addDays(row.projectedCompletion, baseDelay),
+    confidence: getScenarioConfidence(row, "Base Case"),
+    exposure: getScenarioExposure(row, baseDelay),
+  };
+
+  const optimized = {
+    name: "Optimized Case",
+    delayDays: optimizedDelay,
+    completion: addDays(row.projectedCompletion, optimizedDelay),
+    confidence: getScenarioConfidence(row, "Optimized Case"),
+    exposure: getScenarioExposure(row, optimizedDelay),
+  };
+
+  const worst = {
+    name: "Worst Case",
+    delayDays: worstDelay,
+    completion: addDays(row.projectedCompletion, worstDelay),
+    confidence: getScenarioConfidence(row, "Worst Case"),
+    exposure: getScenarioExposure(row, worstDelay),
+  };
+
+  const delayDrivers = buildDelayDrivers(row);
+
+  return {
+    base,
+    optimized,
+    worst,
+    delayDrivers,
+    protectedRevenue: Math.max(0, base.exposure - optimized.exposure),
+    daysSaved: Math.max(0, base.delayDays - optimized.delayDays),
   };
 }
 
-function getAppliedPatch(property, recommendation, scenarioName) {
-  const currentBlockers = property.blockers || [];
-  let blockers = currentBlockers;
-  let vendor = property.vendor;
-  let currentStage = property.currentStage;
-  let readinessDelta = 4;
+function buildPortfolioSummary(properties) {
+  const models = properties.map(buildScenarioModel);
 
-  if (scenarioName === "Worst Case") {
+  const baseDelay = models.reduce((sum, model) => sum + model.base.delayDays, 0);
+  const optimizedDelay = models.reduce((sum, model) => sum + model.optimized.delayDays, 0);
+  const daysSaved = Math.max(0, baseDelay - optimizedDelay);
+  const avgConfidence = properties.length
+    ? Math.round(models.reduce((sum, model) => sum + model.optimized.confidence, 0) / properties.length)
+    : 0;
+  const revenueAtRisk = models.reduce((sum, model) => sum + model.base.exposure, 0);
+  const protectedRevenue = models.reduce((sum, model) => sum + model.protectedRevenue, 0);
+
+  return {
+    baseDelay,
+    optimizedDelay,
+    daysSaved,
+    avgConfidence,
+    revenueAtRisk,
+    protectedRevenue,
+  };
+}
+
+function buildScenarioQueue(properties) {
+  return properties
+    .map((row) => {
+      const scenario = buildScenarioModel(row);
+      return {
+        ...row,
+        scenario,
+        protectedRevenue: scenario.protectedRevenue,
+      };
+    })
+    .sort((a, b) => b.protectedRevenue - a.protectedRevenue);
+}
+
+function getRecommendation(row, scenario) {
+  if (!row) return null;
+
+  if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
     return {
-      blockers: getLiveBlockers(currentBlockers).length
-        ? currentBlockers
-        : ["Access issue", "Inspection fail likelihood"],
-      vendor,
-      currentStage,
-      readinessDelta: -6,
-      scenario: "worst",
+      title: "Escalate owner approval and remove blocker",
+      why: "Owner approval delay is materially extending the modeled completion timeline.",
+      outcome: `Optimized case protects ~$${scenario.protectedRevenue.toLocaleString()} and improves ECD by ${scenario.daysSaved}d.`,
+      severity: "High",
     };
   }
 
-  if (recommendation.type === "approval") {
-    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("approval"));
-    currentStage = property.currentStage === "Owner Approval" ? "Dispatch" : property.currentStage;
-    readinessDelta = 6;
-  } else if (recommendation.type === "appliance") {
-    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("appliance"));
-    readinessDelta = 6;
-  } else if (recommendation.type === "inspection") {
-    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("inspection"));
-    readinessDelta = 5;
-  } else if (recommendation.type === "vendor") {
-    vendor =
-      property.vendor && property.vendor !== "TBD"
-        ? property.vendor
-        : property.market === "Dallas"
-        ? "FloorCo"
-        : property.market === "Atlanta"
-        ? "ABC Paint"
-        : property.market === "Phoenix"
-        ? "Prime Paint"
-        : "Sparkle";
-    readinessDelta = 7;
-  } else if (recommendation.type === "dispatch") {
-    readinessDelta = 4;
-  } else if (recommendation.type === "access") {
-    blockers = currentBlockers.filter((b) => !String(b).toLowerCase().includes("access"));
-    readinessDelta = 6;
+  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance"))) {
+    return {
+      title: "Switch or expedite appliance vendor",
+      why: "Appliance timing is driving forecasted slippage and revenue exposure.",
+      outcome: `Optimized case protects ~$${scenario.protectedRevenue.toLocaleString()} and improves ECD by ${scenario.daysSaved}d.`,
+      severity: "Moderate",
+    };
   }
 
-  if (!getLiveBlockers(blockers).length) {
-    blockers = ["No active blockers"];
+  if ((row.risk || 0) >= 75) {
+    return {
+      title: "Compress stage time with operator intervention",
+      why: "Risk and delay profile suggest a widening gap between base and optimized outcomes.",
+      outcome: `Optimized case protects ~$${scenario.protectedRevenue.toLocaleString()} and improves ECD by ${scenario.daysSaved}d.`,
+      severity: "Moderate",
+    };
   }
 
   return {
-    blockers,
-    vendor,
-    currentStage,
-    readinessDelta,
-    scenario: "optimized",
+    title: "Maintain active monitoring",
+    why: "Trajectory is manageable, but light intervention still improves confidence and timing.",
+    outcome: `Optimized case protects ~$${scenario.protectedRevenue.toLocaleString()} and improves ECD by ${scenario.daysSaved}d.`,
+    severity: "Low",
   };
-}
-
-function getTotalScenarioImpact(drivers = []) {
-  return drivers.reduce((sum, d) => sum + (d.days || 0), 0);
 }
 
 export default function ForecastTab({
-  mode,
+  mode = "operator",
   selectedProperty,
   properties,
   setSelectedPropertyId,
@@ -394,154 +257,102 @@ export default function ForecastTab({
   lastForecastUndoLabel,
 }) {
   const [activeScenario, setActiveScenario] = useState("Optimized Case");
-  const [fixAllMessage, setFixAllMessage] = useState("");
 
-  const forecastRows = useMemo(
-    () =>
-      properties.map((property) => ({
-        ...property,
-        ...buildDecisionForecast(property),
-      })),
-    [properties]
+  const portfolio = useMemo(() => buildPortfolioSummary(properties), [properties]);
+  const scenarioQueue = useMemo(() => buildScenarioQueue(properties), [properties]);
+
+  const forecastTarget = selectedProperty || scenarioQueue[0] || null;
+  const scenarioModel = useMemo(
+    () => (forecastTarget ? buildScenarioModel(forecastTarget) : null),
+    [forecastTarget]
+  );
+  const recommendation = useMemo(
+    () => (forecastTarget && scenarioModel ? getRecommendation(forecastTarget, scenarioModel) : null),
+    [forecastTarget, scenarioModel]
   );
 
-  const currentSelected =
-    forecastRows.find((row) => row.id === selectedProperty?.id) || forecastRows[0];
+  const activeScenarioData =
+    activeScenario === "Base Case"
+      ? scenarioModel?.base
+      : activeScenario === "Worst Case"
+      ? scenarioModel?.worst
+      : scenarioModel?.optimized;
 
-  const scenarioComparisons = useMemo(() => {
-    if (!currentSelected) return [];
-    return SCENARIOS.map((name) => buildScenarioForecast(currentSelected, name));
-  }, [currentSelected]);
+  const kpis = [
+    {
+      title: "Base Delay",
+      value: `${portfolio.baseDelay}d`,
+      subtitle: "Current modeled portfolio slippage",
+    },
+    {
+      title: "Optimized Delay",
+      value: `${portfolio.optimizedDelay}d`,
+      subtitle: "If best actions are executed",
+    },
+    {
+      title: "Days Saved",
+      value: `${portfolio.daysSaved}d`,
+      subtitle: "Optimized vs base case",
+    },
+    {
+      title: "Avg Confidence",
+      value: `${portfolio.avgConfidence}%`,
+      subtitle: "Average timeline confidence",
+    },
+    {
+      title: "Revenue at Risk",
+      value: `$${portfolio.revenueAtRisk.toLocaleString()}`,
+      subtitle: "Modeled base-case rent exposure",
+    },
+    {
+      title: "$ Protected",
+      value: `$${portfolio.protectedRevenue.toLocaleString()}`,
+      subtitle: "If optimized plan is committed",
+    },
+  ];
 
-  const activeScenarioResult = scenarioComparisons.find((s) => s.name === activeScenario);
+  function commitOptimizedPlan() {
+    const topRows = scenarioQueue.slice(0, 5);
 
-  const summary = useMemo(() => buildPortfolioForecast(properties), [properties]);
-  const portfolioRevenueImpact = useMemo(
-    () => calculateRevenueImpact(forecastRows),
-    [forecastRows]
-  );
+    const patches = topRows.map((row) => ({
+      id: row.id,
+      patch: {
+        daysInStage: row.scenario.optimized.delayDays,
+        timelineConfidence: row.scenario.optimized.confidence,
+        risk: Math.max(20, (row.risk || 0) - Math.min(12, row.scenario.daysSaved * 2)),
+      },
+    }));
 
-  const confidenceMeta = currentSelected
-    ? getConfidenceLabel(currentSelected.forecastConfidence)
-    : { label: "—", tone: "blue" };
-
-  const maxDelay = Math.max(...forecastRows.map((row) => row.forecastDaysLate), 1);
-
-  const optimizedPortfolioSummary = useMemo(() => {
-    const optimizedRows = forecastRows.map((row) =>
-      buildScenarioForecast(row, "Optimized Case")
-    );
-
-    const totalDelay = optimizedRows.reduce((sum, row) => sum + row.forecastDaysLate, 0);
-    const revenueProtected = forecastRows.reduce(
-      (sum, row) => sum + (row.revenueProtected || 0),
-      0
-    );
-
-    return {
-      totalDelay,
-      revenueProtected,
-      daysSaved: summary.totalDelay - totalDelay,
-    };
-  }, [forecastRows, summary.totalDelay]);
-
-  function commitScenario(row, scenarioName) {
-    const scenario = buildScenarioForecast(row, scenarioName);
-    const patchMeta = getAppliedPatch(row, row.recommendation, scenarioName);
-
-    const patch =
-      scenarioName === "Worst Case"
-        ? {
-            projectedCompletion: scenario.forecastCompletion,
-            risk: Math.min(100, row.risk + 8),
-            readiness: Math.max(0, row.readiness + patchMeta.readinessDelta),
-            blockers: patchMeta.blockers,
-            vendor: patchMeta.vendor,
-            currentStage: patchMeta.currentStage,
-            turnStatus: "Blocked",
-          }
-        : {
-            projectedCompletion: scenario.forecastCompletion,
-            risk:
-              scenario.forecastDaysLate === 0
-                ? Math.max(0, row.risk - 10)
-                : scenario.forecastDaysLate <= 2
-                ? Math.max(0, row.risk - 6)
-                : Math.max(0, row.risk - 3),
-            readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
-            blockers: patchMeta.blockers,
-            vendor: patchMeta.vendor,
-            currentStage: patchMeta.currentStage,
-            turnStatus:
-              scenario.forecastDaysLate === 0 && patchMeta.blockers?.[0] === "No active blockers"
-                ? "Ready"
-                : "Monitoring",
-          };
-
-    applyForecastPatch(
-      row.id,
-      patch,
-      `${scenarioName} committed for ${row.name}`
-    );
-
-    setSelectedPropertyId(row.id);
+    applyForecastBatch(patches, "Commit optimized forecast plan to top 5 turns");
   }
 
-  function handleFixAllOptimized() {
-    const beforeImpact = calculateRevenueImpact(forecastRows);
+  function commitSingleOptimized(row) {
+    applyForecastPatch(
+      row.id,
+      {
+        daysInStage: row.scenario.optimized.delayDays,
+        timelineConfidence: row.scenario.optimized.confidence,
+        risk: Math.max(20, (row.risk || 0) - Math.min(10, row.scenario.daysSaved * 2)),
+      },
+      `Commit optimized scenario for ${row.name}`
+    );
+  }
 
-    const patches = forecastRows
-      .filter((row) => row.recommendation.impact > 0)
-      .map((row) => {
-        const scenario = buildScenarioForecast(row, "Optimized Case");
-        const patchMeta = getAppliedPatch(row, row.recommendation, "Optimized Case");
-
-        return {
-          id: row.id,
-          patch: {
-            projectedCompletion: scenario.forecastCompletion,
-            risk:
-              scenario.forecastDaysLate === 0
-                ? Math.max(0, row.risk - 10)
-                : scenario.forecastDaysLate <= 2
-                ? Math.max(0, row.risk - 6)
-                : Math.max(0, row.risk - 3),
-            readiness: Math.min(100, row.readiness + patchMeta.readinessDelta),
-            blockers: patchMeta.blockers,
-            vendor: patchMeta.vendor,
-            currentStage: patchMeta.currentStage,
-            turnStatus:
-              scenario.forecastDaysLate === 0 && patchMeta.blockers?.[0] === "No active blockers"
-                ? "Ready"
-                : "Monitoring",
-          },
-        };
-      });
-
-    applyForecastBatch(patches, "Fix All optimized scenario");
-
-    const afterRows = forecastRows.map((row) => {
-      const found = patches.find((p) => p.id === row.id);
-      if (!found) return row;
-      const optimized = buildScenarioForecast(row, "Optimized Case");
-      return {
-        ...row,
-        ...found.patch,
-        forecastDaysLate: optimized.forecastDaysLate,
-      };
-    });
-
-    const afterImpact = calculateRevenueImpact(afterRows);
-    const removedRisk = Math.max(0, beforeImpact.atRisk - afterImpact.atRisk);
-
-    setFixAllMessage(
-      `Optimized plan committed • ${optimizedPortfolioSummary.daysSaved} total delay days saved • ~$${optimizedPortfolioSummary.revenueProtected.toLocaleString()} vacancy impact protected • $${removedRisk.toLocaleString()} revenue risk removed`
+  function stressTestSingle(row) {
+    applyForecastPatch(
+      row.id,
+      {
+        daysInStage: row.scenario.worst.delayDays,
+        timelineConfidence: row.scenario.worst.confidence,
+        risk: Math.min(99, (row.risk || 0) + 8),
+      },
+      `Stress test worst-case scenario for ${row.name}`
     );
   }
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="text-3xl font-semibold text-slate-900">Forecast</div>
           <div className="mt-1 text-sm text-slate-500">
@@ -549,533 +360,352 @@ export default function ForecastTab({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <Pill tone="blue">{forecastRows.length} turns modeled</Pill>
-          {canUndoForecastAction ? (
-            <button
-              onClick={undoLastForecastAction}
-              className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 hover:bg-amber-100"
-            >
-              Undo last action
-            </button>
-          ) : null}
+        <div className="flex flex-wrap items-center gap-3">
+          <Pill tone="blue">{properties.length} turns modeled</Pill>
           <button
-            onClick={handleFixAllOptimized}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+            onClick={commitOptimizedPlan}
+            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
           >
             Commit optimized plan
+          </button>
+          <button
+            onClick={undoLastForecastAction}
+            disabled={!canUndoForecastAction}
+            className={`rounded-xl px-4 py-2 text-sm ${
+              canUndoForecastAction
+                ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                : "cursor-not-allowed border border-slate-100 bg-slate-50 text-slate-300"
+            }`}
+          >
+            Undo
           </button>
         </div>
       </div>
 
-      {mode === "presentation" ? (
-        <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6 shadow-sm">
-          <div className="text-xs font-semibold uppercase tracking-[0.18em] text-emerald-800">
-            Forecast Impact
-          </div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            TurnIQ can recover {optimizedPortfolioSummary.daysSaved} delay days
-          </div>
-          <div className="mt-2 text-sm leading-6 text-slate-700">
-            Under the optimized scenario, the portfolio moves from {summary.totalDelay} modeled delay
-            days to {optimizedPortfolioSummary.totalDelay}. That represents approximately $
-            {optimizedPortfolioSummary.revenueProtected.toLocaleString()} of vacancy impact protected.
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
-              Base delay: {summary.totalDelay}d
-            </div>
-            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
-              Optimized delay: {optimizedPortfolioSummary.totalDelay}d
-            </div>
-            <div className="rounded-full border border-white/60 bg-white/70 px-3 py-1 text-xs text-slate-700">
-              Revenue at risk: ${portfolioRevenueImpact.atRisk.toLocaleString()}
-            </div>
-          </div>
-        </div>
-      ) : null}
-
       {canUndoForecastAction && lastForecastUndoLabel ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-          Undo available: {lastForecastUndoLabel}
-        </div>
-      ) : null}
-
-      {fixAllMessage ? (
-        <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
-          {fixAllMessage}
-        </div>
+        <Card>
+          <div className="text-sm text-slate-600">
+            Last forecast action:{" "}
+            <span className="font-medium text-slate-900">{lastForecastUndoLabel}</span>
+          </div>
+        </Card>
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Base Delay</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.totalDelay}d</div>
-          <div className="mt-1 text-sm text-slate-500">Current modeled portfolio slippage</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Optimized Delay</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {optimizedPortfolioSummary.totalDelay}d
-          </div>
-          <div className="mt-1 text-sm text-slate-500">If best actions are executed</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Days Saved</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            {optimizedPortfolioSummary.daysSaved}d
-          </div>
-          <div className="mt-1 text-sm text-slate-500">Optimized vs base case</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Confidence</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgConfidence}%</div>
-          <div className="mt-1 text-sm text-slate-500">Average timeline confidence</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Revenue at Risk</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            ${portfolioRevenueImpact.atRisk.toLocaleString()}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">Modeled base-case rent exposure</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">$ Protected</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">
-            ${optimizedPortfolioSummary.revenueProtected.toLocaleString()}
-          </div>
-          <div className="mt-1 text-sm text-slate-500">If optimized plan is committed</div>
-        </Card>
+        {kpis.map((kpi) => (
+          <Card key={kpi.title}>
+            <div className="text-xs uppercase tracking-wide text-slate-500">{kpi.title}</div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">{kpi.value}</div>
+            <div className="mt-1 text-sm text-slate-500">{kpi.subtitle}</div>
+          </Card>
+        ))}
       </div>
 
-      {currentSelected ? (
-        <>
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">
-                  Scenario Comparison — {currentSelected.name}
-                </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Compare likely outcomes before applying a plan.
-                </div>
+      {forecastTarget && scenarioModel ? (
+        <Card>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="text-2xl font-semibold text-slate-900">
+                Scenario Comparison — {forecastTarget.name}
               </div>
-
-              <div className="flex flex-wrap gap-2">
-                {SCENARIOS.map((scenarioName) => (
-                  <button
-                    key={scenarioName}
-                    onClick={() => setActiveScenario(scenarioName)}
-                    className={`rounded-xl px-4 py-2 text-sm ${
-                      activeScenario === scenarioName
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    {scenarioName}
-                  </button>
-                ))}
+              <div className="mt-1 text-sm text-slate-500">
+                Compare likely outcomes before applying a plan.
               </div>
             </div>
 
-            <div className="mt-5 grid gap-4 xl:grid-cols-3">
-              {scenarioComparisons.map((scenario) => (
-                <div
-                  key={scenario.name}
-                  className={`rounded-2xl border p-4 ${
-                    activeScenario === scenario.name
-                      ? "border-slate-900 bg-slate-50"
-                      : "border-slate-200 bg-white"
+            <div className="flex flex-wrap gap-2">
+              {["Base Case", "Optimized Case", "Worst Case"].map((scenario) => (
+                <button
+                  key={scenario}
+                  onClick={() => setActiveScenario(scenario)}
+                  className={`rounded-xl px-4 py-2 text-sm ${
+                    activeScenario === scenario
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="font-semibold text-slate-900">{scenario.name}</div>
-                    <Pill tone={scenario.riskTone}>
-                      {formatVariance(scenario.forecastDaysLate)}
-                    </Pill>
-                  </div>
-
-                  <div className="mt-4 space-y-3 text-sm">
-                    <div>
-                      <div className="text-slate-500">Forecast Completion</div>
-                      <div className="font-medium text-slate-900">
-                        {formatDate(scenario.forecastCompletion)}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-500">Confidence</div>
-                      <div className="font-medium text-slate-900">
-                        {scenario.confidence}%
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-500">Revenue Exposure</div>
-                      <div className="font-medium text-slate-900">
-                        ${scenario.revenueImpact.toLocaleString()}
-                      </div>
-                    </div>
-
-                    <div>
-                      <div className="text-slate-500">Delta vs Base</div>
-                      <div className="font-medium text-slate-900">
-                        {scenario.daysDeltaVsBase > 0
-                          ? `${scenario.daysDeltaVsBase}d better`
-                          : scenario.daysDeltaVsBase < 0
-                          ? `${Math.abs(scenario.daysDeltaVsBase)}d worse`
-                          : "No change"}
-                      </div>
-                    </div>
-                  </div>
-
-                  {mode === "operator" && scenario.name !== "Base Case" ? (
-                    <div className="mt-4">
-                      <button
-                        onClick={() => commitScenario(currentSelected, scenario.name)}
-                        className={`rounded-xl px-4 py-2 text-sm ${
-                          scenario.name === "Optimized Case"
-                            ? "bg-slate-900 text-white hover:bg-slate-800"
-                            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                        }`}
-                      >
-                        Commit {scenario.name}
-                      </button>
-                    </div>
-                  ) : null}
-                </div>
+                  {scenario}
+                </button>
               ))}
             </div>
-          </Card>
+          </div>
 
-          <div className="grid gap-6 xl:grid-cols-12">
-            <div className={mode === "presentation" ? "xl:col-span-12" : "xl:col-span-8"}>
-              <Card className="h-full">
-                <div className="text-xl font-semibold text-slate-900">
-                  {mode === "presentation" ? "Portfolio Scenario Comparison" : "Scenario Queue"}
+          <div className="grid gap-4 xl:grid-cols-3">
+            {[scenarioModel.base, scenarioModel.optimized, scenarioModel.worst].map((scenario) => (
+              <div
+                key={scenario.name}
+                className={`rounded-2xl border p-5 ${
+                  scenario.name === activeScenario
+                    ? "border-slate-900 bg-slate-50"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="text-xl font-semibold text-slate-900">{scenario.name}</div>
+                  <Pill tone={scenarioTone(scenario.name)}>+{scenario.delayDays}d</Pill>
                 </div>
-                <div className="mt-1 text-sm text-slate-500">
-                  {mode === "presentation"
-                    ? "Base, optimized, and downside scenarios across the portfolio."
-                    : "Each row shows base case plus optimized and worst-case alternatives."}
-                </div>
 
-                <div className="mt-5 overflow-x-auto">
-                  <table className="min-w-full text-sm">
-                    <thead className="bg-slate-50 text-left text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2 font-medium">Property</th>
-                        <th className="px-3 py-2 font-medium">Base</th>
-                        <th className="px-3 py-2 font-medium">Optimized</th>
-                        <th className="px-3 py-2 font-medium">Worst</th>
-                        <th className="px-3 py-2 font-medium">$ Protected</th>
-                        {mode === "operator" ? (
-                          <th className="px-3 py-2 font-medium">Action</th>
-                        ) : null}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {forecastRows
-                        .slice()
-                        .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
-                        .map((row) => {
-                          const optimized = buildScenarioForecast(row, "Optimized Case");
-                          const worst = buildScenarioForecast(row, "Worst Case");
-
-                          return (
-                            <tr
-                              key={row.id}
-                              className={`border-t border-slate-100 ${
-                                currentSelected?.id === row.id ? "bg-slate-50" : "hover:bg-slate-50"
-                              }`}
-                            >
-                              <td className="px-3 py-3">
-                                <button
-                                  onClick={() => setSelectedPropertyId(row.id)}
-                                  className="font-medium text-blue-700 hover:underline"
-                                >
-                                  {row.name}
-                                </button>
-                                <div className="mt-1 text-xs text-slate-500">
-                                  {row.market} • {row.currentStage}
-                                </div>
-                              </td>
-
-                              <td className="px-3 py-3">
-                                <div>{formatDate(row.forecastCompletion)}</div>
-                                <div className="mt-1">
-                                  <Pill tone={varianceTone(row.forecastDaysLate)}>
-                                    {formatVariance(row.forecastDaysLate)}
-                                  </Pill>
-                                </div>
-                              </td>
-
-                              <td className="px-3 py-3">
-                                <div>{formatDate(optimized.forecastCompletion)}</div>
-                                <div className="mt-1">
-                                  <Pill tone={optimized.riskTone}>
-                                    {formatVariance(optimized.forecastDaysLate)}
-                                  </Pill>
-                                </div>
-                              </td>
-
-                              <td className="px-3 py-3">
-                                <div>{formatDate(worst.forecastCompletion)}</div>
-                                <div className="mt-1">
-                                  <Pill tone={worst.riskTone}>
-                                    {formatVariance(worst.forecastDaysLate)}
-                                  </Pill>
-                                </div>
-                              </td>
-
-                              <td className="px-3 py-3">
-                                ${row.revenueProtected.toLocaleString()}
-                              </td>
-
-                              {mode === "operator" ? (
-                                <td className="px-3 py-3">
-                                  <div className="flex flex-col gap-2">
-                                    <button
-                                      onClick={() => commitScenario(row, "Optimized Case")}
-                                      className="rounded-xl bg-slate-900 px-3 py-2 text-xs text-white hover:bg-slate-800"
-                                    >
-                                      Commit optimized
-                                    </button>
-                                    <button
-                                      onClick={() => commitScenario(row, "Worst Case")}
-                                      className="rounded-xl border border-slate-200 px-3 py-2 text-xs hover:bg-slate-50"
-                                    >
-                                      Stress test
-                                    </button>
-                                  </div>
-                                </td>
-                              ) : null}
-                            </tr>
-                          );
-                        })}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-            </div>
-
-            {mode === "operator" ? (
-              <div className="xl:col-span-4">
-                <Card className="h-full">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <div className="text-xl font-semibold text-slate-900">
-                        {currentSelected.name}
-                      </div>
-                      <div className="mt-1 text-sm text-slate-500">
-                        {currentSelected.market} • {currentSelected.currentStage}
-                      </div>
-                    </div>
-
-                    <Pill tone={confidenceMeta.tone}>
-                      {confidenceMeta.label}
-                    </Pill>
+                <div className="mt-5 space-y-4">
+                  <div>
+                    <div className="text-sm text-slate-500">Forecast Completion</div>
+                    <div className="text-lg font-semibold text-slate-900">{scenario.completion}</div>
                   </div>
 
-                  {activeScenarioResult ? (
-                    <>
-                      <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                        <div className="rounded-2xl border border-slate-200 p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-500">
-                            Active Scenario
-                          </div>
-                          <div className="mt-2 text-lg font-semibold text-slate-900">
-                            {activeScenarioResult.name}
-                          </div>
-                        </div>
+                  <div>
+                    <div className="text-sm text-slate-500">Confidence</div>
+                    <div className="text-lg font-semibold text-slate-900">{scenario.confidence}%</div>
+                  </div>
 
-                        <div className="rounded-2xl border border-slate-200 p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-500">
-                            Forecast Completion
-                          </div>
-                          <div className="mt-2 text-lg font-semibold text-slate-900">
-                            {formatDate(activeScenarioResult.forecastCompletion)}
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-500">
-                            Variance
-                          </div>
-                          <div className="mt-2">
-                            <Pill tone={activeScenarioResult.riskTone}>
-                              {formatVariance(activeScenarioResult.forecastDaysLate)}
-                            </Pill>
-                          </div>
-                        </div>
-
-                        <div className="rounded-2xl border border-slate-200 p-4">
-                          <div className="text-xs uppercase tracking-wide text-slate-500">
-                            Revenue Exposure
-                          </div>
-                          <div className="mt-2 text-lg font-semibold text-slate-900">
-                            ${activeScenarioResult.revenueImpact.toLocaleString()}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                        <div className="text-sm font-semibold text-slate-900">
-                          Recommended Action
-                        </div>
-                        <div className="mt-2 text-base text-slate-800">
-                          {currentSelected.recommendation.action}
-                        </div>
-                        <div className="mt-2 text-sm text-slate-500">
-                          Why: {currentSelected.recommendation.why}
-                        </div>
-                        <div className="mt-2 text-sm text-slate-600">
-                          Optimized scenario protects ~$
-                          {currentSelected.revenueProtected.toLocaleString()} and improves ECD by{" "}
-                          {currentSelected.daysSaved}d.
-                        </div>
-                      </div>
-
-                      <div className="mt-6">
-                        <div className="text-sm font-semibold text-slate-900">
-                          Delay Driver Breakdown
-                        </div>
-                        <div className="mt-3 overflow-hidden rounded-2xl border border-slate-200">
-                          <table className="min-w-full text-sm">
-                            <thead className="bg-slate-50 text-left text-slate-500">
-                              <tr>
-                                <th className="px-3 py-2 font-medium">Driver</th>
-                                <th className="px-3 py-2 font-medium">Impact</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {currentSelected.forecastDelayDrivers.map((driver) => (
-                                <tr
-                                  key={`${driver.label}-${driver.days}`}
-                                  className="border-t border-slate-100"
-                                >
-                                  <td className="px-3 py-3 text-slate-700">{driver.label}</td>
-                                  <td className="px-3 py-3 font-medium text-slate-900">
-                                    +{driver.days}d
-                                  </td>
-                                </tr>
-                              ))}
-                              <tr className="border-t border-slate-100 bg-slate-50">
-                                <td className="px-3 py-3 font-semibold text-slate-900">Total</td>
-                                <td className="px-3 py-3 font-semibold text-slate-900">
-                                  +{getTotalScenarioImpact(currentSelected.forecastDelayDrivers)}d
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
-                        </div>
-                      </div>
-                    </>
-                  ) : null}
-                </Card>
+                  <div>
+                    <div className="text-sm text-slate-500">Revenue Exposure</div>
+                    <div className="text-lg font-semibold text-slate-900">
+                      ${scenario.exposure.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
               </div>
-            ) : null}
-          </div>
-        </>
-      ) : null}
-
-      {mode === "presentation" ? (
-        <Card>
-          <div className="text-xl font-semibold text-slate-900">TurnIQ Narrative</div>
-          <div className="mt-2 text-sm leading-6 text-slate-700">
-            The optimized scenario demonstrates how the portfolio can move from modeled slippage to
-            a tighter execution path by focusing on approvals, blockers, and vendor ownership. The
-            goal is not just better forecast accuracy — it is measurable reduction in delay days and
-            revenue exposure.
+            ))}
           </div>
         </Card>
       ) : null}
 
+      <Card>
+        <div className="text-2xl font-semibold text-slate-900">Portfolio Scenario Distribution</div>
+        <div className="mt-1 text-sm text-slate-500">
+          Compare how much downside can be removed under optimized execution.
+        </div>
+
+        <div className="mt-6 space-y-8">
+          {scenarioQueue.slice(0, 3).map((row) => {
+            const maxDelay = Math.max(row.scenario.worst.delayDays, 1);
+            const basePct = (row.scenario.base.delayDays / maxDelay) * 100;
+            const optimizedPct = (row.scenario.optimized.delayDays / maxDelay) * 100;
+            const worstPct = (row.scenario.worst.delayDays / maxDelay) * 100;
+
+            return (
+              <div key={row.id} className="rounded-2xl border border-slate-200 bg-white p-5">
+                <div className="mb-3 flex items-center justify-between gap-4">
+                  <div className="font-medium text-slate-900">{row.name}</div>
+                  <div className="text-sm text-slate-500">
+                    Base {row.scenario.base.delayDays}d • Optimized {row.scenario.optimized.delayDays}d • Worst {row.scenario.worst.delayDays}d
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <div className="mb-1 text-sm text-slate-500">Base Case</div>
+                    <div className="h-4 rounded-full bg-slate-100">
+                      <div className="h-4 rounded-full bg-red-500" style={{ width: `${basePct}%` }} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-sm text-slate-500">Optimized Case</div>
+                    <div className="h-4 rounded-full bg-slate-100">
+                      <div className="h-4 rounded-full bg-emerald-500" style={{ width: `${optimizedPct}%` }} />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-sm text-slate-500">Worst Case</div>
+                    <div className="h-4 rounded-full bg-slate-100">
+                      <div className="h-4 rounded-full bg-red-500" style={{ width: `${worstPct}%` }} />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
       <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-12">
-          <Card className="h-full">
+        <div className="xl:col-span-8">
+          <Card>
+            <div className="text-2xl font-semibold text-slate-900">Scenario Queue</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Each row shows base case plus optimized and worst-case alternatives.
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="min-w-[1040px] text-sm">
+                <thead className="bg-slate-50 text-left text-slate-500">
+                  <tr>
+                    <th className="px-4 py-3 font-medium">Property</th>
+                    <th className="px-4 py-3 font-medium">Base</th>
+                    <th className="px-4 py-3 font-medium">Optimized</th>
+                    <th className="px-4 py-3 font-medium">Worst</th>
+                    <th className="px-4 py-3 font-medium">$ Protected</th>
+                    <th className="px-4 py-3 font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {scenarioQueue.slice(0, 6).map((row) => (
+                    <tr
+                      key={row.id}
+                      className={`border-t border-slate-100 ${
+                        forecastTarget?.id === row.id ? "bg-slate-50" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-4">
+                        <button onClick={() => setSelectedPropertyId(row.id)} className="text-left">
+                          <div className="font-medium text-blue-700 hover:underline">{row.name}</div>
+                        </button>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {row.market} • {row.currentStage}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-slate-900">{row.scenario.base.completion}</div>
+                        <div className="mt-1">
+                          <Pill tone="red">+{row.scenario.base.delayDays}d</Pill>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-slate-900">{row.scenario.optimized.completion}</div>
+                        <div className="mt-1">
+                          <Pill tone="emerald">+{row.scenario.optimized.delayDays}d</Pill>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="font-medium text-slate-900">{row.scenario.worst.completion}</div>
+                        <div className="mt-1">
+                          <Pill tone="red">+{row.scenario.worst.delayDays}d</Pill>
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+                        <div className="text-xl font-semibold text-slate-900">
+                          ${row.protectedRevenue.toLocaleString()}
+                        </div>
+                      </td>
+
+                      <td className="px-4 py-4">
+  <div className="flex w-[130px] flex-col gap-1.5">
+    <button
+      onClick={() => commitSingleOptimized(row)}
+      className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800"
+    >
+      Commit optimized
+    </button>
+    <button
+      onClick={() => stressTestSingle(row)}
+      className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+    >
+      Stress test
+    </button>
+  </div>
+</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        </div>
+
+        <div className="xl:col-span-4 space-y-6">
+          {forecastTarget && scenarioModel && recommendation ? (
+            <>
+              <Card>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="text-2xl font-semibold text-slate-900">{forecastTarget.name}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {forecastTarget.market} • {forecastTarget.currentStage}
+                    </div>
+                  </div>
+                  <Pill tone={severityTone(recommendation.severity)}>{recommendation.severity}</Pill>
+                </div>
+
+                <div className="mt-6 grid grid-cols-2 gap-4">
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Active Scenario</div>
+                    <div className="mt-2 text-xl font-semibold text-slate-900">{activeScenario}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Forecast Completion</div>
+                    <div className="mt-2 text-xl font-semibold text-slate-900">{activeScenarioData?.completion}</div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Variance</div>
+                    <div className="mt-2">
+                      <Pill tone={scenarioTone(activeScenario)}>+{activeScenarioData?.delayDays}d</Pill>
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl border border-slate-200 p-4">
+                    <div className="text-xs uppercase tracking-wide text-slate-500">Revenue Exposure</div>
+                    <div className="mt-2 text-xl font-semibold text-slate-900">
+                      ${activeScenarioData?.exposure.toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+              </Card>
+
+              <Card>
+                <div className="text-xl font-semibold text-slate-900">Recommended Action</div>
+                <div className="mt-4 space-y-3">
+                  <div className="text-base font-medium text-slate-900">{recommendation.title}</div>
+                  <div className="text-sm text-slate-600">Why: {recommendation.why}</div>
+                  <div className="text-sm text-slate-600">{recommendation.outcome}</div>
+                </div>
+              </Card>
+
+              <Card>
+                <div className="text-xl font-semibold text-slate-900">Delay Driver Breakdown</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Modeled contributors to the current forecast delay.
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  {scenarioModel.delayDrivers.map((driver) => (
+                    <div
+                      key={driver.label}
+                      className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3"
+                    >
+                      <div className="text-sm text-slate-700">{driver.label}</div>
+                      <Pill tone="amber">+{driver.days}d</Pill>
+                    </div>
+                  ))}
+                </div>
+              </Card>
+            </>
+          ) : (
+            <Card>
+              <div className="text-sm text-slate-500">Select a property to view scenario recommendations.</div>
+            </Card>
+          )}
+
+          <Card>
             <div className="text-xl font-semibold text-slate-900">
-              Portfolio Scenario Distribution
+              {mode === "presentation" ? "Presentation Narrative" : "Forecast Notes"}
             </div>
             <div className="mt-1 text-sm text-slate-500">
-              Compare how much downside can be removed under optimized execution.
+              {mode === "presentation"
+                ? "A narrative layer for demos and stakeholder storytelling."
+                : "Operational interpretation of the current forecast position."}
             </div>
 
-            <div className="mt-5 space-y-4">
-              {forecastRows
-                .slice()
-                .sort((a, b) => b.forecastDaysLate - a.forecastDaysLate)
-                .map((row) => {
-                  const optimized = buildScenarioForecast(row, "Optimized Case");
-                  const worst = buildScenarioForecast(row, "Worst Case");
-
-                  return (
-                    <div key={row.id}>
-                      <div className="mb-2 flex items-center justify-between gap-3">
-                        <div className="text-sm font-medium text-slate-800">{row.name}</div>
-                        <div className="text-xs text-slate-500">
-                          Base {row.forecastDaysLate}d • Optimized {optimized.forecastDaysLate}d • Worst{" "}
-                          {worst.forecastDaysLate}d
-                        </div>
-                      </div>
-
-                      <div className="space-y-2">
-                        <div>
-                          <div className="mb-1 text-xs text-slate-500">Base Case</div>
-                          <div className="h-3 rounded-full bg-slate-100">
-                            <div
-                              className={`h-3 rounded-full ${
-                                row.forecastDaysLate >= 4
-                                  ? "bg-red-500"
-                                  : row.forecastDaysLate >= 2
-                                  ? "bg-amber-500"
-                                  : "bg-emerald-500"
-                              }`}
-                              style={{
-                                width: `${Math.max(8, (row.forecastDaysLate / maxDelay) * 100)}%`,
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="mb-1 text-xs text-slate-500">Optimized Case</div>
-                          <div className="h-3 rounded-full bg-slate-100">
-                            <div
-                              className="h-3 rounded-full bg-emerald-500"
-                              style={{
-                                width: `${Math.max(
-                                  8,
-                                  (optimized.forecastDaysLate / Math.max(maxDelay, worst.forecastDaysLate)) * 100
-                                )}%`,
-                              }}
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <div className="mb-1 text-xs text-slate-500">Worst Case</div>
-                          <div className="h-3 rounded-full bg-slate-100">
-                            <div
-                              className="h-3 rounded-full bg-red-500"
-                              style={{
-                                width: `${Math.max(
-                                  8,
-                                  (worst.forecastDaysLate / Math.max(maxDelay, worst.forecastDaysLate)) * 100
-                                )}%`,
-                              }}
-                            />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+            <div className="mt-4 space-y-3 text-sm text-slate-700">
+              <div>
+                The current base case models <span className="font-medium">{portfolio.baseDelay}d</span> of portfolio
+                delay and <span className="font-medium">${portfolio.revenueAtRisk.toLocaleString()}</span> of rent
+                exposure.
+              </div>
+              <div>
+                Executing the optimized plan reduces delay to <span className="font-medium">{portfolio.optimizedDelay}d</span>{" "}
+                and protects approximately <span className="font-medium">${portfolio.protectedRevenue.toLocaleString()}</span>.
+              </div>
+              <div>
+                The largest opportunities are concentrated in blocked, approval-dependent, and high-risk turns where
+                scenario spread is widest.
+              </div>
             </div>
           </Card>
         </div>
