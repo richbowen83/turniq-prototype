@@ -38,7 +38,7 @@ const BLOCKER_OPTIONS = [
   "Scope ambiguity",
 ];
 
-const SAVED_VIEWS = [
+const DEFAULT_FILTER_VIEWS = [
   "All Open Turns",
   "Blocked Turns",
   "At-Risk Turns",
@@ -49,7 +49,23 @@ const SAVED_VIEWS = [
   "Critical Priority",
 ];
 
-const STORAGE_KEY = "turniq_control_center_saved_views_v2";
+const STORAGE_KEY = "turniq_control_center_saved_views_v3";
+
+/**
+ * Fallback daily rent values by market.
+ * Replace later with actual imported row.dailyRentValue when available.
+ */
+const MARKET_DAILY_RENT = {
+  Dallas: 92,
+  Phoenix: 88,
+  Atlanta: 81,
+  Nashville: 84,
+  Columbus: 78,
+  Cincinnati: 76,
+  Birmingham: 72,
+  Huntsville: 75,
+  Charleston: 86,
+};
 
 function getStageSla(stage) {
   return STAGE_SLA[stage] || 3;
@@ -102,6 +118,24 @@ function getLastTouchedLabel(row) {
   if (row.followUpDate) return `Follow-up ${formatDate(row.followUpDate)}`;
   if ((row.daysInStage || 0) >= 6) return "No recent movement";
   return "Recently active";
+}
+
+function getStageTone(overdueCount, avgDays, sla) {
+  if (overdueCount > 0) return "red";
+  if (avgDays > sla) return "amber";
+  return "emerald";
+}
+
+function getDailyRentValue(row) {
+  if (typeof row.dailyRentValue === "number" && row.dailyRentValue > 0) {
+    return row.dailyRentValue;
+  }
+
+  if (typeof row.monthlyRentValue === "number" && row.monthlyRentValue > 0) {
+    return Number((row.monthlyRentValue / 30).toFixed(2));
+  }
+
+  return MARKET_DAILY_RENT[row.market] || 80;
 }
 
 function buildPriority(row) {
@@ -173,38 +207,37 @@ function buildPriority(row) {
   };
 }
 
+/**
+ * Financially grounded impact model:
+ * revenue impact = days saved × daily rent value
+ */
 function buildImpact(row) {
   let daysRecovered = 0;
-  let revenueRecovered = 0;
 
   const daysOver = getDaysOverSla(row);
 
   if (row.turnStatus === "Blocked") {
     daysRecovered += 2;
-    revenueRecovered += 800;
   }
 
   if (row.currentStage === "Owner Approval") {
     daysRecovered += 2;
-    revenueRecovered += 600;
   }
 
   if (daysOver > 0) {
     daysRecovered += Math.min(4, daysOver);
-    revenueRecovered += daysOver * 250;
-  }
-
-  if ((row.risk || 0) >= 75) {
-    revenueRecovered += 500;
   }
 
   if (row.stale) {
     daysRecovered += 1;
-    revenueRecovered += 250;
   }
+
+  const dailyRentValue = getDailyRentValue(row);
+  const revenueRecovered = Math.round(daysRecovered * dailyRentValue);
 
   return {
     daysRecovered,
+    dailyRentValue,
     revenueRecovered,
   };
 }
@@ -226,6 +259,8 @@ function buildEnrichedRows(rows) {
       systemLink:
         row.systemLink ||
         `https://pms.example/turns/${encodeURIComponent(row.id)}`,
+      lastAction: row.lastAction || null,
+      dailyRentValue: getDailyRentValue(row),
     };
 
     return {
@@ -263,10 +298,6 @@ function buildStageBuckets(rows) {
     const blockedCount = stageRows.filter((row) => row.turnStatus === "Blocked").length;
     const sla = getStageSla(stage);
 
-    let tone = "emerald";
-    if (overdueCount > 0) tone = "red";
-    else if (avgDays > sla) tone = "amber";
-
     return {
       stage,
       count,
@@ -274,12 +305,12 @@ function buildStageBuckets(rows) {
       overdueCount,
       blockedCount,
       sla,
-      tone,
+      tone: getStageTone(overdueCount, avgDays, sla),
     };
   });
 }
 
-function applySavedView(rows, queueFilter) {
+function applyFilter(rows, queueFilter) {
   if (queueFilter === "Blocked Turns") {
     return rows.filter((row) => row.turnStatus === "Blocked");
   }
@@ -377,46 +408,11 @@ export default function ControlCenterTab({
     }
   }
 
-  function saveCurrentView() {
-    const name = window.prompt("Name this saved view");
-    if (!name?.trim()) return;
-
-    const nextView = {
-      id: `view-${Date.now()}`,
-      name: name.trim(),
-      queueFilter,
-      selectedStageFilter,
-      sortBy,
-    };
-
-    persistSavedViews([...savedViews, nextView]);
-    setActiveSavedViewId(nextView.id);
-  }
-
-  function applySavedViewPreset(view) {
-    setQueueFilter(view.queueFilter || "All Open Turns");
-    if (view.selectedStageFilter) {
-      toggleStageFilter(view.selectedStageFilter);
-    } else {
-      if (selectedStageFilter) toggleStageFilter(selectedStageFilter);
-    }
-    setSortBy(view.sortBy || "Priority");
-    setActiveSavedViewId(view.id);
-  }
-
-  function deleteSavedView(id) {
-    const next = savedViews.filter((view) => view.id !== id);
-    persistSavedViews(next);
-    if (activeSavedViewId === id) {
-      setActiveSavedViewId(null);
-    }
-  }
-
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
   const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
 
   const workingRows = useMemo(() => {
-    let next = applySavedView(enrichedRows, queueFilter);
+    let next = applyFilter(enrichedRows, queueFilter);
 
     if (selectedStageFilter) {
       next = next.filter((row) => row.currentStage === selectedStageFilter);
@@ -429,10 +425,9 @@ export default function ControlCenterTab({
     const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
     const overdue = workingRows.filter((row) => row.overdue).length;
     const stale = workingRows.filter((row) => row.stale).length;
-    const escalated = workingRows.filter((row) => row.escalationFlag).length;
     const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
 
-    return { blocked, overdue, stale, escalated, critical };
+    return { blocked, overdue, stale, critical };
   }, [workingRows]);
 
   const topActions = useMemo(() => {
@@ -492,10 +487,6 @@ export default function ControlCenterTab({
     patchRow(id, { followUpDate: value });
   }
 
-  function handleEscalationToggle(id, current) {
-    patchRow(id, { escalationFlag: !current });
-  }
-
   function handleInlineNoteSave(id, row) {
     const note = (draftNotes[id] || "").trim();
     if (!note) return;
@@ -516,7 +507,6 @@ export default function ControlCenterTab({
     const patch = {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
-      escalationFlag: false,
       nextAction: "Prepare for dispatch",
       daysInStage: targetDays,
     };
@@ -543,7 +533,6 @@ export default function ControlCenterTab({
     const patch = {
       turnStatus: "Ready",
       nextAction: "Ready for execution",
-      escalationFlag: false,
       daysInStage: 0,
     };
 
@@ -560,10 +549,6 @@ export default function ControlCenterTab({
         "Mark ready from control center"
       );
     }
-  }
-
-  function handleOpenRow(id) {
-    setSelectedPropertyId(id);
   }
 
   function handleApplyTopAction(row) {
@@ -621,6 +606,41 @@ export default function ControlCenterTab({
     }
   }
 
+  function saveCurrentView() {
+    const name = window.prompt("Name this saved view");
+    if (!name?.trim()) return;
+
+    const view = {
+      id: `view-${Date.now()}`,
+      name: name.trim(),
+      queueFilter,
+      selectedStageFilter,
+      sortBy,
+    };
+
+    persistSavedViews([...savedViews, view]);
+    setActiveSavedViewId(view.id);
+  }
+
+  function applySavedViewPreset(view) {
+    setQueueFilter(view.queueFilter || "All Open Turns");
+    setSortBy(view.sortBy || "Priority");
+    setActiveSavedViewId(view.id);
+
+    if (selectedStageFilter && selectedStageFilter !== view.selectedStageFilter) {
+      toggleStageFilter(selectedStageFilter);
+    }
+    if (view.selectedStageFilter && view.selectedStageFilter !== selectedStageFilter) {
+      toggleStageFilter(view.selectedStageFilter);
+    }
+  }
+
+  function deleteSavedView(id) {
+    const next = savedViews.filter((view) => view.id !== id);
+    persistSavedViews(next);
+    if (activeSavedViewId === id) setActiveSavedViewId(null);
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -663,10 +683,7 @@ export default function ControlCenterTab({
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-xl font-semibold text-slate-900">Saved Views</div>
-          <button
-            onClick={saveCurrentView}
-            className="text-sm underline"
-          >
+          <button onClick={saveCurrentView} className="text-sm underline">
             Save current view
           </button>
         </div>
@@ -682,12 +699,10 @@ export default function ControlCenterTab({
                     : "border border-slate-200 bg-white"
                 }`}
               >
-                <button onClick={() => applySavedViewPreset(view)}>
-                  {view.name}
-                </button>
+                <button onClick={() => applySavedViewPreset(view)}>{view.name}</button>
                 <button
                   onClick={() => deleteSavedView(view.id)}
-                  className={`${activeSavedViewId === view.id ? "text-white/80" : "text-slate-400"}`}
+                  className={activeSavedViewId === view.id ? "text-white/70" : "text-slate-400"}
                 >
                   ✕
                 </button>
@@ -695,9 +710,7 @@ export default function ControlCenterTab({
             ))}
           </div>
         ) : (
-          <div className="mt-3 text-sm text-slate-500">
-            No saved views yet.
-          </div>
+          <div className="mt-3 text-sm text-slate-500">No saved views yet.</div>
         )}
       </Card>
 
@@ -730,9 +743,11 @@ export default function ControlCenterTab({
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="text-xl font-semibold text-slate-900">Estimated Portfolio Impact (Top 5 Actions)</div>
+            <div className="text-xl font-semibold text-slate-900">
+              Projected Revenue Impact (Top 5 Actions)
+            </div>
             <div className="mt-1 text-sm text-slate-500">
-              Estimated value unlocked by executing the highest-priority actions.
+              Based on daily rent value × forecasted days recovered.
             </div>
           </div>
           <div className="flex gap-8">
@@ -762,7 +777,7 @@ export default function ControlCenterTab({
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {SAVED_VIEWS.map((view) => (
+            {DEFAULT_FILTER_VIEWS.map((view) => (
               <button
                 key={view}
                 onClick={() => setQueueFilter(view)}
@@ -842,12 +857,14 @@ export default function ControlCenterTab({
                 {row.nextAction}
               </div>
 
-              <div className="mt-2 text-xs text-slate-500">
-                {row.priority.whyNow}
-              </div>
+              <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
 
               <div className="mt-3 text-sm text-slate-700">
                 +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
+              </div>
+
+              <div className="mt-1 text-xs text-slate-500">
+                ${row.impact.dailyRentValue}/day rent basis
               </div>
 
               {row.lastAction ? (
@@ -914,7 +931,6 @@ export default function ControlCenterTab({
                     <th className="px-3 py-2 font-medium">Blocker</th>
                     <th className="px-3 py-2 font-medium">Next Action</th>
                     <th className="px-3 py-2 font-medium">Follow-up</th>
-                    <th className="px-3 py-2 font-medium">Escalation</th>
                     <th className="px-3 py-2 font-medium">Notes</th>
                     <th className="px-3 py-2 font-medium whitespace-nowrap">PMS</th>
                     <th className="px-3 py-2 font-medium">Actions</th>
@@ -929,7 +945,7 @@ export default function ControlCenterTab({
                       } ${row.priority.label === "Critical" ? "bg-red-50/30" : ""}`}
                     >
                       <td className="px-3 py-3">
-                        <button onClick={() => handleOpenRow(row.id)} className="text-left">
+                        <button onClick={() => setSelectedPropertyId(row.id)} className="text-left">
                           <div className="font-medium text-blue-700 hover:underline">
                             {row.name}
                           </div>
@@ -937,6 +953,11 @@ export default function ControlCenterTab({
                         <div className="mt-1 text-xs text-slate-500">
                           {row.market} • Risk {row.risk} • {row.turnStatus}
                         </div>
+                        {row.lastAction ? (
+                          <div className="mt-2 text-xs text-emerald-600">
+                            {row.lastAction.label} • {row.lastAction.daysRecovered}d recovered
+                          </div>
+                        ) : null}
                       </td>
 
                       <td className="px-3 py-3">
@@ -1029,19 +1050,6 @@ export default function ControlCenterTab({
                       </td>
 
                       <td className="px-3 py-3">
-                        <button
-                          onClick={() => handleEscalationToggle(row.id, row.escalationFlag)}
-                          className={`rounded-lg px-3 py-2 text-xs font-medium ${
-                            row.escalationFlag
-                              ? "bg-red-100 text-red-700"
-                              : "border border-slate-200 text-slate-600 hover:bg-slate-50"
-                          }`}
-                        >
-                          {row.escalationFlag ? "Flagged" : "Flag"}
-                        </button>
-                      </td>
-
-                      <td className="px-3 py-3">
                         <div className="flex w-[200px] gap-2">
                           <input
                             value={draftNotes[row.id] || ""}
@@ -1100,7 +1108,7 @@ export default function ControlCenterTab({
 
                   {!workingRows.length ? (
                     <tr>
-                      <td colSpan={13} className="px-3 py-10 text-center text-sm text-slate-500">
+                      <td colSpan={12} className="px-3 py-10 text-center text-sm text-slate-500">
                         No turns match the current filters.
                       </td>
                     </tr>
@@ -1157,10 +1165,7 @@ export default function ControlCenterTab({
 
             <div className="mt-4 space-y-3">
               {operatorSummary.map((item) => (
-                <div
-                  key={item.owner}
-                  className="rounded-2xl border border-slate-200 p-4"
-                >
+                <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium text-slate-900">{item.owner}</div>
