@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
@@ -49,6 +49,12 @@ const SAVED_VIEWS = [
   "Critical Priority",
 ];
 
+const STORAGE_KEY = "turniq_control_center_saved_views_v2";
+
+function getStageSla(stage) {
+  return STAGE_SLA[stage] || 3;
+}
+
 function formatDate(dateStr) {
   if (!dateStr) return "—";
   const date = new Date(dateStr);
@@ -62,6 +68,18 @@ function getPrimaryBlocker(row) {
     (b) => b && b !== "No active blockers" && b !== "No major blockers"
   );
   return live[0] || "None";
+}
+
+function getDaysOverSla(row) {
+  return Math.max(0, (row.daysInStage || 0) - getStageSla(row.currentStage));
+}
+
+function isOverSla(row) {
+  return (row.daysInStage || 0) > getStageSla(row.currentStage);
+}
+
+function isStale(row) {
+  return (row.daysInStage || 0) >= 6 && row.turnStatus !== "Ready";
 }
 
 function getNextAction(row) {
@@ -84,22 +102,6 @@ function getLastTouchedLabel(row) {
   if (row.followUpDate) return `Follow-up ${formatDate(row.followUpDate)}`;
   if ((row.daysInStage || 0) >= 6) return "No recent movement";
   return "Recently active";
-}
-
-function isStale(row) {
-  return (row.daysInStage || 0) >= 6 && row.turnStatus !== "Ready";
-}
-
-function getStageSla(stage) {
-  return STAGE_SLA[stage] || 3;
-}
-
-function isOverSla(row) {
-  return (row.daysInStage || 0) > getStageSla(row.currentStage);
-}
-
-function getDaysOverSla(row) {
-  return Math.max(0, (row.daysInStage || 0) - getStageSla(row.currentStage));
 }
 
 function buildPriority(row) {
@@ -209,21 +211,18 @@ function buildImpact(row) {
 
 function buildEnrichedRows(rows) {
   return rows.map((row) => {
-    const blocker = getPrimaryBlocker(row);
-    const nextAction = getNextAction(row);
-    const stageSla = getStageSla(row.currentStage);
-    const overdue = isOverSla(row);
     const stale = isStale(row);
+    const overdue = isOverSla(row);
 
     const base = {
       ...row,
-      blocker,
-      nextAction,
+      blocker: getPrimaryBlocker(row),
+      nextAction: getNextAction(row),
       followUpDate: row.followUpDate || "",
       escalationFlag: row.escalationFlag || false,
       stale,
       overdue,
-      stageSla,
+      stageSla: getStageSla(row.currentStage),
       systemLink:
         row.systemLink ||
         `https://pms.example/turns/${encodeURIComponent(row.id)}`,
@@ -352,6 +351,66 @@ export default function ControlCenterTab({
   applyForecastPatch,
 }) {
   const [draftNotes, setDraftNotes] = useState({});
+  const [savedViews, setSavedViews] = useState([]);
+  const [activeSavedViewId, setActiveSavedViewId] = useState(null);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setSavedViews(parsed);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load saved views", error);
+    }
+  }, []);
+
+  function persistSavedViews(nextViews) {
+    setSavedViews(nextViews);
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(nextViews));
+    } catch (error) {
+      console.error("Failed to persist saved views", error);
+    }
+  }
+
+  function saveCurrentView() {
+    const name = window.prompt("Name this saved view");
+    if (!name?.trim()) return;
+
+    const nextView = {
+      id: `view-${Date.now()}`,
+      name: name.trim(),
+      queueFilter,
+      selectedStageFilter,
+      sortBy,
+    };
+
+    persistSavedViews([...savedViews, nextView]);
+    setActiveSavedViewId(nextView.id);
+  }
+
+  function applySavedViewPreset(view) {
+    setQueueFilter(view.queueFilter || "All Open Turns");
+    if (view.selectedStageFilter) {
+      toggleStageFilter(view.selectedStageFilter);
+    } else {
+      if (selectedStageFilter) toggleStageFilter(selectedStageFilter);
+    }
+    setSortBy(view.sortBy || "Priority");
+    setActiveSavedViewId(view.id);
+  }
+
+  function deleteSavedView(id) {
+    const next = savedViews.filter((view) => view.id !== id);
+    persistSavedViews(next);
+    if (activeSavedViewId === id) {
+      setActiveSavedViewId(null);
+    }
+  }
 
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
   const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
@@ -397,6 +456,22 @@ export default function ControlCenterTab({
     updateProperty(id, patch);
   }
 
+  function recordActionOutcome(row, patch, label) {
+    const nextDays = patch.daysInStage ?? row.daysInStage ?? 0;
+    const daysRecovered = Math.max(0, (row.daysInStage || 0) - nextDays);
+    const clearedBlocker =
+      row.turnStatus === "Blocked" && (patch.turnStatus === "Monitoring" || patch.turnStatus === "Ready");
+
+    patchRow(row.id, {
+      lastAction: {
+        label,
+        timestamp: new Date().toISOString(),
+        daysRecovered,
+        clearedBlocker,
+      },
+    });
+  }
+
   function handleOwnerChange(id, value) {
     patchRow(id, { turnOwner: value });
   }
@@ -434,18 +509,20 @@ export default function ControlCenterTab({
   }
 
   function handleResolve(id) {
-    const row = rows.find((r) => r.id === id);
+    const row = enrichedRows.find((r) => r.id === id);
     if (!row) return;
 
-    const targetDays = Math.min(1, getStageSla(row.currentStage));
-
-    patchRow(id, {
+    const targetDays = Math.min(1, row.stageSla);
+    const patch = {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
       escalationFlag: false,
       nextAction: "Prepare for dispatch",
       daysInStage: targetDays,
-    });
+    };
+
+    patchRow(id, patch);
+    recordActionOutcome(row, patch, "Resolve issue");
 
     if (applyForecastPatch) {
       applyForecastPatch(
@@ -460,15 +537,18 @@ export default function ControlCenterTab({
   }
 
   function handleFlagReady(id) {
-    const row = rows.find((r) => r.id === id);
+    const row = enrichedRows.find((r) => r.id === id);
     if (!row) return;
 
-    patchRow(id, {
+    const patch = {
       turnStatus: "Ready",
       nextAction: "Ready for execution",
       escalationFlag: false,
       daysInStage: 0,
-    });
+    };
+
+    patchRow(id, patch);
+    recordActionOutcome(row, patch, "Mark ready");
 
     if (applyForecastPatch) {
       applyForecastPatch(
@@ -495,13 +575,16 @@ export default function ControlCenterTab({
     }
 
     if (row.currentStage === "Owner Approval") {
-      patchRow(row.id, {
+      const patch = {
         currentStage: "Dispatch",
         daysInStage: 0,
         nextAction: "Confirm vendor schedule",
         turnStatus: "Monitoring",
         blockers: ["No active blockers"],
-      });
+      };
+
+      patchRow(row.id, patch);
+      recordActionOutcome(row, patch, "Advance owner approval");
 
       if (applyForecastPatch) {
         applyForecastPatch(
@@ -517,11 +600,14 @@ export default function ControlCenterTab({
       return;
     }
 
-    patchRow(row.id, {
+    const patch = {
       daysInStage: targetDays,
       turnStatus: "Monitoring",
       nextAction: "Prepare for dispatch",
-    });
+    };
+
+    patchRow(row.id, patch);
+    recordActionOutcome(row, patch, "Apply top action");
 
     if (applyForecastPatch) {
       applyForecastPatch(
@@ -573,6 +659,47 @@ export default function ControlCenterTab({
           </button>
         </div>
       </div>
+
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xl font-semibold text-slate-900">Saved Views</div>
+          <button
+            onClick={saveCurrentView}
+            className="text-sm underline"
+          >
+            Save current view
+          </button>
+        </div>
+
+        {savedViews.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {savedViews.map((view) => (
+              <div
+                key={view.id}
+                className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
+                  activeSavedViewId === view.id
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white"
+                }`}
+              >
+                <button onClick={() => applySavedViewPreset(view)}>
+                  {view.name}
+                </button>
+                <button
+                  onClick={() => deleteSavedView(view.id)}
+                  className={`${activeSavedViewId === view.id ? "text-white/80" : "text-slate-400"}`}
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 text-sm text-slate-500">
+            No saved views yet.
+          </div>
+        )}
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -699,7 +826,7 @@ export default function ControlCenterTab({
           {topActions.map((row) => (
             <div
               key={row.id}
-              className="flex min-h-[300px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
+              className="flex min-h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
             >
               <div className="flex items-start justify-between gap-3">
                 <div>
@@ -714,10 +841,23 @@ export default function ControlCenterTab({
               <div className="mt-3 text-sm font-medium text-slate-900">
                 {row.nextAction}
               </div>
-              <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
+
+              <div className="mt-2 text-xs text-slate-500">
+                {row.priority.whyNow}
+              </div>
+
               <div className="mt-3 text-sm text-slate-700">
                 +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
               </div>
+
+              {row.lastAction ? (
+                <div className="mt-2 text-xs text-emerald-600">
+                  Last action: {row.lastAction.daysRecovered}d recovered
+                  {row.lastAction.clearedBlocker ? " • blocker cleared" : ""}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-slate-400">No action taken yet</div>
+              )}
 
               <div className="mt-auto pt-4">
                 <button
@@ -824,7 +964,7 @@ export default function ControlCenterTab({
                         <div className="mt-1 text-xs">
                           {row.overdue ? (
                             <span className="font-medium text-red-600">
-                              {row.daysInStage - row.stageSla}d over SLA
+                              {getDaysOverSla(row)}d over SLA
                             </span>
                           ) : (
                             <span className="text-slate-500">Within SLA</span>
