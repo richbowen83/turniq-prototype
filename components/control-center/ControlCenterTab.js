@@ -13,6 +13,7 @@ const STAGE_SLA = {
   Dispatch: 2,
   "Pending RRI": 2,
   "Rent Ready Open": 1,
+  "Failed Rent Ready": 0,
 };
 
 const NEXT_ACTION_OPTIONS = [
@@ -47,6 +48,7 @@ const DEFAULT_FILTER_VIEWS = [
   "Vendorless Turns",
   "Over SLA",
   "Critical Priority",
+  "Failed Rent Ready",
 ];
 
 const STORAGE_KEY = "turniq_control_center_saved_views_v3";
@@ -91,7 +93,8 @@ function getDaysOverSla(row) {
 }
 
 function isOverSla(row) {
-  return (row.daysInStage || 0) > getStageSla(row.currentStage);
+  const sla = getStageSla(row.currentStage);
+  return sla > 0 && (row.daysInStage || 0) > sla;
 }
 
 function isStale(row) {
@@ -281,6 +284,8 @@ function buildStageBuckets(rows) {
     "Dispatch",
     "Pending RRI",
     "Rent Ready Open",
+    "Failed Rent Ready",
+
   ];
 
   return stages.map((stage) => {
@@ -801,25 +806,40 @@ export default function ControlCenterTab({
               className="text-left"
             >
               <div
-                className={`rounded-2xl border p-4 transition ${
-                  selectedStageFilter === bucket.stage
-                    ? "border-slate-900 bg-slate-50"
-                    : "border-slate-200 bg-white hover:border-slate-300"
-                }`}
-              >
+  className={`rounded-2xl border p-4 transition ${
+    selectedStageFilter === bucket.stage
+  ? "border-slate-900 bg-slate-50"
+  : bucket.stage === "Failed Rent Ready"
+  ? "border-red-200 bg-red-50 hover:bg-red-100"
+  : "border-slate-200 bg-white"
+  }`}
+>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold text-slate-900">{bucket.stage}</div>
                     <div className="mt-1 text-sm text-slate-500">
-                      {bucket.count} turns • avg {bucket.avgDays}d
-                    </div>
+  {bucket.stage === "Failed Rent Ready"
+    ? `${bucket.count} turns`
+    : `${bucket.count} turns • avg ${bucket.avgDays}d`}
+</div>
                   </div>
-                  <Pill tone={bucket.tone}>{bucket.overdueCount} overdue</Pill>
-                </div>
+                  {bucket.stage === "Failed Rent Ready" ? (
+  <Pill tone={bucket.count > 0 ? "red" : "green"}>
+  {bucket.count > 0 ? `${bucket.count} failed` : "No failures"}
+</Pill>
+) : (
+  <Pill tone={bucket.tone}>{bucket.overdueCount} overdue</Pill>
+)}
 
-                <div className="mt-3 text-xs text-slate-500">
-                  SLA {bucket.sla}d • {bucket.blockedCount} blocked
-                </div>
+</div>
+
+<div className="mt-3 text-xs text-slate-500">
+  {bucket.stage === "Failed Rent Ready"
+    ? bucket.count > 0
+      ? `${bucket.blockedCount} blocked`
+      : "No recovery required"
+    : `SLA ${bucket.sla}d • ${bucket.blockedCount} blocked`}
+</div>
               </div>
             </button>
           ))}

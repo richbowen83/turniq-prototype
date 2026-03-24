@@ -225,6 +225,7 @@ const PIPELINE_STAGES = [
   "Dispatch",
   "Pending RRI",
   "Rent Ready Open",
+  "Failed Rent Ready",
 ];
 
 function formatMoney(value) {
@@ -416,9 +417,17 @@ useEffect(() => {
       ["2026-05-06", "2026-05-08"].includes(x.projectedCompletion)
     ).length;
 
-    const rriFailRate = rows.length
-      ? `${Math.round((rows.filter((x) => x.risk >= 75).length / rows.length) * 100)}%`
-      : "0%";
+    const failedRentReadyCount = rows.filter(
+  (x) => x.currentStage === "Failed Rent Ready"
+).length;
+
+const rentReadyRelatedCount = rows.filter((x) =>
+  ["Pending RRI", "Rent Ready Open", "Failed Rent Ready"].includes(x.currentStage)
+).length;
+
+const rriFailRate = rentReadyRelatedCount
+  ? `${Math.round((failedRentReadyCount / rentReadyRelatedCount) * 100)}%`
+  : "0%";
 
     return {
       allOpenTurns: rows.length,
