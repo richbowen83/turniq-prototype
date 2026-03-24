@@ -730,7 +730,7 @@ export default function ControlCenterTab({
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <div className="text-xl font-semibold text-slate-900">Portfolio Impact (Top 5 Actions)</div>
+            <div className="text-xl font-semibold text-slate-900">Estimated Portfolio Impact (Top 5 Actions)</div>
             <div className="mt-1 text-sm text-slate-500">
               Estimated value unlocked by executing the highest-priority actions.
             </div>
