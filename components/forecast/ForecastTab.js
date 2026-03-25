@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
+import { getRiskTone, getSeverityTone } from "../../utils/tone";
 
 const MARKET_DAILY_RENT = {
   Dallas: 92,
@@ -46,15 +47,9 @@ function addDays(dateStr, days) {
 }
 
 function scenarioTone(name) {
-  if (name === "Optimized Case") return "emerald";
+  if (name === "Optimized Case") return "green";
   if (name === "Worst Case") return "red";
-  return "blue";
-}
-
-function severityTone(severity) {
-  if (severity === "High") return "red";
-  if (severity === "Moderate") return "amber";
-  return "emerald";
+  return "slate";
 }
 
 function getScenarioDelay(row, scenario) {
@@ -107,9 +102,7 @@ function getScenarioExposure(row, delayDays) {
 
 function buildDelayDrivers(row) {
   const sourceDrivers =
-    Array.isArray(row.delayDrivers) && row.delayDrivers.length
-      ? row.delayDrivers
-      : [];
+    Array.isArray(row.delayDrivers) && row.delayDrivers.length ? row.delayDrivers : [];
 
   if (sourceDrivers.length) {
     return sourceDrivers.map((driver) => ({
@@ -120,12 +113,15 @@ function buildDelayDrivers(row) {
 
   const derived = [];
   if (row.turnStatus === "Blocked") derived.push({ label: "Blocked workflow", days: 2 });
-  if (row.currentStage === "Owner Approval")
+  if (row.currentStage === "Owner Approval") {
     derived.push({ label: "Owner approval delay", days: 2 });
-  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance")))
+  }
+  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance"))) {
     derived.push({ label: "Appliance ETA", days: 1 });
-  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("trade")))
+  }
+  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("trade"))) {
     derived.push({ label: "Trade coordination", days: 1 });
+  }
   if ((row.risk || 0) >= 75) derived.push({ label: "Execution risk buffer", days: 1 });
 
   return derived.length ? derived : [{ label: "Routine variance", days: 1 }];
@@ -361,17 +357,17 @@ export default function ForecastTab({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-          <Pill tone="blue">{properties.length} turns modeled</Pill>
+          <Pill tone="slate">{properties.length} turns modeled</Pill>
           <button
             onClick={commitOptimizedPlan}
-            className="rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
+            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
           >
             Commit optimized plan
           </button>
           <button
             onClick={undoLastForecastAction}
             disabled={!canUndoForecastAction}
-            className={`rounded-xl px-4 py-2 text-sm ${
+            className={`rounded-md px-3 py-1 text-xs font-medium ${
               canUndoForecastAction
                 ? "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                 : "cursor-not-allowed border border-slate-100 bg-slate-50 text-slate-300"
@@ -566,7 +562,7 @@ export default function ForecastTab({
                       <td className="px-4 py-4">
                         <div className="font-medium text-slate-900">{row.scenario.optimized.completion}</div>
                         <div className="mt-1">
-                          <Pill tone="emerald">+{row.scenario.optimized.delayDays}d</Pill>
+                          <Pill tone="green">+{row.scenario.optimized.delayDays}d</Pill>
                         </div>
                       </td>
 
@@ -584,21 +580,21 @@ export default function ForecastTab({
                       </td>
 
                       <td className="px-4 py-4">
-  <div className="flex w-[130px] flex-col gap-1.5">
-    <button
-      onClick={() => commitSingleOptimized(row)}
-      className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800"
-    >
-      Commit optimized
-    </button>
-    <button
-      onClick={() => stressTestSingle(row)}
-      className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-    >
-      Stress test
-    </button>
-  </div>
-</td>
+                        <div className="flex w-[130px] flex-col gap-1.5">
+                          <button
+                            onClick={() => commitSingleOptimized(row)}
+                            className="rounded-md bg-slate-900 px-2.5 py-1 text-xs font-medium text-white hover:bg-slate-800"
+                          >
+                            Commit optimized
+                          </button>
+                          <button
+                            onClick={() => stressTestSingle(row)}
+                            className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                          >
+                            Stress test
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -613,12 +609,14 @@ export default function ForecastTab({
               <Card>
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <div className="text-2xl font-semibold text-slate-900">{forecastTarget.name}</div>
+                    <div className="text-3xl font-semibold text-slate-900">{forecastTarget.name}</div>
                     <div className="mt-1 text-sm text-slate-500">
                       {forecastTarget.market} • {forecastTarget.currentStage}
                     </div>
                   </div>
-                  <Pill tone={severityTone(recommendation.severity)}>{recommendation.severity}</Pill>
+                  <Pill tone={getSeverityTone(recommendation.severity)}>
+                    {recommendation.severity}
+                  </Pill>
                 </div>
 
                 <div className="mt-6 grid grid-cols-2 gap-4">
@@ -629,7 +627,9 @@ export default function ForecastTab({
 
                   <div className="rounded-2xl border border-slate-200 p-4">
                     <div className="text-xs uppercase tracking-wide text-slate-500">Forecast Completion</div>
-                    <div className="mt-2 text-xl font-semibold text-slate-900">{activeScenarioData?.completion}</div>
+                    <div className="mt-2 text-xl font-semibold text-slate-900">
+                      {activeScenarioData?.completion}
+                    </div>
                   </div>
 
                   <div className="rounded-2xl border border-slate-200 p-4">
@@ -678,7 +678,9 @@ export default function ForecastTab({
             </>
           ) : (
             <Card>
-              <div className="text-sm text-slate-500">Select a property to view scenario recommendations.</div>
+              <div className="text-sm text-slate-500">
+                Select a property to view scenario recommendations.
+              </div>
             </Card>
           )}
 
@@ -699,8 +701,9 @@ export default function ForecastTab({
                 exposure.
               </div>
               <div>
-                Executing the optimized plan reduces delay to <span className="font-medium">{portfolio.optimizedDelay}d</span>{" "}
-                and protects approximately <span className="font-medium">${portfolio.protectedRevenue.toLocaleString()}</span>.
+                Executing the optimized plan reduces delay to{" "}
+                <span className="font-medium">{portfolio.optimizedDelay}d</span> and protects approximately{" "}
+                <span className="font-medium">${portfolio.protectedRevenue.toLocaleString()}</span>.
               </div>
               <div>
                 The largest opportunities are concentrated in blocked, approval-dependent, and high-risk turns where

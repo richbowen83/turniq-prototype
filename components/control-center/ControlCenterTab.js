@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
+import { getRiskTone, getSeverityTone, getStageTone } from "../../utils/tone";
 
 const STAGE_SLA = {
   "Pre-Leasing": 3,
@@ -53,10 +54,6 @@ const DEFAULT_FILTER_VIEWS = [
 
 const STORAGE_KEY = "turniq_control_center_saved_views_v3";
 
-/**
- * Fallback daily rent values by market.
- * Replace later with actual imported row.dailyRentValue when available.
- */
 const MARKET_DAILY_RENT = {
   Dallas: 92,
   Phoenix: 88,
@@ -123,12 +120,6 @@ function getLastTouchedLabel(row) {
   return "Recently active";
 }
 
-function getStageTone(overdueCount, avgDays, sla) {
-  if (overdueCount > 0) return "red";
-  if (avgDays > sla) return "amber";
-  return "emerald";
-}
-
 function getDailyRentValue(row) {
   if (typeof row.dailyRentValue === "number" && row.dailyRentValue > 0) {
     return row.dailyRentValue;
@@ -189,31 +180,23 @@ function buildPriority(row) {
   }
 
   let label = "Low";
-  let tone = "emerald";
-
   if (score >= 60) {
-    label = "Critical";
-    tone = "red";
-  } else if (score >= 35) {
     label = "High";
-    tone = "amber";
+  } else if (score >= 35) {
+    label = "Moderate";
   } else if (score >= 18) {
-    label = "Medium";
-    tone = "blue";
+    label = "Moderate";
   }
 
   return {
     score,
-    label,
-    tone,
+    label: score >= 60 ? "Critical" : score >= 35 ? "High" : score >= 18 ? "Medium" : "Low",
+    tone: score >= 60 ? "red" : score >= 35 ? "amber" : score >= 18 ? "blue" : "green",
+    severity: label,
     whyNow: reasons.slice(0, 4).join(" + ") || "Routine monitoring",
   };
 }
 
-/**
- * Financially grounded impact model:
- * revenue impact = days saved × daily rent value
- */
 function buildImpact(row) {
   let daysRecovered = 0;
 
@@ -260,8 +243,7 @@ function buildEnrichedRows(rows) {
       overdue,
       stageSla: getStageSla(row.currentStage),
       systemLink:
-        row.systemLink ||
-        `https://pms.example/turns/${encodeURIComponent(row.id)}`,
+        row.systemLink || `https://pms.example/turns/${encodeURIComponent(row.id)}`,
       lastAction: row.lastAction || null,
       dailyRentValue: getDailyRentValue(row),
     };
@@ -285,7 +267,6 @@ function buildStageBuckets(rows) {
     "Pending RRI",
     "Rent Ready Open",
     "Failed Rent Ready",
-
   ];
 
   return stages.map((stage) => {
@@ -344,6 +325,10 @@ function applyFilter(rows, queueFilter) {
     return rows.filter((row) => row.priority.label === "Critical");
   }
 
+  if (queueFilter === "Failed Rent Ready") {
+    return rows.filter((row) => row.currentStage === "Failed Rent Ready");
+  }
+
   return rows;
 }
 
@@ -389,6 +374,7 @@ export default function ControlCenterTab({
   const [draftNotes, setDraftNotes] = useState({});
   const [savedViews, setSavedViews] = useState([]);
   const [activeSavedViewId, setActiveSavedViewId] = useState(null);
+  const [lastActionImpact, setLastActionImpact] = useState(null);
 
   useEffect(() => {
     try {
@@ -460,7 +446,8 @@ export default function ControlCenterTab({
     const nextDays = patch.daysInStage ?? row.daysInStage ?? 0;
     const daysRecovered = Math.max(0, (row.daysInStage || 0) - nextDays);
     const clearedBlocker =
-      row.turnStatus === "Blocked" && (patch.turnStatus === "Monitoring" || patch.turnStatus === "Ready");
+      row.turnStatus === "Blocked" &&
+      (patch.turnStatus === "Monitoring" || patch.turnStatus === "Ready");
 
     patchRow(row.id, {
       lastAction: {
@@ -469,6 +456,12 @@ export default function ControlCenterTab({
         daysRecovered,
         clearedBlocker,
       },
+    });
+
+    setLastActionImpact({
+      property: row.name,
+      daysSaved: daysRecovered,
+      revenueProtected: Math.round(daysRecovered * row.dailyRentValue),
     });
   }
 
@@ -666,24 +659,31 @@ export default function ControlCenterTab({
         <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={resetQueueView}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             Reset view
           </button>
           <button
             onClick={() => setQueueFilter("Blocked Turns")}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             Focus blocked
           </button>
           <button
             onClick={() => setQueueFilter("Over SLA")}
-            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             Focus over SLA
           </button>
         </div>
       </div>
+
+      {lastActionImpact && (
+        <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+          Action applied on <span className="font-medium">{lastActionImpact.property}</span> — saved{" "}
+          {lastActionImpact.daysSaved} days and protected ${lastActionImpact.revenueProtected}.
+        </div>
+      )}
 
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -806,40 +806,39 @@ export default function ControlCenterTab({
               className="text-left"
             >
               <div
-  className={`rounded-2xl border p-4 transition ${
-    selectedStageFilter === bucket.stage
-  ? "border-slate-900 bg-slate-50"
-  : bucket.stage === "Failed Rent Ready"
-  ? "border-red-200 bg-red-50 hover:bg-red-100"
-  : "border-slate-200 bg-white"
-  }`}
->
+                className={`rounded-2xl border p-4 transition ${
+                  selectedStageFilter === bucket.stage
+                    ? "border-slate-900 bg-slate-50"
+                    : bucket.stage === "Failed Rent Ready"
+                    ? "border-red-200 bg-red-50 hover:bg-red-100"
+                    : "border-slate-200 bg-white"
+                }`}
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold text-slate-900">{bucket.stage}</div>
                     <div className="mt-1 text-sm text-slate-500">
-  {bucket.stage === "Failed Rent Ready"
-    ? `${bucket.count} turns`
-    : `${bucket.count} turns • avg ${bucket.avgDays}d`}
-</div>
+                      {bucket.stage === "Failed Rent Ready"
+                        ? `${bucket.count} turns`
+                        : `${bucket.count} turns • avg ${bucket.avgDays}d`}
+                    </div>
                   </div>
                   {bucket.stage === "Failed Rent Ready" ? (
-  <Pill tone={bucket.count > 0 ? "red" : "green"}>
-  {bucket.count > 0 ? `${bucket.count} failed` : "No failures"}
-</Pill>
-) : (
-  <Pill tone={bucket.tone}>{bucket.overdueCount} overdue</Pill>
-)}
+                    <Pill tone={bucket.count > 0 ? "red" : "green"}>
+                      {bucket.count > 0 ? `${bucket.count} failed` : "No failures"}
+                    </Pill>
+                  ) : (
+                    <Pill tone={bucket.tone}>{bucket.overdueCount} overdue</Pill>
+                  )}
+                </div>
 
-</div>
-
-<div className="mt-3 text-xs text-slate-500">
-  {bucket.stage === "Failed Rent Ready"
-    ? bucket.count > 0
-      ? `${bucket.blockedCount} blocked`
-      : "No recovery required"
-    : `SLA ${bucket.sla}d • ${bucket.blockedCount} blocked`}
-</div>
+                <div className="mt-3 text-xs text-slate-500">
+                  {bucket.stage === "Failed Rent Ready"
+                    ? bucket.count > 0
+                      ? `${bucket.blockedCount} blocked`
+                      : "No recovery required"
+                    : `SLA ${bucket.sla}d • ${bucket.blockedCount} blocked`}
+                </div>
               </div>
             </button>
           ))}
@@ -854,7 +853,7 @@ export default function ControlCenterTab({
               AI-ranked interventions based on blockage, SLA drift, risk, and execution friction.
             </div>
           </div>
-          <Pill tone="blue">{topActions.length} actions</Pill>
+          <Pill tone="slate">{topActions.length} actions</Pill>
         </div>
 
         <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
@@ -873,9 +872,7 @@ export default function ControlCenterTab({
                 <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
               </div>
 
-              <div className="mt-3 text-sm font-medium text-slate-900">
-                {row.nextAction}
-              </div>
+              <div className="mt-3 text-sm font-medium text-slate-900">{row.nextAction}</div>
 
               <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
 
@@ -899,7 +896,7 @@ export default function ControlCenterTab({
               <div className="mt-auto pt-4">
                 <button
                   onClick={() => handleApplyTopAction(row)}
-                  className="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm text-white hover:bg-slate-800"
+                  className="w-full rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
                 >
                   Apply Action
                 </button>
@@ -982,15 +979,11 @@ export default function ControlCenterTab({
 
                       <td className="px-3 py-3">
                         <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                        <div className="mt-1 text-xs text-slate-500">
-                          Score {row.priority.score}
-                        </div>
+                        <div className="mt-1 text-xs text-slate-500">Score {row.priority.score}</div>
                       </td>
 
                       <td className="px-3 py-3">
-                        <div className="w-[180px] text-sm text-slate-700">
-                          {row.priority.whyNow}
-                        </div>
+                        <div className="w-[180px] text-sm text-slate-700">{row.priority.whyNow}</div>
                       </td>
 
                       <td className="px-3 py-3">
@@ -999,9 +992,7 @@ export default function ControlCenterTab({
                       </td>
 
                       <td className="px-3 py-3">
-                        <Pill tone={row.overdue ? "red" : "blue"}>
-                          {row.daysInStage || 0}d
-                        </Pill>
+                        <Pill tone={row.overdue ? "red" : "slate"}>{row.daysInStage || 0}d</Pill>
                         <div className="mt-1 text-xs">
                           {row.overdue ? (
                             <span className="font-medium text-red-600">
@@ -1050,9 +1041,7 @@ export default function ControlCenterTab({
                           </select>
 
                           {(row.overdue || row.turnStatus === "Blocked") && (
-                            <div className="text-xs font-medium text-red-600">
-                              Action required
-                            </div>
+                            <div className="text-xs font-medium text-red-600">Action required</div>
                           )}
                         </div>
                       </td>
@@ -1064,9 +1053,7 @@ export default function ControlCenterTab({
                           onChange={(e) => handleFollowUpChange(row.id, e.target.value)}
                           className="w-[132px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
                         />
-                        <div className="mt-1 text-xs text-slate-500">
-                          {getLastTouchedLabel(row)}
-                        </div>
+                        <div className="mt-1 text-xs text-slate-500">{getLastTouchedLabel(row)}</div>
                       </td>
 
                       <td className="px-3 py-3">
@@ -1084,7 +1071,7 @@ export default function ControlCenterTab({
                           />
                           <button
                             onClick={() => handleInlineNoteSave(row.id, row)}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium hover:bg-slate-50"
+                            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Save
                           </button>
@@ -1111,13 +1098,13 @@ export default function ControlCenterTab({
                         <div className="flex w-[128px] flex-col gap-2">
                           <button
                             onClick={() => handleResolve(row.id)}
-                            className="rounded-lg bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+                            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
                           >
                             Resolve
                           </button>
                           <button
                             onClick={() => handleFlagReady(row.id)}
-                            className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium hover:bg-slate-50"
+                            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Mark ready
                           </button>
@@ -1159,16 +1146,12 @@ export default function ControlCenterTab({
 
               <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                 <div className="text-xs uppercase tracking-wide text-amber-700">Stale Turns</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {queueSummary.stale}
-                </div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.stale}</div>
                 <div className="mt-1 text-xs text-amber-700">No recent movement</div>
               </div>
 
               <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-blue-700">
-                  Pending Approvals
-                </div>
+                <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
                 <div className="mt-2 text-2xl font-semibold text-slate-900">
                   {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
                 </div>
@@ -1189,11 +1172,9 @@ export default function ControlCenterTab({
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <div className="font-medium text-slate-900">{item.owner}</div>
-                      <div className="mt-1 text-sm text-slate-500">
-                        {item.activeTurns} active turns
-                      </div>
+                      <div className="mt-1 text-sm text-slate-500">{item.activeTurns} active turns</div>
                     </div>
-                    <Pill tone={item.highRisk > 0 ? "red" : "emerald"}>
+                    <Pill tone={item.highRisk > 0 ? "red" : "green"}>
                       {item.highRisk} high risk
                     </Pill>
                   </div>

@@ -750,7 +750,7 @@ if (!hasHydrated) {
             markets={markets}
           />
 
-<div className="mt-5 max-w-3xl text-base text-slate-800">
+<div className="mt-1 text-sm text-slate-500">
   TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
 </div>
 
