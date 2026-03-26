@@ -37,33 +37,41 @@ function scenarioTone(name) {
 function getScenarioDelay(row, scenario) {
   const base = row.daysInStage || 0;
 
+const isFailedRentReady = row.currentStage === "Failed Rent Ready";
+
   if (scenario === "Base Case") return base;
 
   if (scenario === "Optimized Case") {
-    if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
-      return Math.max(0, base - 3);
-    }
-    if (row.turnStatus === "Blocked") {
-      return Math.max(0, base - 2);
-    }
-    if ((row.risk || 0) >= 75) {
-      return Math.max(0, base - 2);
-    }
-    return Math.max(0, base - 1);
+  if (isFailedRentReady) {
+    return Math.max(1, base - 2);
   }
+  if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
+    return Math.max(0, base - 3);
+  }
+  if (row.turnStatus === "Blocked") {
+    return Math.max(0, base - 2);
+  }
+  if ((row.risk || 0) >= 75) {
+    return Math.max(0, base - 2);
+  }
+  return Math.max(0, base - 1);
+}
 
   if (scenario === "Worst Case") {
-    if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
-      return base + 5;
-    }
-    if (row.turnStatus === "Blocked") {
-      return base + 4;
-    }
-    if ((row.risk || 0) >= 75) {
-      return base + 4;
-    }
-    return base + 3;
+  if (isFailedRentReady) {
+    return base + 6;
   }
+  if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
+    return base + 5;
+  }
+  if (row.turnStatus === "Blocked") {
+    return base + 4;
+  }
+  if ((row.risk || 0) >= 75) {
+    return base + 4;
+  }
+  return base + 3;
+}
 
   return base;
 }
@@ -94,6 +102,11 @@ function buildDelayDrivers(row) {
   }
 
   const derived = [];
+
+  if (row.currentStage === "Failed Rent Ready") {
+    derived.push({ label: "Rent ready failure rework", days: 3 });
+  }
+
   if (row.turnStatus === "Blocked") derived.push({ label: "Blocked workflow", days: 2 });
   if (row.currentStage === "Owner Approval") {
     derived.push({ label: "Owner approval delay", days: 2 });
@@ -141,15 +154,19 @@ function buildScenarioModel(row) {
   const delayDrivers = buildDelayDrivers(row);
 
   return {
-    base,
-    optimized,
-    worst,
-    delayDrivers,
-    protectedRevenue: Math.max(0, base.exposure - optimized.exposure),
-    daysSaved: Math.max(0, base.delayDays - optimized.delayDays),
-    rentSourceLabel: getRentSourceLabel(row),
-    dailyRentValue: getDailyRentValue(row),
-  };
+  base,
+  optimized,
+  worst,
+  delayDrivers,
+  protectedRevenue: Math.max(0, base.exposure - optimized.exposure),
+  daysSaved: Math.max(0, base.delayDays - optimized.delayDays),
+  rentSourceLabel: getRentSourceLabel(row),
+  dailyRentValue: getDailyRentValue(row),
+  failedReadyPenalty:
+    row.currentStage === "Failed Rent Ready"
+      ? getRevenueProtected(3, row)
+      : 0,
+};
 }
 
 function buildPortfolioSummary(properties) {
@@ -189,6 +206,15 @@ function buildScenarioQueue(properties) {
 
 function getRecommendation(row, scenario) {
   if (!row) return null;
+
+if (row.currentStage === "Failed Rent Ready") {
+  return {
+    title: "Resolve rework and re-certify rent readiness",
+    why: "The home failed rent ready and now carries direct rework delay and avoidable vacancy exposure.",
+    outcome: `Optimized case protects ~$${scenario.protectedRevenue.toLocaleString()} and improves ECD by ${scenario.daysSaved}d.`,
+    severity: "High",
+  };
+}
 
   if (row.turnStatus === "Blocked" && row.currentStage === "Owner Approval") {
     return {
@@ -667,6 +693,22 @@ export default function ForecastTab({
                   <div className="text-sm text-slate-600">{recommendation.outcome}</div>
                 </div>
               </Card>
+
+      {forecastTarget.currentStage === "Failed Rent Ready" ? (
+  <Card>
+    <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+      <div className="text-xs uppercase tracking-wide text-rose-700">
+        Rework Cost Signal
+      </div>
+      <div className="mt-2 text-xl font-semibold text-slate-900">
+        ${scenarioModel.failedReadyPenalty.toLocaleString()}
+      </div>
+      <div className="mt-1 text-sm text-rose-700">
+        Estimated value at risk from failed-ready rework
+      </div>
+    </div>
+  </Card>
+) : null}
 
               <Card>
                 <div className="text-xl font-semibold text-slate-900">Delay Driver Breakdown</div>

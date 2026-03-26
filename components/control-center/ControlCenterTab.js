@@ -59,6 +59,58 @@ const DEFAULT_FILTER_VIEWS = [
   "Failed Rent Ready",
 ];
 
+const SYSTEM_VIEWS = [
+  {
+    id: "my_queue",
+    name: "My Queue",
+    getFilters: (rows) => ({
+      queueFilter: "All Open Turns",
+      customFilter: (row) => row.turnOwner === "Me",
+      sortBy: "Priority",
+    }),
+  },
+  {
+    id: "blocked",
+    name: "Blocked",
+    getFilters: () => ({
+      queueFilter: "Blocked Turns",
+      sortBy: "Priority",
+    }),
+  },
+  {
+    id: "approvals",
+    name: "Approvals",
+    getFilters: () => ({
+      queueFilter: "Pending Approvals",
+      sortBy: "Priority",
+    }),
+  },
+  {
+    id: "failed_rri",
+    name: "Failed Rent Ready",
+    getFilters: () => ({
+      queueFilter: "Failed Rent Ready",
+      sortBy: "Priority",
+    }),
+  },
+  {
+    id: "over_sla",
+    name: "Over SLA",
+    getFilters: () => ({
+      queueFilter: "Over SLA",
+      sortBy: "Priority",
+    }),
+  },
+  {
+    id: "exec",
+    name: "Exec View",
+    getFilters: () => ({
+      queueFilter: "At-Risk Turns",
+      sortBy: "Priority",
+    }),
+  },
+];
+
 const STORAGE_KEY = "turniq_control_center_saved_views_v4";
 
 function getStageSla(stage) {
@@ -118,6 +170,11 @@ function getLastTouchedLabel(row) {
 function buildPriority(row) {
   let score = 0;
   const reasons = [];
+
+if (row.currentStage === "Failed Rent Ready") {
+  score += 30;
+  reasons.push("Failed rent ready");
+}
 
   if (row.turnStatus === "Blocked") {
     score += 40;
@@ -186,6 +243,10 @@ function buildPriority(row) {
 
 function buildImpact(row) {
   let daysRecovered = 0;
+
+if (row.currentStage === "Failed Rent Ready") {
+  daysRecovered += 3;
+}
 
   const daysOver = getDaysOverSla(row);
 
@@ -365,6 +426,8 @@ export default function ControlCenterTab({
   const [savedViews, setSavedViews] = useState([]);
   const [activeSavedViewId, setActiveSavedViewId] = useState(null);
   const [lastActionImpact, setLastActionImpact] = useState(null);
+  const [activeSystemView, setActiveSystemView] = useState(null);
+  const [customRowFilter, setCustomRowFilter] = useState(null);
 
   useEffect(() => {
     try {
@@ -395,21 +458,24 @@ export default function ControlCenterTab({
   const workingRows = useMemo(() => {
     let next = applyFilter(enrichedRows, queueFilter);
 
-    if (selectedStageFilter) {
-      next = next.filter((row) => row.currentStage === selectedStageFilter);
-    }
+if (customRowFilter) {
+  next = next.filter(customRowFilter);
+}
 
     return sortRows(next, sortBy);
   }, [enrichedRows, queueFilter, selectedStageFilter, sortBy]);
 
   const queueSummary = useMemo(() => {
-    const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
-    const overdue = workingRows.filter((row) => row.overdue).length;
-    const stale = workingRows.filter((row) => row.stale).length;
-    const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
+  const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
+  const overdue = workingRows.filter((row) => row.overdue).length;
+  const stale = workingRows.filter((row) => row.stale).length;
+  const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
+  const failedRentReady = workingRows.filter(
+    (row) => row.currentStage === "Failed Rent Ready"
+  ).length;
 
-    return { blocked, overdue, stale, critical };
-  }, [workingRows]);
+  return { blocked, overdue, stale, critical, failedRentReady };
+}, [workingRows]);
 
   const topActions = useMemo(() => {
     return [...enrichedRows]
@@ -561,6 +627,22 @@ export default function ControlCenterTab({
     }
   }
 
+function applySystemView(view) {
+  const config = view.getFilters(enrichedRows);
+
+  setQueueFilter(config.queueFilter || "All Open Turns");
+  setSortBy(config.sortBy || "Priority");
+  setActiveSystemView(view.id);
+  setActiveSavedViewId(null);
+
+  // optional custom filter support (future ready)
+  if (config.customFilter) {
+    setCustomRowFilter(() => config.customFilter);
+  } else {
+    setCustomRowFilter(null);
+  }
+}
+
   function handleApplyTopAction(row) {
     const targetDays = Math.max(0, row.stageSla - 1);
 
@@ -568,6 +650,39 @@ export default function ControlCenterTab({
       handleResolve(row.id);
       return;
     }
+
+if (row.currentStage === "Failed Rent Ready") {
+  const daysSaved = Math.max(0, (row.daysInStage || 0) - 1);
+  const nextProjectedCompletion =
+    daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+  const patch = {
+    currentStage: "Rent Ready Open",
+    daysInStage: 1,
+    turnStatus: "Monitoring",
+    nextAction: "Re-inspect and confirm ready state",
+    blockers: ["No active blockers"],
+    projectedCompletion: nextProjectedCompletion,
+  };
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Recover failed rent ready");
+
+  if (applyForecastPatch) {
+    applyForecastPatch(
+      row.id,
+      {
+        currentStage: "Rent Ready Open",
+        daysInStage: 1,
+        projectedCompletion: nextProjectedCompletion,
+        risk: Math.max(30, row.risk - 10),
+        timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 5),
+      },
+      "Recover failed rent ready"
+    );
+  }
+  return;
+}
 
     if (row.currentStage === "Owner Approval") {
       const daysSaved = row.daysInStage || 0;
@@ -665,6 +780,14 @@ export default function ControlCenterTab({
     if (activeSavedViewId === id) setActiveSavedViewId(null);
   }
 
+function resetQueueViewFull() {
+  resetQueueView(); // existing behavior
+
+  setActiveSystemView(null);
+  setActiveSavedViewId(null);
+  setCustomRowFilter(null);
+}
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -684,7 +807,7 @@ export default function ControlCenterTab({
 
         <div className="flex flex-wrap items-center gap-2">
           <button
-            onClick={resetQueueView}
+            onClick={resetQueueViewFull}
             className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
           >
             Reset view
@@ -715,38 +838,64 @@ export default function ControlCenterTab({
       )}
 
       <Card>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="text-xl font-semibold text-slate-900">Saved Views</div>
-          <button onClick={saveCurrentView} className="text-sm underline">
-            Save current view
+  <div className="flex flex-wrap items-center justify-between gap-3">
+    <div className="text-xl font-semibold text-slate-900">Quick Views</div>
+    <button onClick={saveCurrentView} className="text-sm underline">
+      Save current view
+    </button>
+  </div>
+
+  {/* SYSTEM VIEWS */}
+  <div className="mt-4 flex flex-wrap gap-2">
+    {SYSTEM_VIEWS.map((view) => (
+      <button
+        key={view.id}
+        onClick={() => applySystemView(view)}
+        className={`rounded-xl px-3 py-2 text-sm ${
+          activeSystemView === view.id
+            ? "bg-slate-900 text-white"
+            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+        }`}
+      >
+        {view.name}
+      </button>
+    ))}
+  </div>
+
+  {/* USER SAVED VIEWS */}
+  {savedViews.length ? (
+    <div className="mt-4 flex flex-wrap gap-2">
+      {savedViews.map((view) => (
+        <div
+          key={view.id}
+          className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
+            activeSavedViewId === view.id
+              ? "bg-slate-900 text-white"
+              : "border border-slate-200 bg-white"
+          }`}
+        >
+          <button onClick={() => applySavedViewPreset(view)}>
+            {view.name}
+          </button>
+          <button
+            onClick={() => deleteSavedView(view.id)}
+            className={
+              activeSavedViewId === view.id
+                ? "text-white/70"
+                : "text-slate-400"
+            }
+          >
+            ✕
           </button>
         </div>
-
-        {savedViews.length ? (
-          <div className="mt-4 flex flex-wrap gap-2">
-            {savedViews.map((view) => (
-              <div
-                key={view.id}
-                className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
-                  activeSavedViewId === view.id
-                    ? "bg-slate-900 text-white"
-                    : "border border-slate-200 bg-white"
-                }`}
-              >
-                <button onClick={() => applySavedViewPreset(view)}>{view.name}</button>
-                <button
-                  onClick={() => deleteSavedView(view.id)}
-                  className={activeSavedViewId === view.id ? "text-white/70" : "text-slate-400"}
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="mt-3 text-sm text-slate-500">No saved views yet.</div>
-        )}
-      </Card>
+      ))}
+    </div>
+  ) : (
+    <div className="mt-3 text-sm text-slate-500">
+      No saved views yet.
+    </div>
+  )}
+</Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -754,6 +903,18 @@ export default function ControlCenterTab({
           <div className="mt-2 text-3xl font-semibold text-slate-900">{workingRows.length}</div>
           <div className="mt-1 text-sm text-slate-500">{queueFilter}</div>
         </Card>
+
+        <Card>
+<div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+  <div className="text-xs uppercase tracking-wide text-rose-700">
+    Failed Rent Ready
+  </div>
+  <div className="mt-2 text-2xl font-semibold text-slate-900">
+    {queueSummary.failedRentReady}
+  </div>
+  <div className="mt-1 text-xs text-rose-700">Rework required</div>
+</div>
+ </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Critical Priority</div>
