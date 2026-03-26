@@ -3,31 +3,13 @@
 import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
-import { getRiskTone, getSeverityTone } from "../../utils/tone";
-
-const MARKET_DAILY_RENT = {
-  Dallas: 92,
-  Phoenix: 88,
-  Atlanta: 81,
-  Nashville: 84,
-  Columbus: 78,
-  Cincinnati: 76,
-  Birmingham: 72,
-  Huntsville: 75,
-  Charleston: 86,
-};
-
-function getDailyRentValue(row) {
-  if (typeof row.dailyRentValue === "number" && row.dailyRentValue > 0) {
-    return row.dailyRentValue;
-  }
-
-  if (typeof row.monthlyRentValue === "number" && row.monthlyRentValue > 0) {
-    return Number((row.monthlyRentValue / 30).toFixed(2));
-  }
-
-  return MARKET_DAILY_RENT[row.market] || 80;
-}
+import { getSeverityTone } from "../../utils/tone";
+import {
+  formatShortDate,
+  getDailyRentValue,
+  getRentSourceLabel,
+  getRevenueProtected,
+} from "../../utils/economics";
 
 function formatDate(dateStr) {
   if (!dateStr) return "—";
@@ -165,6 +147,8 @@ function buildScenarioModel(row) {
     delayDrivers,
     protectedRevenue: Math.max(0, base.exposure - optimized.exposure),
     daysSaved: Math.max(0, base.delayDays - optimized.delayDays),
+    rentSourceLabel: getRentSourceLabel(row),
+    dailyRentValue: getDailyRentValue(row),
   };
 }
 
@@ -298,7 +282,7 @@ export default function ForecastTab({
     {
       title: "Revenue at Risk",
       value: `$${portfolio.revenueAtRisk.toLocaleString()}`,
-      subtitle: "Modeled base-case rent exposure",
+      subtitle: "Based on imported rent where available, otherwise market fallback",
     },
     {
       title: "$ Protected",
@@ -315,6 +299,8 @@ export default function ForecastTab({
       patch: {
         daysInStage: row.scenario.optimized.delayDays,
         timelineConfidence: row.scenario.optimized.confidence,
+        projectedCompletion:
+          row.lastAction?.nextECD || row.projectedCompletion,
         risk: Math.max(20, (row.risk || 0) - Math.min(12, row.scenario.daysSaved * 2)),
       },
     }));
@@ -397,6 +383,24 @@ export default function ForecastTab({
         ))}
       </div>
 
+      {forecastTarget?.lastAction ? (
+        <Card>
+          <div className="text-xl font-semibold text-slate-900">Recent Action Impact</div>
+          <div className="mt-3 text-sm text-slate-700">
+            <span className="font-medium">{forecastTarget.name}</span> last moved from{" "}
+            <span className="font-medium">
+              {formatShortDate(forecastTarget.lastAction.prevECD)}
+            </span>{" "}
+            to{" "}
+            <span className="font-medium">
+              {formatShortDate(forecastTarget.lastAction.nextECD)}
+            </span>
+            , saving {forecastTarget.lastAction.daysRecovered} days and protecting $
+            {forecastTarget.lastAction.revenueProtected || 0}.
+          </div>
+        </Card>
+      ) : null}
+
       {forecastTarget && scenarioModel ? (
         <Card>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
@@ -405,7 +409,7 @@ export default function ForecastTab({
                 Scenario Comparison — {forecastTarget.name}
               </div>
               <div className="mt-1 text-sm text-slate-500">
-                Compare likely outcomes before applying a plan.
+                {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
               </div>
             </div>
 
@@ -457,6 +461,10 @@ export default function ForecastTab({
                     <div className="text-lg font-semibold text-slate-900">
                       ${scenario.exposure.toLocaleString()}
                     </div>
+
+                    <div className="text-xs text-slate-400">
+                    {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
+                    </div>
                   </div>
                 </div>
               </div>
@@ -483,7 +491,7 @@ export default function ForecastTab({
                 <div className="mb-3 flex items-center justify-between gap-4">
                   <div className="font-medium text-slate-900">{row.name}</div>
                   <div className="text-sm text-slate-500">
-                    Base {row.scenario.base.delayDays}d • Optimized {row.scenario.optimized.delayDays}d • Worst {row.scenario.worst.delayDays}d
+                    {row.scenario.rentSourceLabel} • ${row.scenario.dailyRentValue}/day
                   </div>
                 </div>
 
@@ -548,8 +556,11 @@ export default function ForecastTab({
                           <div className="font-medium text-blue-700 hover:underline">{row.name}</div>
                         </button>
                         <div className="mt-1 text-sm text-slate-500">
-                          {row.market} • {row.currentStage}
-                        </div>
+  {row.market} • {row.currentStage}
+</div>
+<div className="text-xs text-slate-400">
+  {row.scenario.rentSourceLabel} • ${row.scenario.dailyRentValue}/day
+</div>
                       </td>
 
                       <td className="px-4 py-4">

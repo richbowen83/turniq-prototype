@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
-import { getRiskTone, getSeverityTone, getStageTone } from "../../utils/tone";
+import { getStageTone } from "../../utils/tone";
+import {
+  formatShortDate,
+  getDailyRentValue,
+  getRentSourceLabel,
+  getRevenueProtected,
+  shiftDate,
+} from "../../utils/economics";
 
 const STAGE_SLA = {
   "Pre-Leasing": 3,
@@ -52,19 +59,7 @@ const DEFAULT_FILTER_VIEWS = [
   "Failed Rent Ready",
 ];
 
-const STORAGE_KEY = "turniq_control_center_saved_views_v3";
-
-const MARKET_DAILY_RENT = {
-  Dallas: 92,
-  Phoenix: 88,
-  Atlanta: 81,
-  Nashville: 84,
-  Columbus: 78,
-  Cincinnati: 76,
-  Birmingham: 72,
-  Huntsville: 75,
-  Charleston: 86,
-};
+const STORAGE_KEY = "turniq_control_center_saved_views_v4";
 
 function getStageSla(stage) {
   return STAGE_SLA[stage] || 3;
@@ -120,18 +115,6 @@ function getLastTouchedLabel(row) {
   return "Recently active";
 }
 
-function getDailyRentValue(row) {
-  if (typeof row.dailyRentValue === "number" && row.dailyRentValue > 0) {
-    return row.dailyRentValue;
-  }
-
-  if (typeof row.monthlyRentValue === "number" && row.monthlyRentValue > 0) {
-    return Number((row.monthlyRentValue / 30).toFixed(2));
-  }
-
-  return MARKET_DAILY_RENT[row.market] || 80;
-}
-
 function buildPriority(row) {
   let score = 0;
   const reasons = [];
@@ -180,19 +163,23 @@ function buildPriority(row) {
   }
 
   let label = "Low";
+  let tone = "green";
+
   if (score >= 60) {
-    label = "High";
+    label = "Critical";
+    tone = "red";
   } else if (score >= 35) {
-    label = "Moderate";
+    label = "High";
+    tone = "amber";
   } else if (score >= 18) {
-    label = "Moderate";
+    label = "Medium";
+    tone = "slate";
   }
 
   return {
     score,
-    label: score >= 60 ? "Critical" : score >= 35 ? "High" : score >= 18 ? "Medium" : "Low",
-    tone: score >= 60 ? "red" : score >= 35 ? "amber" : score >= 18 ? "blue" : "green",
-    severity: label,
+    label,
+    tone,
     whyNow: reasons.slice(0, 4).join(" + ") || "Routine monitoring",
   };
 }
@@ -219,12 +206,13 @@ function buildImpact(row) {
   }
 
   const dailyRentValue = getDailyRentValue(row);
-  const revenueRecovered = Math.round(daysRecovered * dailyRentValue);
+  const revenueRecovered = getRevenueProtected(daysRecovered, row);
 
   return {
     daysRecovered,
     dailyRentValue,
     revenueRecovered,
+    rentSourceLabel: getRentSourceLabel(row),
   };
 }
 
@@ -243,9 +231,11 @@ function buildEnrichedRows(rows) {
       overdue,
       stageSla: getStageSla(row.currentStage),
       systemLink:
-        row.systemLink || `https://pms.example/turns/${encodeURIComponent(row.id)}`,
+        row.systemLink ||
+        `https://pms.example/turns/${encodeURIComponent(row.id)}`,
       lastAction: row.lastAction || null,
       dailyRentValue: getDailyRentValue(row),
+      rentSourceLabel: getRentSourceLabel(row),
     };
 
     return {
@@ -444,7 +434,10 @@ export default function ControlCenterTab({
 
   function recordActionOutcome(row, patch, label) {
     const nextDays = patch.daysInStage ?? row.daysInStage ?? 0;
-    const daysRecovered = Math.max(0, (row.daysInStage || 0) - nextDays);
+    const daysSaved = Math.max(0, (row.daysInStage || 0) - nextDays);
+    const prevECD = row.projectedCompletion;
+    const nextECD = daysSaved > 0 ? shiftDate(prevECD, -daysSaved) : prevECD;
+    const revenueProtected = getRevenueProtected(daysSaved, row);
     const clearedBlocker =
       row.turnStatus === "Blocked" &&
       (patch.turnStatus === "Monitoring" || patch.turnStatus === "Ready");
@@ -453,15 +446,20 @@ export default function ControlCenterTab({
       lastAction: {
         label,
         timestamp: new Date().toISOString(),
-        daysRecovered,
+        daysRecovered: daysSaved,
+        revenueProtected,
+        prevECD,
+        nextECD,
         clearedBlocker,
       },
     });
 
     setLastActionImpact({
       property: row.name,
-      daysSaved: daysRecovered,
-      revenueProtected: Math.round(daysRecovered * row.dailyRentValue),
+      daysSaved,
+      revenueProtected,
+      prevECD,
+      nextECD,
     });
   }
 
@@ -502,11 +500,16 @@ export default function ControlCenterTab({
     if (!row) return;
 
     const targetDays = Math.min(1, row.stageSla);
+    const daysSaved = Math.max(0, (row.daysInStage || 0) - targetDays);
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
     const patch = {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
       nextAction: "Prepare for dispatch",
       daysInStage: targetDays,
+      projectedCompletion: nextProjectedCompletion,
     };
 
     patchRow(id, patch);
@@ -517,7 +520,9 @@ export default function ControlCenterTab({
         id,
         {
           daysInStage: targetDays,
+          projectedCompletion: nextProjectedCompletion,
           risk: Math.max(35, row.risk - 10),
+          timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 4),
         },
         "Resolve control center issue"
       );
@@ -528,10 +533,15 @@ export default function ControlCenterTab({
     const row = enrichedRows.find((r) => r.id === id);
     if (!row) return;
 
+    const daysSaved = row.daysInStage || 0;
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
     const patch = {
       turnStatus: "Ready",
       nextAction: "Ready for execution",
       daysInStage: 0,
+      projectedCompletion: nextProjectedCompletion,
     };
 
     patchRow(id, patch);
@@ -542,7 +552,9 @@ export default function ControlCenterTab({
         id,
         {
           daysInStage: 0,
+          projectedCompletion: nextProjectedCompletion,
           risk: Math.max(25, row.risk - 12),
+          timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 6),
         },
         "Mark ready from control center"
       );
@@ -558,12 +570,17 @@ export default function ControlCenterTab({
     }
 
     if (row.currentStage === "Owner Approval") {
+      const daysSaved = row.daysInStage || 0;
+      const nextProjectedCompletion =
+        daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
       const patch = {
         currentStage: "Dispatch",
         daysInStage: 0,
         nextAction: "Confirm vendor schedule",
         turnStatus: "Monitoring",
         blockers: ["No active blockers"],
+        projectedCompletion: nextProjectedCompletion,
       };
 
       patchRow(row.id, patch);
@@ -575,7 +592,9 @@ export default function ControlCenterTab({
           {
             currentStage: "Dispatch",
             daysInStage: 0,
+            projectedCompletion: nextProjectedCompletion,
             risk: Math.max(35, row.risk - 8),
+            timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 5),
           },
           "Advance owner approval to dispatch"
         );
@@ -583,10 +602,15 @@ export default function ControlCenterTab({
       return;
     }
 
+    const daysSaved = Math.max(0, (row.daysInStage || 0) - targetDays);
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
     const patch = {
       daysInStage: targetDays,
       turnStatus: "Monitoring",
       nextAction: "Prepare for dispatch",
+      projectedCompletion: nextProjectedCompletion,
     };
 
     patchRow(row.id, patch);
@@ -597,7 +621,9 @@ export default function ControlCenterTab({
         row.id,
         {
           daysInStage: targetDays,
+          projectedCompletion: nextProjectedCompletion,
           risk: Math.max(35, row.risk - 6),
+          timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 3),
         },
         "Apply top action from control center"
       );
@@ -681,7 +707,10 @@ export default function ControlCenterTab({
       {lastActionImpact && (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           Action applied on <span className="font-medium">{lastActionImpact.property}</span> — saved{" "}
-          {lastActionImpact.daysSaved} days and protected ${lastActionImpact.revenueProtected}.
+          {lastActionImpact.daysSaved} days, moved ECD from{" "}
+          <span className="font-medium">{formatShortDate(lastActionImpact.prevECD)}</span> to{" "}
+          <span className="font-medium">{formatShortDate(lastActionImpact.nextECD)}</span>, and
+          protected ${lastActionImpact.revenueProtected}.
         </div>
       )}
 
@@ -752,7 +781,7 @@ export default function ControlCenterTab({
               Projected Revenue Impact (Top 5 Actions)
             </div>
             <div className="mt-1 text-sm text-slate-500">
-              Based on daily rent value × forecasted days recovered.
+              Uses imported rent when available and market fallback only when needed.
             </div>
           </div>
           <div className="flex gap-8">
@@ -766,7 +795,7 @@ export default function ControlCenterTab({
               <div className="text-3xl font-semibold text-slate-900">
                 ${portfolioImpact.revenueRecovered.toLocaleString()}
               </div>
-              <div className="text-sm text-slate-500">Revenue recovered</div>
+              <div className="text-sm text-slate-500">Revenue protected</div>
             </div>
           </div>
         </div>
@@ -873,7 +902,6 @@ export default function ControlCenterTab({
               </div>
 
               <div className="mt-3 text-sm font-medium text-slate-900">{row.nextAction}</div>
-
               <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
 
               <div className="mt-3 text-sm text-slate-700">
@@ -881,13 +909,12 @@ export default function ControlCenterTab({
               </div>
 
               <div className="mt-1 text-xs text-slate-500">
-                ${row.impact.dailyRentValue}/day rent basis
+                {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
               </div>
 
               {row.lastAction ? (
                 <div className="mt-2 text-xs text-emerald-600">
-                  Last action: {row.lastAction.daysRecovered}d recovered
-                  {row.lastAction.clearedBlocker ? " • blocker cleared" : ""}
+                  {row.lastAction.daysRecovered}d saved • ${row.lastAction.revenueProtected || 0} protected
                 </div>
               ) : (
                 <div className="mt-2 text-xs text-slate-400">No action taken yet</div>
@@ -963,18 +990,21 @@ export default function ControlCenterTab({
                     >
                       <td className="px-3 py-3">
                         <button onClick={() => setSelectedPropertyId(row.id)} className="text-left">
-                          <div className="font-medium text-blue-700 hover:underline">
-                            {row.name}
-                          </div>
+                          <div className="font-medium text-blue-700 hover:underline">{row.name}</div>
                         </button>
                         <div className="mt-1 text-xs text-slate-500">
                           {row.market} • Risk {row.risk} • {row.turnStatus}
                         </div>
                         {row.lastAction ? (
-                          <div className="mt-2 text-xs text-emerald-600">
-                            {row.lastAction.label} • {row.lastAction.daysRecovered}d recovered
-                          </div>
-                        ) : null}
+  <div className="mt-2 text-xs text-emerald-600">
+    {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
+    {row.lastAction.revenueProtected || 0}
+  </div>
+) : (
+  <div className="mt-2 text-xs text-slate-400">
+    {row.rentSourceLabel} • ${row.dailyRentValue}/day
+  </div>
+)}
                       </td>
 
                       <td className="px-3 py-3">
