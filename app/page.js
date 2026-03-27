@@ -282,7 +282,8 @@ export default function Page() {
   const [lastUploadedCount, setLastUploadedCount] = useState(0);
   const [lastSkippedCount, setLastSkippedCount] = useState(0);
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
-  const [mode, setMode] = useState("operator");
+  const [audienceMode, setAudienceMode] = useState("operator");
+   const [controlCenterMode, setControlCenterMode] = useState("guided");
 
   useEffect(() => {
   if (!hasHydrated) return;
@@ -754,35 +755,55 @@ if (!hasHydrated) {
   TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
 </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-3">
-  <div className="flex items-center gap-2">
+         <div className="flex flex-wrap items-center justify-between gap-3">
+  <div className="flex flex-wrap items-center gap-2">
     <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
       {activeDatasetLabel}
     </div>
 
     <div className="flex items-center gap-2">
-      <button
-        onClick={() => setMode("operator")}
-        className={`rounded-xl px-3 py-2 text-xs ${
-          mode === "operator"
-            ? "bg-slate-900 text-white"
-            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        Operator
-      </button>
-
-      <button
-        onClick={() => setMode("presentation")}
-        className={`rounded-xl px-3 py-2 text-xs ${
-          mode === "presentation"
-            ? "bg-slate-900 text-white"
-            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        Presentation
-      </button>
+      {[
+        { id: "operator", label: "Operator View" },
+        { id: "exec", label: "Executive View" },
+      ].map((item) => (
+        <button
+          key={item.id}
+          onClick={() => setAudienceMode(item.id)}
+          className={`rounded-xl px-3 py-2 text-xs ${
+            audienceMode === item.id
+              ? "bg-slate-900 text-white"
+              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
     </div>
+
+    {activeTab === "Control Center" ? (
+  <>
+    <div className="mx-2 h-5 w-px bg-slate-200" />
+
+    <div className="flex items-center gap-2">
+      {[
+        { id: "guided", label: "Guided Workflow" },
+        { id: "exec", label: "Portfolio Heatmap" },
+      ].map((item) => (
+        <button
+          key={item.id}
+          onClick={() => setControlCenterMode(item.id)}
+          className={`rounded-xl px-3 py-2 text-xs ${
+            controlCenterMode === item.id
+              ? "bg-slate-900 text-white"
+              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  </>
+) : null}
   </div>
 
   {lastImportTimestamp ? (
@@ -792,158 +813,170 @@ if (!hasHydrated) {
   ) : null}
 </div>
 
-          <GlobalKpiStrip
-            kpis={kpis}
-            onOpenTurnsClick={() => {
-              setQueueFilter("All Open Turns");
-              setSelectedStageFilter(null);
-              setActiveTab("Control Center");
-            }}
-            onBlockedTurnsClick={() => {
-              setQueueFilter("Blocked Turns");
-              setSelectedStageFilter(null);
-              setActiveTab("Dashboard");
-            }}
-            onScopeReviewsClick={() => {
-              setQueueFilter("All Open Turns");
-              setSelectedStageFilter("Scope Review");
-              setActiveTab("Control Center");
-            }}
-            onOwnerApprovalClick={() => {
-              setQueueFilter("All Open Turns");
-              setSelectedStageFilter("Owner Approval");
-              setActiveTab("Control Center");
-            }}
-            onHighRiskClick={() => {
-              setQueueFilter("High-Risk Turns");
-              setSelectedStageFilter(null);
-              setActiveTab("Control Center");
-            }}
-            onPastDueClick={() => {
-              setQueueFilter("ECD Past Due");
-              setSelectedStageFilter(null);
-              setActiveTab("Control Center");
-            }}
-            onEcdThisWeekClick={() => {
-              setQueueFilter("ECD This Week");
-              setSelectedStageFilter(null);
-              setActiveTab("Control Center");
-            }}
-            onRriFailRateClick={() => {
-              setActiveTab("Analytics");
-            }}
-          />
-        </div>
-      </div>
-
-      <div className="mx-auto max-w-7xl px-6 py-4">
-  <TabNav tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+<GlobalKpiStrip
+  kpis={kpis}
+  onOpenTurnsClick={() => {
+    setQueueFilter("All Open Turns");
+    setSelectedStageFilter(null);
+    setActiveTab("Control Center");
+  }}
+  onBlockedTurnsClick={() => {
+    setQueueFilter("Blocked Turns");
+    setSelectedStageFilter(null);
+    setActiveTab("Dashboard");
+  }}
+  onScopeReviewsClick={() => {
+    setQueueFilter("All Open Turns");
+    setSelectedStageFilter("Scope Review");
+    setActiveTab("Control Center");
+  }}
+  onOwnerApprovalClick={() => {
+    setQueueFilter("All Open Turns");
+    setSelectedStageFilter("Owner Approval");
+    setActiveTab("Control Center");
+  }}
+  onHighRiskClick={() => {
+    setQueueFilter("High-Risk Turns");
+    setSelectedStageFilter(null);
+    setActiveTab("Control Center");
+  }}
+  onPastDueClick={() => {
+    setQueueFilter("ECD Past Due");
+    setSelectedStageFilter(null);
+    setActiveTab("Control Center");
+  }}
+  onEcdThisWeekClick={() => {
+    setQueueFilter("ECD This Week");
+    setSelectedStageFilter(null);
+    setActiveTab("Control Center");
+  }}
+  onRriFailRateClick={() => {
+    setActiveTab("Analytics");
+  }}
+/>
+</div>
 </div>
 
-      <div className="mx-auto max-w-7xl px-6 py-4">
-        {activeTab === "Dashboard" && (
-          <DashboardTab
-            mode={mode}
-            properties={filteredProperties}
-            selectedProperty={selectedProperty}
-            setSelectedPropertyId={setSelectedPropertyId}
-            selectedMarket={selectedMarket}
-            setSelectedMarket={setSelectedMarket}
-            notes={notesMap[selectedProperty.name] || []}
-            activity={activityMap[selectedProperty.name] || []}
-            addNote={addNote}
-            addActivity={addActivity}
-            addActionHistory={addActionHistory}
-            actionHistory={actionHistory}
-            updateProperty={updateProperty}
-            formatMoney={formatMoney}
-            getToneFromRisk={getToneFromRisk}
-            topStageBottleneck={topStageBottleneck}
-          />
-        )}
-
-        {activeTab === "Control Center" && (
-          <ControlCenterTab
-            rows={queueRows}
-            queueFilter={queueFilter}
-            setQueueFilter={setQueueFilter}
-            resetQueueView={resetQueueView}
-            selectedStageFilter={selectedStageFilter}
-            toggleStageFilter={toggleStageFilter}
-            sortBy={sortBy}
-            setSortBy={setSortBy}
-            operatorSummary={operatorSummary}
-            selectedPropertyId={selectedPropertyId}
-            setSelectedPropertyId={setSelectedPropertyId}
-            updateProperty={updateProperty}
-            getToneFromRisk={getToneFromRisk}
-            stagePipeline={stagePipeline}
-            topStageBottleneck={topStageBottleneck}
-            saveRow={saveRow}
-            openRow={openRow}
-            savedRowIds={savedRowIds}
-            dirtyRowIds={dirtyRowIds}
-            markDirtyRow={markDirtyRow}
-          />
-        )}
-
-        {activeTab === "Forecast" && (
-  <ForecastTab
-    mode={mode}
-    selectedProperty={selectedProperty}
-    properties={filteredProperties}
-    setSelectedPropertyId={setSelectedPropertyId}
-    applyForecastPatch={applyForecastPatch}
-    applyForecastBatch={applyForecastBatch}
-    undoLastForecastAction={undoLastForecastAction}
-    canUndoForecastAction={forecastUndoStack.length > 0}
-    lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+<div className="mx-auto max-w-7xl px-6 py-4">
+  <TabNav
+    tabs={TABS}
+    activeTab={activeTab}
+    onChange={setActiveTab}
+    mode={audienceMode}
   />
-)}
+</div>
 
-        {activeTab === "Analytics" && (
-          <AnalyticsTab properties={filteredProperties} actionHistory={actionHistory} />
-        )}
+     <div className="mx-auto max-w-7xl px-6 py-4">
+  {activeTab === "Dashboard" && (
+    <DashboardTab
+      mode={audienceMode}
+      properties={filteredProperties}
+      selectedProperty={selectedProperty}
+      setSelectedPropertyId={setSelectedPropertyId}
+      selectedMarket={selectedMarket}
+      setSelectedMarket={setSelectedMarket}
+      notes={notesMap[selectedProperty.name] || []}
+      activity={activityMap[selectedProperty.name] || []}
+      addNote={addNote}
+      addActivity={addActivity}
+      addActionHistory={addActionHistory}
+      actionHistory={actionHistory}
+      updateProperty={updateProperty}
+      formatMoney={formatMoney}
+      getToneFromRisk={getToneFromRisk}
+      topStageBottleneck={topStageBottleneck}
+    />
+  )}
 
-        {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
+  {activeTab === "Control Center" && (
+    <ControlCenterTab
+      mode={audienceMode}
+      viewMode={controlCenterMode}
+      rows={queueRows}
+      queueFilter={queueFilter}
+      setQueueFilter={setQueueFilter}
+      resetQueueView={resetQueueView}
+      selectedStageFilter={selectedStageFilter}
+      toggleStageFilter={toggleStageFilter}
+      sortBy={sortBy}
+      setSortBy={setSortBy}
+      operatorSummary={operatorSummary}
+      selectedPropertyId={selectedPropertyId}
+      setSelectedPropertyId={setSelectedPropertyId}
+      updateProperty={updateProperty}
+      getToneFromRisk={getToneFromRisk}
+      stagePipeline={stagePipeline}
+      topStageBottleneck={topStageBottleneck}
+      saveRow={saveRow}
+      openRow={openRow}
+      savedRowIds={savedRowIds}
+      dirtyRowIds={dirtyRowIds}
+      markDirtyRow={markDirtyRow}
+    />
+  )}
 
-        {activeTab === "Import" && (
-  <ImportPanel
-    onImport={handleImportTurns}
-    onClearSuccess={() => {
-      setLastImportCount(0);
-      setLastUploadedCount(0);
-      setLastSkippedCount(0);
-      setLastImportTimestamp(null);
-    }}
-    onClearImportedData={handleClearImportedData}
-    onUndoImport={handleUndoImport}
-    canUndoImport={canUndoImport}
-    hasImportedData={importedProperties.length > 0}
-    importMode={importMode}
-    setImportMode={setImportMode}
-    lastImportCount={lastImportCount}
-    lastUploadedCount={lastUploadedCount}
-    lastSkippedCount={lastSkippedCount}
-    lastImportTimestamp={lastImportTimestamp}
-  />
-)}
+  {activeTab === "Forecast" && (
+    <ForecastTab
+      mode={audienceMode}
+      selectedProperty={selectedProperty}
+      properties={filteredProperties}
+      setSelectedPropertyId={setSelectedPropertyId}
+      applyForecastPatch={applyForecastPatch}
+      applyForecastBatch={applyForecastBatch}
+      undoLastForecastAction={undoLastForecastAction}
+      canUndoForecastAction={forecastUndoStack.length > 0}
+      lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+    />
+  )}
 
-        {activeTab === "Overview" && (
-          <OverviewTab
-    mode={mode}
-    properties={filteredProperties}
-    kpis={kpis}
-    selectedMarket={selectedMarket}
-    setSelectedMarket={setSelectedMarket}
-    setActiveTab={setActiveTab}
-    actionHistory={actionHistory}
-    hasImportedData={importedProperties.length > 0}
-    topStageBottleneck={topStageBottleneck}
-    lastImportCount={lastImportCount}
-/>
-        )}
-      </div>
+  {activeTab === "Analytics" && (
+    <AnalyticsTab
+      properties={filteredProperties}
+      actionHistory={actionHistory}
+    />
+  )}
+
+  {activeTab === "Vendors" && (
+    <VendorsTab properties={filteredProperties} />
+  )}
+
+  {activeTab === "Import" && (
+    <ImportPanel
+      onImport={handleImportTurns}
+      onClearSuccess={() => {
+        setLastImportCount(0);
+        setLastUploadedCount(0);
+        setLastSkippedCount(0);
+        setLastImportTimestamp(null);
+      }}
+      onClearImportedData={handleClearImportedData}
+      onUndoImport={handleUndoImport}
+      canUndoImport={canUndoImport}
+      hasImportedData={importedProperties.length > 0}
+      importMode={importMode}
+      setImportMode={setImportMode}
+      lastImportCount={lastImportCount}
+      lastUploadedCount={lastUploadedCount}
+      lastSkippedCount={lastSkippedCount}
+      lastImportTimestamp={lastImportTimestamp}
+    />
+  )}
+
+  {activeTab === "Overview" && (
+    <OverviewTab
+      mode={audienceMode}
+      properties={filteredProperties}
+      kpis={kpis}
+      selectedMarket={selectedMarket}
+      setSelectedMarket={setSelectedMarket}
+      setActiveTab={setActiveTab}
+      actionHistory={actionHistory}
+      hasImportedData={importedProperties.length > 0}
+      topStageBottleneck={topStageBottleneck}
+      lastImportCount={lastImportCount}
+    />
+  )}
+</div>
     </div>
   );
 }

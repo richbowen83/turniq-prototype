@@ -14,23 +14,33 @@ function parseMoneyLike(value) {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value !== "string") return null;
 
-  const cleaned = value.replace(/[$,\s]/g, "");
+  const trimmed = value.trim();
+  const isNegative = /^\(.*\)$/.test(trimmed);
+  const cleaned = trimmed.replace(/[(),$,\s]/g, "");
   const parsed = Number(cleaned);
-  return Number.isFinite(parsed) ? parsed : null;
+
+  if (!Number.isFinite(parsed)) return null;
+  return isNegative ? -parsed : parsed;
 }
 
 export function getMonthlyRentValue(row) {
   const candidates = [
-    row?.monthlyRentValue,
-    row?.monthlyRent,
-    row?.rent,
-    row?.marketRent,
-    row?.askingRent,
-    row?.leaseRent,
-    row?.actualRent,
-    row?.monthly_rent,
-    row?.rent_amount,
-  ];
+  row?.monthlyRentValue,
+  row?.monthlyRent,
+  row?.monthly_rent,
+  row?.monthly_rent_value,
+  row?.rent,
+  row?.rentAmount,
+  row?.rent_amount,
+  row?.marketRent,
+  row?.market_rent,
+  row?.askingRent,
+  row?.asking_rent,
+  row?.leaseRent,
+  row?.lease_rent,
+  row?.actualRent,
+  row?.actual_rent,
+];
 
   for (const candidate of candidates) {
     const parsed = parseMoneyLike(candidate);
@@ -42,11 +52,13 @@ export function getMonthlyRentValue(row) {
 
 export function getDailyRentValue(row) {
   const explicitDailyCandidates = [
-    row?.dailyRentValue,
-    row?.dailyRent,
-    row?.daily_rent,
-    row?.rentPerDay,
-  ];
+  row?.dailyRentValue,
+  row?.dailyRent,
+  row?.daily_rent,
+  row?.rentPerDay,
+  row?.rent_per_day,
+  row?.perDayRent,
+];
 
   for (const candidate of explicitDailyCandidates) {
     const parsed = parseMoneyLike(candidate);
