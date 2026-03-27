@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { getSeverityTone } from "../../utils/tone";
@@ -251,6 +251,8 @@ if (row.currentStage === "Failed Rent Ready") {
   };
 }
 
+const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
+
 export default function ForecastTab({
   mode = "operator",
   selectedProperty,
@@ -263,6 +265,21 @@ export default function ForecastTab({
   lastForecastUndoLabel,
 }) {
   const [activeScenario, setActiveScenario] = useState("Optimized Case");
+  const [actionLearningLog, setActionLearningLog] = useState([]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(ACTION_LEARNING_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setActionLearningLog(parsed);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load action learning log", error);
+    }
+  }, []);
 
   const portfolio = useMemo(() => buildPortfolioSummary(properties), [properties]);
   const scenarioQueue = useMemo(() => buildScenarioQueue(properties), [properties]);
@@ -276,6 +293,29 @@ export default function ForecastTab({
     () => (forecastTarget && scenarioModel ? getRecommendation(forecastTarget, scenarioModel) : null),
     [forecastTarget, scenarioModel]
   );
+
+  const recommendationSignal = useMemo(() => {
+    if (!recommendation || !forecastTarget) return null;
+
+    const matches = actionLearningLog.filter(
+      (entry) =>
+        entry.stage === forecastTarget.currentStage ||
+        entry.actionLabel === recommendation.title
+    );
+
+    const uses = matches.length;
+    const totalDaysSaved = matches.reduce((sum, entry) => sum + (entry.daysSaved || 0), 0);
+    const totalRevenueProtected = matches.reduce(
+      (sum, entry) => sum + (entry.revenueProtected || 0),
+      0
+    );
+
+    return {
+      uses,
+      totalDaysSaved,
+      totalRevenueProtected,
+    };
+  }, [actionLearningLog, recommendation, forecastTarget]);
 
   const activeScenarioData =
     activeScenario === "Base Case"
@@ -434,9 +474,9 @@ export default function ForecastTab({
               <div className="text-2xl font-semibold text-slate-900">
                 Scenario Comparison — {forecastTarget.name}
               </div>
-              <div className="mt-1 text-sm text-slate-500">
-                {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
-              </div>
+              <div className="text-xs text-slate-400">
+  {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
+</div>
             </div>
 
             <div className="flex flex-wrap gap-2">
@@ -489,8 +529,8 @@ export default function ForecastTab({
                     </div>
 
                     <div className="text-xs text-slate-400">
-                    {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
-                    </div>
+  {scenarioModel.rentSourceLabel} • ${scenarioModel.dailyRentValue}/day
+</div>
                   </div>
                 </div>
               </div>
@@ -587,6 +627,11 @@ export default function ForecastTab({
 <div className="text-xs text-slate-400">
   {row.scenario.rentSourceLabel} • ${row.scenario.dailyRentValue}/day
 </div>
+{row.currentStage === "Failed Rent Ready" ? (
+  <div className="text-xs text-rose-600">
+    Rework required • ${row.scenario.failedReadyPenalty.toLocaleString()} signal
+  </div>
+) : null}
                       </td>
 
                       <td className="px-4 py-4">
@@ -691,6 +736,18 @@ export default function ForecastTab({
                   <div className="text-base font-medium text-slate-900">{recommendation.title}</div>
                   <div className="text-sm text-slate-600">Why: {recommendation.why}</div>
                   <div className="text-sm text-slate-600">{recommendation.outcome}</div>
+{recommendationSignal && recommendationSignal.uses > 0 ? (
+  <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-3">
+    <div className="text-xs uppercase tracking-wide text-slate-500">
+      Observed Action Signal
+    </div>
+    <div className="mt-2 text-sm text-slate-700">
+      Similar interventions have been used {recommendationSignal.uses} times, recovering{" "}
+      {recommendationSignal.totalDaysSaved} days and protecting $
+      {recommendationSignal.totalRevenueProtected.toLocaleString()}.
+    </div>
+  </div>
+) : null}
                 </div>
               </Card>
 

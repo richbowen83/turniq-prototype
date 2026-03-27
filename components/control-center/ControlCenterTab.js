@@ -63,7 +63,7 @@ const SYSTEM_VIEWS = [
   {
     id: "my_queue",
     name: "My Queue",
-    getFilters: (rows) => ({
+    getFilters: () => ({
       queueFilter: "All Open Turns",
       customFilter: (row) => row.turnOwner === "Me",
       sortBy: "Priority",
@@ -112,6 +112,7 @@ const SYSTEM_VIEWS = [
 ];
 
 const STORAGE_KEY = "turniq_control_center_saved_views_v4";
+const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
 
 function getStageSla(stage) {
   return STAGE_SLA[stage] || 3;
@@ -150,6 +151,7 @@ function getNextAction(row) {
 
   const blocker = getPrimaryBlocker(row).toLowerCase();
 
+  if (row.currentStage === "Failed Rent Ready") return "Re-inspect and confirm ready state";
   if (row.currentStage === "Owner Approval") return "Chase owner approval";
   if (blocker.includes("appliance")) return "Confirm appliance ETA";
   if (blocker.includes("vendor")) return "Confirm vendor schedule";
@@ -171,10 +173,10 @@ function buildPriority(row) {
   let score = 0;
   const reasons = [];
 
-if (row.currentStage === "Failed Rent Ready") {
-  score += 30;
-  reasons.push("Failed rent ready");
-}
+  if (row.currentStage === "Failed Rent Ready") {
+    score += 30;
+    reasons.push("Failed rent ready");
+  }
 
   if (row.turnStatus === "Blocked") {
     score += 40;
@@ -244,9 +246,9 @@ if (row.currentStage === "Failed Rent Ready") {
 function buildImpact(row) {
   let daysRecovered = 0;
 
-if (row.currentStage === "Failed Rent Ready") {
-  daysRecovered += 3;
-}
+  if (row.currentStage === "Failed Rent Ready") {
+    daysRecovered += 3;
+  }
 
   const daysOver = getDaysOverSla(row);
 
@@ -428,6 +430,21 @@ export default function ControlCenterTab({
   const [lastActionImpact, setLastActionImpact] = useState(null);
   const [activeSystemView, setActiveSystemView] = useState(null);
   const [customRowFilter, setCustomRowFilter] = useState(null);
+  const [actionLearningLog, setActionLearningLog] = useState([]);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(ACTION_LEARNING_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          setActionLearningLog(parsed);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to load action learning log", error);
+    }
+  }, []);
 
   useEffect(() => {
     try {
@@ -452,34 +469,83 @@ export default function ControlCenterTab({
     }
   }
 
+  function persistActionLearning(nextLog) {
+    setActionLearningLog(nextLog);
+    try {
+      localStorage.setItem(ACTION_LEARNING_STORAGE_KEY, JSON.stringify(nextLog));
+    } catch (error) {
+      console.error("Failed to persist action learning log", error);
+    }
+  }
+
+  const actionLearningSummary = useMemo(() => {
+    const grouped = {};
+
+    for (const entry of actionLearningLog) {
+      if (!grouped[entry.actionLabel]) {
+        grouped[entry.actionLabel] = {
+          actionLabel: entry.actionLabel,
+          uses: 0,
+          totalDaysSaved: 0,
+          totalRevenueProtected: 0,
+        };
+      }
+
+      grouped[entry.actionLabel].uses += 1;
+      grouped[entry.actionLabel].totalDaysSaved += entry.daysSaved || 0;
+      grouped[entry.actionLabel].totalRevenueProtected += entry.revenueProtected || 0;
+    }
+
+    return Object.values(grouped)
+      .map((item) => ({
+        ...item,
+        avgDaysSaved: item.uses ? Number((item.totalDaysSaved / item.uses).toFixed(1)) : 0,
+        avgRevenueProtected: item.uses
+          ? Math.round(item.totalRevenueProtected / item.uses)
+          : 0,
+      }))
+      .sort((a, b) => b.totalRevenueProtected - a.totalRevenueProtected)
+      .slice(0, 5);
+  }, [actionLearningLog]);
+
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
   const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
 
   const workingRows = useMemo(() => {
     let next = applyFilter(enrichedRows, queueFilter);
 
-if (customRowFilter) {
-  next = next.filter(customRowFilter);
-}
+    if (customRowFilter) {
+      next = next.filter(customRowFilter);
+    }
+
+    if (selectedStageFilter) {
+      next = next.filter((row) => row.currentStage === selectedStageFilter);
+    }
 
     return sortRows(next, sortBy);
-  }, [enrichedRows, queueFilter, selectedStageFilter, sortBy]);
+  }, [enrichedRows, queueFilter, customRowFilter, selectedStageFilter, sortBy]);
 
   const queueSummary = useMemo(() => {
-  const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
-  const overdue = workingRows.filter((row) => row.overdue).length;
-  const stale = workingRows.filter((row) => row.stale).length;
-  const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
-  const failedRentReady = workingRows.filter(
-    (row) => row.currentStage === "Failed Rent Ready"
-  ).length;
+    const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
+    const overdue = workingRows.filter((row) => row.overdue).length;
+    const stale = workingRows.filter((row) => row.stale).length;
+    const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
+    const failedRentReady = workingRows.filter(
+      (row) => row.currentStage === "Failed Rent Ready"
+    ).length;
 
-  return { blocked, overdue, stale, critical, failedRentReady };
-}, [workingRows]);
+    return { blocked, overdue, stale, critical, failedRentReady };
+  }, [workingRows]);
 
   const topActions = useMemo(() => {
     return [...enrichedRows]
-      .sort((a, b) => b.priority.score - a.priority.score)
+      .filter((row) => row.impact.daysRecovered > 0)
+      .sort((a, b) => {
+        if (b.impact.revenueRecovered !== a.impact.revenueRecovered) {
+          return b.impact.revenueRecovered - a.impact.revenueRecovered;
+        }
+        return b.priority.score - a.priority.score;
+      })
       .slice(0, 5);
   }, [enrichedRows]);
 
@@ -507,6 +573,23 @@ if (customRowFilter) {
     const clearedBlocker =
       row.turnStatus === "Blocked" &&
       (patch.turnStatus === "Monitoring" || patch.turnStatus === "Ready");
+
+    const learningEntry = {
+      id: `learn-${Date.now()}-${row.id}`,
+      propertyId: row.id,
+      propertyName: row.name,
+      actionLabel: label,
+      stage: row.currentStage,
+      blocker: row.blocker || getPrimaryBlocker(row),
+      turnStatus: row.turnStatus,
+      risk: row.risk || 0,
+      daysSaved,
+      revenueProtected,
+      timestamp: new Date().toISOString(),
+    };
+
+    const nextLearningLog = [learningEntry, ...actionLearningLog].slice(0, 200);
+    persistActionLearning(nextLearningLog);
 
     patchRow(row.id, {
       lastAction: {
@@ -627,21 +710,20 @@ if (customRowFilter) {
     }
   }
 
-function applySystemView(view) {
-  const config = view.getFilters(enrichedRows);
+  function applySystemView(view) {
+    const config = view.getFilters(enrichedRows);
 
-  setQueueFilter(config.queueFilter || "All Open Turns");
-  setSortBy(config.sortBy || "Priority");
-  setActiveSystemView(view.id);
-  setActiveSavedViewId(null);
+    setQueueFilter(config.queueFilter || "All Open Turns");
+    setSortBy(config.sortBy || "Priority");
+    setActiveSystemView(view.id);
+    setActiveSavedViewId(null);
 
-  // optional custom filter support (future ready)
-  if (config.customFilter) {
-    setCustomRowFilter(() => config.customFilter);
-  } else {
-    setCustomRowFilter(null);
+    if (config.customFilter) {
+      setCustomRowFilter(() => config.customFilter);
+    } else {
+      setCustomRowFilter(null);
+    }
   }
-}
 
   function handleApplyTopAction(row) {
     const targetDays = Math.max(0, row.stageSla - 1);
@@ -651,38 +733,38 @@ function applySystemView(view) {
       return;
     }
 
-if (row.currentStage === "Failed Rent Ready") {
-  const daysSaved = Math.max(0, (row.daysInStage || 0) - 1);
-  const nextProjectedCompletion =
-    daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+    if (row.currentStage === "Failed Rent Ready") {
+      const daysSaved = Math.max(0, (row.daysInStage || 0) - 1);
+      const nextProjectedCompletion =
+        daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
 
-  const patch = {
-    currentStage: "Rent Ready Open",
-    daysInStage: 1,
-    turnStatus: "Monitoring",
-    nextAction: "Re-inspect and confirm ready state",
-    blockers: ["No active blockers"],
-    projectedCompletion: nextProjectedCompletion,
-  };
-
-  patchRow(row.id, patch);
-  recordActionOutcome(row, patch, "Recover failed rent ready");
-
-  if (applyForecastPatch) {
-    applyForecastPatch(
-      row.id,
-      {
+      const patch = {
         currentStage: "Rent Ready Open",
         daysInStage: 1,
+        turnStatus: "Monitoring",
+        nextAction: "Re-inspect and confirm ready state",
+        blockers: ["No active blockers"],
         projectedCompletion: nextProjectedCompletion,
-        risk: Math.max(30, row.risk - 10),
-        timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 5),
-      },
-      "Recover failed rent ready"
-    );
-  }
-  return;
-}
+      };
+
+      patchRow(row.id, patch);
+      recordActionOutcome(row, patch, "Recover failed rent ready");
+
+      if (applyForecastPatch) {
+        applyForecastPatch(
+          row.id,
+          {
+            currentStage: "Rent Ready Open",
+            daysInStage: 1,
+            projectedCompletion: nextProjectedCompletion,
+            risk: Math.max(30, row.risk - 10),
+            timelineConfidence: Math.min(99, (row.timelineConfidence || 80) + 5),
+          },
+          "Recover failed rent ready"
+        );
+      }
+      return;
+    }
 
     if (row.currentStage === "Owner Approval") {
       const daysSaved = row.daysInStage || 0;
@@ -780,13 +862,12 @@ if (row.currentStage === "Failed Rent Ready") {
     if (activeSavedViewId === id) setActiveSavedViewId(null);
   }
 
-function resetQueueViewFull() {
-  resetQueueView(); // existing behavior
-
-  setActiveSystemView(null);
-  setActiveSavedViewId(null);
-  setCustomRowFilter(null);
-}
+  function resetQueueViewFull() {
+    resetQueueView();
+    setActiveSystemView(null);
+    setActiveSavedViewId(null);
+    setCustomRowFilter(null);
+  }
 
   return (
     <div className="space-y-6">
@@ -827,7 +908,7 @@ function resetQueueViewFull() {
         </div>
       </div>
 
-      {lastActionImpact && (
+      {lastActionImpact ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           Action applied on <span className="font-medium">{lastActionImpact.property}</span> — saved{" "}
           {lastActionImpact.daysSaved} days, moved ECD from{" "}
@@ -835,67 +916,59 @@ function resetQueueViewFull() {
           <span className="font-medium">{formatShortDate(lastActionImpact.nextECD)}</span>, and
           protected ${lastActionImpact.revenueProtected}.
         </div>
-      )}
+      ) : null}
 
       <Card>
-  <div className="flex flex-wrap items-center justify-between gap-3">
-    <div className="text-xl font-semibold text-slate-900">Quick Views</div>
-    <button onClick={saveCurrentView} className="text-sm underline">
-      Save current view
-    </button>
-  </div>
-
-  {/* SYSTEM VIEWS */}
-  <div className="mt-4 flex flex-wrap gap-2">
-    {SYSTEM_VIEWS.map((view) => (
-      <button
-        key={view.id}
-        onClick={() => applySystemView(view)}
-        className={`rounded-xl px-3 py-2 text-sm ${
-          activeSystemView === view.id
-            ? "bg-slate-900 text-white"
-            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-        }`}
-      >
-        {view.name}
-      </button>
-    ))}
-  </div>
-
-  {/* USER SAVED VIEWS */}
-  {savedViews.length ? (
-    <div className="mt-4 flex flex-wrap gap-2">
-      {savedViews.map((view) => (
-        <div
-          key={view.id}
-          className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
-            activeSavedViewId === view.id
-              ? "bg-slate-900 text-white"
-              : "border border-slate-200 bg-white"
-          }`}
-        >
-          <button onClick={() => applySavedViewPreset(view)}>
-            {view.name}
-          </button>
-          <button
-            onClick={() => deleteSavedView(view.id)}
-            className={
-              activeSavedViewId === view.id
-                ? "text-white/70"
-                : "text-slate-400"
-            }
-          >
-            ✕
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="text-xl font-semibold text-slate-900">Quick Views</div>
+          <button onClick={saveCurrentView} className="text-sm underline">
+            Save current view
           </button>
         </div>
-      ))}
-    </div>
-  ) : (
-    <div className="mt-3 text-sm text-slate-500">
-      No saved views yet.
-    </div>
-  )}
-</Card>
+
+        <div className="mt-4 flex flex-wrap gap-2">
+          {SYSTEM_VIEWS.map((view) => (
+            <button
+              key={view.id}
+              onClick={() => applySystemView(view)}
+              className={`rounded-xl px-3 py-2 text-sm ${
+                activeSystemView === view.id
+                  ? "bg-slate-900 text-white"
+                  : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+              }`}
+            >
+              {view.name}
+            </button>
+          ))}
+        </div>
+
+        {savedViews.length ? (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {savedViews.map((view) => (
+              <div
+                key={view.id}
+                className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${
+                  activeSavedViewId === view.id
+                    ? "bg-slate-900 text-white"
+                    : "border border-slate-200 bg-white"
+                }`}
+              >
+                <button onClick={() => applySavedViewPreset(view)}>{view.name}</button>
+                <button
+                  onClick={() => deleteSavedView(view.id)}
+                  className={
+                    activeSavedViewId === view.id ? "text-white/70" : "text-slate-400"
+                  }
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 text-sm text-slate-500">No saved views yet.</div>
+        )}
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <Card>
@@ -905,16 +978,16 @@ function resetQueueViewFull() {
         </Card>
 
         <Card>
-<div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-  <div className="text-xs uppercase tracking-wide text-rose-700">
-    Failed Rent Ready
-  </div>
-  <div className="mt-2 text-2xl font-semibold text-slate-900">
-    {queueSummary.failedRentReady}
-  </div>
-  <div className="mt-1 text-xs text-rose-700">Rework required</div>
-</div>
- </Card>
+          <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+            <div className="text-xs uppercase tracking-wide text-rose-700">
+              Failed Rent Ready
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              {queueSummary.failedRentReady}
+            </div>
+            <div className="mt-1 text-xs text-rose-700">Rework required</div>
+          </div>
+        </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Critical Priority</div>
@@ -926,12 +999,6 @@ function resetQueueViewFull() {
           <div className="text-xs uppercase tracking-wide text-slate-500">Blocked</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.blocked}</div>
           <div className="mt-1 text-sm text-slate-500">Need direct intervention</div>
-        </Card>
-
-        <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Over SLA</div>
-          <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.overdue}</div>
-          <div className="mt-1 text-sm text-slate-500">Problem-child turns surfacing</div>
         </Card>
       </div>
 
@@ -1046,58 +1113,108 @@ function resetQueueViewFull() {
           <Pill tone="slate">{topActions.length} actions</Pill>
         </div>
 
-        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
-          {topActions.map((row) => (
-            <div
-              key={row.id}
-              className="flex min-h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
-            >
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <div className="font-medium text-slate-900">{row.name}</div>
-                  <div className="mt-1 text-xs text-slate-500">
-                    {row.currentStage} • {row.market}
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          {topActions.map((row) => {
+            const isActionable = row.impact.daysRecovered > 0;
+
+            return (
+              <div
+                key={row.id}
+                className="flex min-h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <div className="font-medium text-slate-900">{row.name}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {row.currentStage} • {row.market}
+                    </div>
                   </div>
+                  <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
                 </div>
-                <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-              </div>
 
-              <div className="mt-3 text-sm font-medium text-slate-900">{row.nextAction}</div>
-              <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
+                <div className="mt-3 text-sm font-medium text-slate-900">{row.nextAction}</div>
+                <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
 
-              <div className="mt-3 text-sm text-slate-700">
-                +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
-              </div>
-
-              <div className="mt-1 text-xs text-slate-500">
-                {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
-              </div>
-
-              {row.lastAction ? (
-                <div className="mt-2 text-xs text-emerald-600">
-                  {row.lastAction.daysRecovered}d saved • ${row.lastAction.revenueProtected || 0} protected
+                <div className="mt-3 text-sm text-slate-700">
+                  +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
                 </div>
-              ) : (
-                <div className="mt-2 text-xs text-slate-400">No action taken yet</div>
-              )}
 
-              <div className="mt-auto pt-4">
-                <button
-                  onClick={() => handleApplyTopAction(row)}
-                  className="w-full rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
-                >
-                  Apply Action
-                </button>
+                <div className="mt-1 text-xs text-slate-500">
+                  {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
+                </div>
+
+                {row.lastAction ? (
+                  <div className="mt-2 text-xs text-emerald-600">
+                    {row.lastAction.daysRecovered}d saved • ${row.lastAction.revenueProtected || 0} protected
+                  </div>
+                ) : (
+                  <div className="mt-2 text-xs text-slate-400">
+                    No action taken yet — learning starts after first intervention
+                  </div>
+                )}
+
+                <div className="mt-auto pt-4">
+                  {isActionable ? (
+                    <button
+                      onClick={() => handleApplyTopAction(row)}
+                      className="w-full rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
+                    >
+                      Apply Action
+                    </button>
+                  ) : (
+                    <div className="text-center text-xs text-slate-400">
+                      No meaningful action recommended
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-9">
+        <div className="xl:col-span-9 space-y-6">
           <Card>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Action Outcome Learning</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Tracks which interventions are creating the most operational and financial impact.
+                </div>
+              </div>
+              <Pill tone="slate">{actionLearningLog.length} actions logged</Pill>
+            </div>
+
+            {actionLearningSummary.length ? (
+              <div className="mt-6 grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+                {actionLearningSummary.map((item) => (
+                  <div
+                    key={item.actionLabel}
+                    className="rounded-2xl border border-slate-200 bg-white p-5"
+                  >
+                    <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
+                    <div className="mt-4 text-2xl font-semibold text-slate-900">
+                      ${item.totalRevenueProtected.toLocaleString()}
+                    </div>
+                    <div className="mt-2 text-sm text-slate-600">
+                      {item.totalDaysSaved}d recovered across {item.uses} uses
+                    </div>
+                    <div className="mt-3 text-xs text-slate-400">
+                      Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-4 text-sm text-slate-500">
+                No action outcomes logged yet. Apply actions in Control Center to start building a learning loop.
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
               <div>
                 <div className="text-xl font-semibold text-slate-900">Live Working Queue</div>
                 <div className="mt-1 text-sm text-slate-500">
@@ -1124,67 +1241,75 @@ function resetQueueViewFull() {
             </div>
 
             <div className="overflow-x-auto">
-              <table className="min-w-[1460px] text-sm">
+              <table className="min-w-[1540px] text-sm">
                 <thead className="bg-slate-50 text-left text-slate-500">
                   <tr>
-                    <th className="px-3 py-2 font-medium">Turn</th>
-                    <th className="px-3 py-2 font-medium">Priority</th>
-                    <th className="px-3 py-2 font-medium">Why Now</th>
-                    <th className="px-3 py-2 font-medium">Stage</th>
-                    <th className="px-3 py-2 font-medium">Days</th>
-                    <th className="px-3 py-2 font-medium">Owner</th>
-                    <th className="px-3 py-2 font-medium">Blocker</th>
-                    <th className="px-3 py-2 font-medium">Next Action</th>
-                    <th className="px-3 py-2 font-medium">Follow-up</th>
-                    <th className="px-3 py-2 font-medium">Notes</th>
-                    <th className="px-3 py-2 font-medium whitespace-nowrap">PMS</th>
-                    <th className="px-3 py-2 font-medium">Actions</th>
+                    <th className="w-[260px] px-4 py-3 font-medium">Turn</th>
+                    <th className="px-4 py-3 font-medium">Priority</th>
+                    <th className="px-4 py-3 font-medium">Why Now</th>
+                    <th className="px-4 py-3 font-medium">Stage</th>
+                    <th className="px-4 py-3 font-medium">Days</th>
+                    <th className="px-4 py-3 font-medium">Owner</th>
+                    <th className="px-4 py-3 font-medium">Blocker</th>
+                    <th className="px-4 py-3 font-medium">Next Action</th>
+                    <th className="px-4 py-3 font-medium">Follow-up</th>
+                    <th className="px-4 py-3 font-medium">Notes</th>
+                    <th className="px-4 py-3 font-medium whitespace-nowrap">PMS</th>
+                    <th className="px-4 py-3 font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {workingRows.map((row) => (
                     <tr
                       key={row.id}
-                      className={`border-t border-slate-100 align-top leading-tight ${
+                      className={`border-t border-slate-100 align-top ${
                         row.id === selectedPropertyId ? "bg-slate-50" : ""
                       } ${row.priority.label === "Critical" ? "bg-red-50/30" : ""}`}
                     >
-                      <td className="px-3 py-3">
+                      <td className="w-[260px] px-4 py-4">
                         <button onClick={() => setSelectedPropertyId(row.id)} className="text-left">
-                          <div className="font-medium text-blue-700 hover:underline">{row.name}</div>
+                          <div className="max-w-[180px] text-[17px] font-medium leading-6 text-blue-700 hover:underline">
+                            {row.name}
+                          </div>
                         </button>
-                        <div className="mt-1 text-xs text-slate-500">
+
+                        <div className="mt-2 text-sm leading-6 text-slate-500">
                           {row.market} • Risk {row.risk} • {row.turnStatus}
                         </div>
+
                         {row.lastAction ? (
-  <div className="mt-2 text-xs text-emerald-600">
-    {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
-    {row.lastAction.revenueProtected || 0}
-  </div>
-) : (
-  <div className="mt-2 text-xs text-slate-400">
-    {row.rentSourceLabel} • ${row.dailyRentValue}/day
-  </div>
-)}
+                          <div className="mt-3 text-sm leading-6 text-emerald-600">
+                            {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
+                            {row.lastAction.revenueProtected || 0}
+                          </div>
+                        ) : (
+                          <div className="mt-3 text-sm leading-6 text-slate-400">
+                            {row.rentSourceLabel} • ${row.dailyRentValue}/day
+                          </div>
+                        )}
                       </td>
 
-                      <td className="px-3 py-3">
+                      <td className="px-4 py-4">
                         <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                        <div className="mt-1 text-xs text-slate-500">Score {row.priority.score}</div>
+                        <div className="mt-2 text-xs text-slate-500">Score {row.priority.score}</div>
                       </td>
 
-                      <td className="px-3 py-3">
-                        <div className="w-[180px] text-sm text-slate-700">{row.priority.whyNow}</div>
+                      <td className="px-4 py-4">
+                        <div className="w-[220px] text-sm leading-6 text-slate-700">
+                          {row.priority.whyNow}
+                        </div>
                       </td>
 
-                      <td className="px-3 py-3">
-                        <div className="font-medium text-slate-900">{row.currentStage}</div>
-                        <div className="mt-1 text-xs text-slate-500">SLA {row.stageSla}d</div>
+                      <td className="px-4 py-4">
+                        <div className="w-[140px] text-[17px] font-medium leading-6 text-slate-900">
+                          {row.currentStage}
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">SLA {row.stageSla}d</div>
                       </td>
 
-                      <td className="px-3 py-3">
+                      <td className="px-4 py-4">
                         <Pill tone={row.overdue ? "red" : "slate"}>{row.daysInStage || 0}d</Pill>
-                        <div className="mt-1 text-xs">
+                        <div className="mt-2 text-xs leading-5">
                           {row.overdue ? (
                             <span className="font-medium text-red-600">
                               {getDaysOverSla(row)}d over SLA
@@ -1195,19 +1320,19 @@ function resetQueueViewFull() {
                         </div>
                       </td>
 
-                      <td className="px-3 py-3">
+                      <td className="px-4 py-4">
                         <input
                           value={row.turnOwner || ""}
                           onChange={(e) => handleOwnerChange(row.id, e.target.value)}
-                          className="w-[132px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                          className="w-[150px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
                         />
                       </td>
 
-                      <td className="px-3 py-3">
+                      <td className="px-4 py-4">
                         <select
                           value={row.blocker}
                           onChange={(e) => handleBlockerChange(row.id, e.target.value, row)}
-                          className="w-[170px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                          className="w-[185px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
                         >
                           {BLOCKER_OPTIONS.map((option) => (
                             <option key={option} value={option}>
@@ -1217,12 +1342,12 @@ function resetQueueViewFull() {
                         </select>
                       </td>
 
-                      <td className="px-3 py-3">
-                        <div className="space-y-1">
+                      <td className="px-4 py-4">
+                        <div className="space-y-2">
                           <select
                             value={row.nextAction}
                             onChange={(e) => handleNextActionChange(row.id, e.target.value)}
-                            className="w-[172px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                            className="w-[190px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
                           >
                             {NEXT_ACTION_OPTIONS.map((option) => (
                               <option key={option} value={option}>
@@ -1231,24 +1356,24 @@ function resetQueueViewFull() {
                             ))}
                           </select>
 
-                          {(row.overdue || row.turnStatus === "Blocked") && (
+                          {(row.overdue || row.turnStatus === "Blocked") ? (
                             <div className="text-xs font-medium text-red-600">Action required</div>
-                          )}
+                          ) : null}
                         </div>
                       </td>
 
-                      <td className="px-3 py-3">
+                      <td className="px-4 py-4">
                         <input
                           type="date"
                           value={row.followUpDate || ""}
                           onChange={(e) => handleFollowUpChange(row.id, e.target.value)}
-                          className="w-[132px] rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                          className="w-[145px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
                         />
-                        <div className="mt-1 text-xs text-slate-500">{getLastTouchedLabel(row)}</div>
+                        <div className="mt-2 text-xs text-slate-500">{getLastTouchedLabel(row)}</div>
                       </td>
 
-                      <td className="px-3 py-3">
-                        <div className="flex w-[200px] gap-2">
+                      <td className="px-4 py-4">
+                        <div className="flex w-[220px] gap-2">
                           <input
                             value={draftNotes[row.id] || ""}
                             onChange={(e) =>
@@ -1258,11 +1383,11 @@ function resetQueueViewFull() {
                               }))
                             }
                             placeholder="Add note"
-                            className="flex-1 rounded-lg border border-slate-200 px-2 py-2 text-sm"
+                            className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
                           />
                           <button
                             onClick={() => handleInlineNoteSave(row.id, row)}
-                            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Save
                           </button>
@@ -1274,7 +1399,7 @@ function resetQueueViewFull() {
                         ) : null}
                       </td>
 
-                      <td className="px-3 py-3 whitespace-nowrap">
+                      <td className="px-4 py-4 whitespace-nowrap">
                         <a
                           href={row.systemLink}
                           target="_blank"
@@ -1285,17 +1410,17 @@ function resetQueueViewFull() {
                         </a>
                       </td>
 
-                      <td className="px-3 py-3">
-                        <div className="flex w-[128px] flex-col gap-2">
+                      <td className="px-4 py-4">
+                        <div className="flex w-[132px] flex-col gap-2">
                           <button
                             onClick={() => handleResolve(row.id)}
-                            className="rounded-md bg-slate-900 px-3 py-1 text-xs font-medium text-white hover:bg-slate-800"
+                            className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
                           >
                             Resolve
                           </button>
                           <button
                             onClick={() => handleFlagReady(row.id)}
-                            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
                           >
                             Mark ready
                           </button>
