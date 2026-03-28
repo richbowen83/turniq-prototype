@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { getStageTone } from "../../utils/tone";
@@ -23,17 +23,6 @@ const STAGE_SLA = {
   "Rent Ready Open": 1,
   "Failed Rent Ready": 0,
 };
-
-const NEXT_ACTION_OPTIONS = [
-  "Chase owner approval",
-  "Confirm vendor schedule",
-  "Resolve blocker",
-  "Update resident move-out",
-  "Confirm appliance ETA",
-  "Escalate internally",
-  "Prepare for dispatch",
-  "Ready for execution",
-];
 
 const BLOCKER_OPTIONS = [
   "None",
@@ -111,7 +100,7 @@ const SYSTEM_VIEWS = [
   },
 ];
 
-const STORAGE_KEY = "turniq_control_center_saved_views_v8";
+const STORAGE_KEY = "turniq_control_center_saved_views_v10";
 const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
 
 function getStageSla(stage) {
@@ -290,6 +279,9 @@ function buildEnrichedRows(rows) {
       lastAction: row.lastAction || null,
       dailyRentValue: getDailyRentValue(row),
       rentSourceLabel: getRentSourceLabel(row),
+      workflowCompletedSteps: Array.isArray(row.workflowCompletedSteps)
+        ? row.workflowCompletedSteps
+        : [],
     };
 
     return {
@@ -378,24 +370,176 @@ function sortRows(rows, sortBy) {
   return sorted;
 }
 
-function buildWorkflowSteps(row) {
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return "Updated just now";
+
+  const then = new Date(timestamp).getTime();
+  const now = Date.now();
+  const diffMs = Math.max(0, now - then);
+  const diffMin = Math.floor(diffMs / 60000);
+
+  if (diffMin < 1) return "Updated just now";
+  if (diffMin === 1) return "Updated 1m ago";
+  if (diffMin < 60) return `Updated ${diffMin}m ago`;
+
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr === 1) return "Updated 1h ago";
+  if (diffHr < 24) return `Updated ${diffHr}h ago`;
+
+  return `Updated ${formatShortDate(new Date(then).toISOString())}`;
+}
+
+function buildWorkflowPlan(row) {
+  const completed = new Set(row.workflowCompletedSteps || []);
+  const liveBlocker = getPrimaryBlocker(row);
+
   if (row.currentStage === "Failed Rent Ready") {
-    return ["Clear rework items", "Re-inspect home", "Confirm rent ready"];
+    return {
+      title: "Recover failed rent ready",
+      summary: "Clear rework, re-inspect, and get the home back into clean execution.",
+      primaryActionLabel: "Complete Step",
+      steps: [
+        {
+          id: "rework",
+          label: "Clear rework items",
+          action: "resolve_rework",
+          done:
+            completed.has("rework") ||
+            (row.currentStage !== "Failed Rent Ready" && row.turnStatus !== "Blocked"),
+        },
+        {
+          id: "inspect",
+          label: "Re-inspect home",
+          action: "reinspect",
+          done:
+            completed.has("inspect") ||
+            row.currentStage === "Rent Ready Open" ||
+            row.turnStatus === "Ready",
+        },
+        {
+          id: "certify",
+          label: "Confirm rent ready",
+          action: "ready",
+          done: completed.has("certify") || row.turnStatus === "Ready",
+        },
+      ],
+    };
   }
 
   if (row.currentStage === "Owner Approval") {
-    return ["Escalate approval", "Confirm scope signoff", "Dispatch vendor"];
+    return {
+      title: "Push approval to dispatch",
+      summary: "Approval is the main unlock for this turn.",
+      primaryActionLabel: "Complete Step",
+      steps: [
+        {
+          id: "escalate_approval",
+          label: "Escalate owner approval",
+          action: "advance_approval",
+          done:
+            completed.has("escalate_approval") ||
+            row.currentStage !== "Owner Approval",
+        },
+        {
+          id: "confirm_scope",
+          label: "Confirm scope signoff",
+          action: "mark_step_only",
+          done: completed.has("confirm_scope") || row.currentStage === "Dispatch",
+        },
+        {
+          id: "dispatch_vendor",
+          label: "Dispatch vendor",
+          action: "progress",
+          done: completed.has("dispatch_vendor") || row.currentStage === "Dispatch",
+        },
+      ],
+    };
   }
 
-  if (row.turnStatus === "Blocked") {
-    return ["Identify blocker owner", "Remove blocker", "Resume execution"];
+  if (row.turnStatus === "Blocked" || liveBlocker !== "None") {
+    return {
+      title: "Clear blocker and resume execution",
+      summary: "Blocked workflow is the primary source of avoidable delay here.",
+      primaryActionLabel: "Complete Step",
+      steps: [
+        {
+          id: "identify_owner",
+          label: "Identify blocker owner",
+          action: "mark_step_only",
+          done: completed.has("identify_owner") || Boolean(row.turnOwner),
+        },
+        {
+          id: "remove_blocker",
+          label: "Remove blocker",
+          action: "resolve",
+          done: completed.has("remove_blocker") || row.turnStatus !== "Blocked",
+        },
+        {
+          id: "resume_execution",
+          label: "Resume execution",
+          action: "progress",
+          done:
+            completed.has("resume_execution") ||
+            row.turnStatus === "Monitoring" ||
+            row.turnStatus === "Ready",
+        },
+      ],
+    };
   }
 
   if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance"))) {
-    return ["Confirm appliance ETA", "Re-sequence vendors", "Protect ECD"];
+    return {
+      title: "Protect ECD from appliance dependency",
+      summary: "Appliance timing is the avoidable source of slippage.",
+      primaryActionLabel: "Complete Step",
+      steps: [
+        {
+          id: "confirm_eta",
+          label: "Confirm appliance ETA",
+          action: "mark_step_only",
+          done: completed.has("confirm_eta"),
+        },
+        {
+          id: "resequence_vendors",
+          label: "Re-sequence vendors",
+          action: "progress",
+          done: completed.has("resequence_vendors") || row.daysInStage <= Math.max(0, row.stageSla - 1),
+        },
+        {
+          id: "hold_ecd",
+          label: "Hold ECD",
+          action: "ready",
+          done: completed.has("hold_ecd") || row.turnStatus === "Ready",
+        },
+      ],
+    };
   }
 
-  return ["Confirm owner", "Advance next action", "Hold ECD"];
+  return {
+    title: "Advance execution",
+    summary: "This turn is actionable with lighter coordination needs.",
+    primaryActionLabel: "Complete Step",
+    steps: [
+      {
+        id: "confirm_owner",
+        label: "Confirm owner",
+        action: "mark_step_only",
+        done: completed.has("confirm_owner") || Boolean(row.turnOwner),
+      },
+      {
+        id: "advance_action",
+        label: "Advance next action",
+        action: "progress",
+        done: completed.has("advance_action") || row.daysInStage <= Math.max(0, row.stageSla - 1),
+      },
+      {
+        id: "ready_execution",
+        label: "Ready for execution",
+        action: "ready",
+        done: completed.has("ready_execution") || row.turnStatus === "Ready",
+      },
+    ],
+  };
 }
 
 export default function ControlCenterTab({
@@ -422,6 +566,9 @@ export default function ControlCenterTab({
   const [activeSystemView, setActiveSystemView] = useState(null);
   const [customRowFilter, setCustomRowFilter] = useState(null);
   const [actionLearningLog, setActionLearningLog] = useState([]);
+  const [localLastUpdated, setLocalLastUpdated] = useState(new Date().toISOString());
+
+  const queueRef = useRef(null);
 
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
   const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
@@ -460,7 +607,7 @@ export default function ControlCenterTab({
       .slice(0, 5)
       .map((row) => ({
         ...row,
-        workflowSteps: buildWorkflowSteps(row),
+        workflowPlan: buildWorkflowPlan(row),
       }));
   }, [enrichedRows]);
 
@@ -507,6 +654,27 @@ export default function ControlCenterTab({
       .slice(0, 5);
   }, [actionLearningLog]);
 
+  const computedLastUpdated = useMemo(() => {
+    const timestamps = [];
+
+    if (localLastUpdated) timestamps.push(new Date(localLastUpdated).getTime());
+
+    enrichedRows.forEach((row) => {
+      if (row.lastAction?.timestamp) {
+        timestamps.push(new Date(row.lastAction.timestamp).getTime());
+      }
+    });
+
+    actionLearningLog.slice(0, 10).forEach((entry) => {
+      if (entry.timestamp) timestamps.push(new Date(entry.timestamp).getTime());
+    });
+
+    const valid = timestamps.filter((n) => Number.isFinite(n));
+    if (!valid.length) return new Date().toISOString();
+
+    return new Date(Math.max(...valid)).toISOString();
+  }, [actionLearningLog, enrichedRows, localLastUpdated]);
+
   useEffect(() => {
     try {
       const stored = localStorage.getItem(ACTION_LEARNING_STORAGE_KEY);
@@ -531,6 +699,18 @@ export default function ControlCenterTab({
     }
   }, []);
 
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setLocalLastUpdated((prev) => prev);
+    }, 60000);
+
+    return () => clearInterval(timer);
+  }, []);
+
+  function touchUpdated() {
+    setLocalLastUpdated(new Date().toISOString());
+  }
+
   function persistSavedViews(nextViews) {
     setSavedViews(nextViews);
     try {
@@ -551,6 +731,15 @@ export default function ControlCenterTab({
 
   function patchRow(id, patch) {
     updateProperty(id, patch);
+    touchUpdated();
+  }
+
+  function appendCompletedStep(row, stepId) {
+    const existing = Array.isArray(row.workflowCompletedSteps)
+      ? row.workflowCompletedSteps
+      : [];
+    if (existing.includes(stepId)) return existing;
+    return [...existing, stepId];
   }
 
   function recordActionOutcome(row, patch, label) {
@@ -605,12 +794,9 @@ export default function ControlCenterTab({
     const blockers = value === "None" ? ["No active blockers"] : [value];
     patchRow(id, {
       blockers,
+      blocker: value,
       turnStatus: value === "None" ? "Monitoring" : row.turnStatus,
     });
-  }
-
-  function handleNextActionChange(id, value) {
-    patchRow(id, { nextAction: value });
   }
 
   function handleFollowUpChange(id, value) {
@@ -641,9 +827,11 @@ export default function ControlCenterTab({
     const patch = {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
+      blocker: "None",
       nextAction: "Prepare for dispatch",
       daysInStage: targetDays,
       projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: appendCompletedStep(row, "remove_blocker"),
     };
 
     patchRow(id, patch);
@@ -663,6 +851,12 @@ export default function ControlCenterTab({
       nextAction: "Ready for execution",
       daysInStage: 0,
       projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: [
+        ...(row.workflowCompletedSteps || []),
+        "certify",
+        "ready_execution",
+        "hold_ecd",
+      ],
     };
 
     patchRow(id, patch);
@@ -682,6 +876,8 @@ export default function ControlCenterTab({
     } else {
       setCustomRowFilter(null);
     }
+
+    touchUpdated();
   }
 
   function handleApplyTopAction(row) {
@@ -701,7 +897,13 @@ export default function ControlCenterTab({
         turnStatus: "Monitoring",
         nextAction: "Re-inspect and confirm ready state",
         blockers: ["No active blockers"],
+        blocker: "None",
         projectedCompletion: nextProjectedCompletion,
+        workflowCompletedSteps: [
+          ...(row.workflowCompletedSteps || []),
+          "rework",
+          "inspect",
+        ],
       };
 
       patchRow(row.id, patch);
@@ -720,7 +922,14 @@ export default function ControlCenterTab({
         nextAction: "Confirm vendor schedule",
         turnStatus: "Monitoring",
         blockers: ["No active blockers"],
+        blocker: "None",
         projectedCompletion: nextProjectedCompletion,
+        workflowCompletedSteps: [
+          ...(row.workflowCompletedSteps || []),
+          "escalate_approval",
+          "confirm_scope",
+          "dispatch_vendor",
+        ],
       };
 
       patchRow(row.id, patch);
@@ -740,10 +949,69 @@ export default function ControlCenterTab({
       turnStatus: "Monitoring",
       nextAction: "Prepare for dispatch",
       projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: [
+        ...(row.workflowCompletedSteps || []),
+        "advance_action",
+        "resequence_vendors",
+        "resume_execution",
+      ],
     };
 
     patchRow(row.id, patch);
     recordActionOutcome(row, patch, "Apply top action");
+  }
+
+  function handleWorkflowStep(row, step) {
+    if (!step) return;
+
+    if (step.action === "resolve") {
+      handleResolve(row.id);
+      return;
+    }
+
+    if (step.action === "resolve_rework" || step.action === "reinspect") {
+      handleApplyTopAction(row);
+      return;
+    }
+
+    if (step.action === "advance_approval") {
+      handleApplyTopAction(row);
+      return;
+    }
+
+    if (step.action === "progress") {
+      handleApplyTopAction(row);
+      return;
+    }
+
+    if (step.action === "ready") {
+      handleFlagReady(row.id);
+      return;
+    }
+
+    if (step.action === "mark_step_only") {
+      patchRow(row.id, {
+        workflowCompletedSteps: appendCompletedStep(row, step.id),
+        lastAction: {
+          label: `Completed step: ${step.label}`,
+          timestamp: new Date().toISOString(),
+          daysRecovered: 0,
+          revenueProtected: 0,
+          prevECD: row.projectedCompletion,
+          nextECD: row.projectedCompletion,
+        },
+      });
+    }
+  }
+
+  function handleStageDrillDown(stage) {
+    toggleStageFilter(stage);
+    setQueueFilter("All Open Turns");
+    touchUpdated();
+
+    setTimeout(() => {
+      queueRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   function saveCurrentView() {
@@ -773,6 +1041,8 @@ export default function ControlCenterTab({
     if (view.selectedStageFilter && view.selectedStageFilter !== selectedStageFilter) {
       toggleStageFilter(view.selectedStageFilter);
     }
+
+    touchUpdated();
   }
 
   function deleteSavedView(id) {
@@ -786,6 +1056,7 @@ export default function ControlCenterTab({
     setActiveSystemView(null);
     setActiveSavedViewId(null);
     setCustomRowFilter(null);
+    touchUpdated();
   }
 
   const isExecView = viewMode === "exec";
@@ -812,6 +1083,8 @@ export default function ControlCenterTab({
               <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
               Live
             </span>
+            <span>{formatRelativeTime(computedLastUpdated)}</span>
+            <span>•</span>
             <span>{mode === "exec" ? "Executive audience" : "Operator audience"}</span>
           </div>
         </div>
@@ -854,6 +1127,52 @@ export default function ControlCenterTab({
 
       {!isExecView ? (
         <>
+          <Card>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Today’s Focus</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Highest-value work to move the portfolio forward today.
+                </div>
+              </div>
+              <Pill tone="slate">
+                ${portfolioImpact.revenueRecovered.toLocaleString()} recoverable
+              </Pill>
+            </div>
+
+            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-red-700">Blocked Turns</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.blocked}</div>
+                <div className="mt-1 text-xs text-red-700">Clear blockers first</div>
+              </div>
+
+              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
+                </div>
+                <div className="mt-1 text-xs text-blue-700">Push to dispatch</div>
+              </div>
+
+              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-rose-700">Failed Rent Ready</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {queueSummary.failedRentReady}
+                </div>
+                <div className="mt-1 text-xs text-rose-700">Recover rework homes</div>
+              </div>
+
+              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-emerald-700">Recoverable Days</div>
+                <div className="mt-2 text-2xl font-semibold text-slate-900">
+                  {portfolioImpact.daysRecovered}
+                </div>
+                <div className="mt-1 text-xs text-emerald-700">Modeled workflow upside</div>
+              </div>
+            </div>
+          </Card>
+
           <Card>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div className="text-xl font-semibold text-slate-900">Quick Views</div>
@@ -904,36 +1223,6 @@ export default function ControlCenterTab({
             )}
           </Card>
 
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Working Queue</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{workingRows.length}</div>
-              <div className="mt-1 text-sm text-slate-500">{queueFilter}</div>
-            </Card>
-
-            <Card>
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-rose-700">Failed Rent Ready</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {queueSummary.failedRentReady}
-                </div>
-                <div className="mt-1 text-xs text-rose-700">Rework required</div>
-              </div>
-            </Card>
-
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Critical Priority</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.critical}</div>
-              <div className="mt-1 text-sm text-slate-500">Immediate attention required</div>
-            </Card>
-
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Blocked</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{queueSummary.blocked}</div>
-              <div className="mt-1 text-sm text-slate-500">Need direct intervention</div>
-            </Card>
-          </div>
-
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -959,72 +1248,112 @@ export default function ControlCenterTab({
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              {topActions.map((row) => (
-                <div
-                  key={row.id}
-                  className="flex min-h-[320px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-slate-900">{row.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.currentStage} • {row.market}
+              {topActions.map((row) => {
+                const currentStepIndex = row.workflowPlan.steps.findIndex((step) => !step.done);
+                const currentStep =
+                  currentStepIndex === -1 ? null : row.workflowPlan.steps[currentStepIndex];
+                const nextStep =
+                  currentStepIndex >= 0 && currentStepIndex < row.workflowPlan.steps.length - 1
+                    ? row.workflowPlan.steps[currentStepIndex + 1]
+                    : null;
+
+                return (
+                  <div
+                    key={row.id}
+                    className="flex min-h-[380px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-slate-900">{row.name}</div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {row.currentStage} • {row.market}
+                        </div>
                       </div>
+                      <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
                     </div>
-                    <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                  </div>
 
-                  <div className="mt-3 text-sm font-medium text-slate-900">{row.nextAction}</div>
-                  <div className="mt-2 text-xs text-slate-500">{row.priority.whyNow}</div>
+                    <div className="mt-3 text-sm font-medium text-slate-900">
+                      {row.workflowPlan.title}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {row.workflowPlan.summary}
+                    </div>
 
-                  <div className="mt-4 space-y-2">
-                    {row.workflowSteps.map((step, index) => (
-                      <div
-                        key={step}
-                        className="flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700"
+                    <div className="mt-3 text-xs text-slate-500">
+                      {currentStep ? `Step ${currentStepIndex + 1} of ${row.workflowPlan.steps.length}` : "Workflow complete"}
+                    </div>
+
+                    <div className="mt-3 space-y-2">
+                      {row.workflowPlan.steps.map((step, index) => {
+                        const isCurrent = currentStep?.id === step.id;
+
+                        return (
+                          <div
+                            key={step.id}
+                            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
+                              step.done
+                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
+                                : isCurrent
+                                ? "border-slate-300 bg-slate-50 text-slate-800"
+                                : "border-slate-200 bg-white text-slate-500"
+                            }`}
+                          >
+                            <span
+                              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
+                                step.done
+                                  ? "bg-emerald-600 text-white"
+                                  : isCurrent
+                                  ? "bg-slate-900 text-white"
+                                  : "bg-slate-200 text-slate-600"
+                              }`}
+                            >
+                              {step.done ? "✓" : index + 1}
+                            </span>
+                            <span>{step.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    <div className="mt-4 text-sm text-slate-700">
+                      +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
+                    </div>
+
+                    <div className="mt-1 text-xs text-slate-500">
+                      {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
+                    </div>
+
+                    {row.lastAction ? (
+                      <div className="mt-2 text-xs text-emerald-600">
+                        {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
+                        {row.lastAction.revenueProtected || 0} protected
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-xs text-slate-400">
+                        No action taken yet — learning starts after first intervention
+                      </div>
+                    )}
+
+                    {nextStep ? (
+                      <div className="mt-2 text-xs text-slate-400">Next: {nextStep.label}</div>
+                    ) : null}
+
+                    <div className="mt-auto pt-4">
+                      <button
+                        onClick={() => handleWorkflowStep(row, currentStep)}
+                        disabled={!currentStep || row.impact.daysRecovered <= 0}
+                        className={`w-full rounded-md px-3 py-2 text-xs font-medium ${
+                          currentStep && row.impact.daysRecovered > 0
+                            ? "bg-slate-900 text-white hover:bg-slate-800"
+                            : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                        }`}
                       >
-                        <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-slate-900 text-[11px] text-white">
-                          {index + 1}
-                        </span>
-                        <span>{step}</span>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-4 text-sm text-slate-700">
-                    +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
-                  </div>
-
-                  <div className="mt-1 text-xs text-slate-500">
-                    {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
-                  </div>
-
-                  {row.lastAction ? (
-                    <div className="mt-2 text-xs text-emerald-600">
-                      {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
-                      {row.lastAction.revenueProtected || 0} protected
+                        {currentStep ? row.workflowPlan.primaryActionLabel : "Workflow complete"}
+                      </button>
                     </div>
-                  ) : (
-                    <div className="mt-2 text-xs text-slate-400">
-                      No action taken yet — learning starts after first intervention
-                    </div>
-                  )}
-
-                  <div className="mt-auto pt-4">
-                    <button
-                      onClick={() => handleApplyTopAction(row)}
-                      disabled={row.impact.daysRecovered <= 0}
-                      className={`w-full rounded-md px-3 py-1 text-xs font-medium ${
-                        row.impact.daysRecovered > 0
-                          ? "bg-slate-900 text-white hover:bg-slate-800"
-                          : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
-                      }`}
-                    >
-                      {row.impact.daysRecovered > 0 ? "Apply Action" : "No action benefit"}
-                    </button>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </Card>
 
@@ -1033,7 +1362,7 @@ export default function ControlCenterTab({
               <div>
                 <div className="text-xl font-semibold text-slate-900">Stage Buckets</div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Click a stage to isolate the queue and surface stale turns faster.
+                  Click a stage to drill into the queue and surface friction fast.
                 </div>
               </div>
 
@@ -1058,7 +1387,7 @@ export default function ControlCenterTab({
               {stageBuckets.map((bucket) => (
                 <button
                   key={bucket.stage}
-                  onClick={() => toggleStageFilter(bucket.stage)}
+                  onClick={() => handleStageDrillDown(bucket.stage)}
                   className="text-left"
                 >
                   <div
@@ -1104,43 +1433,41 @@ export default function ControlCenterTab({
           <div className="grid items-start gap-6 xl:grid-cols-12">
             <div className="xl:col-span-9 min-w-0">
               <div className="flex flex-col gap-6">
-                <div className="shrink-0">
-                  <Card>
-                    <div className="text-2xl font-semibold text-slate-900">Action Outcome Learning</div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      Tracks which interventions are creating the most operational and financial impact.
-                    </div>
+                <Card>
+                  <div className="text-2xl font-semibold text-slate-900">Action Outcome Learning</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    Tracks which interventions are creating the most operational and financial impact.
+                  </div>
 
-                    {actionLearningSummary.length ? (
-                      <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                        {actionLearningSummary.map((item) => (
-                          <div
-                            key={item.actionLabel}
-                            className="rounded-2xl border border-slate-200 bg-white p-4"
-                          >
-                            <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
-                            <div className="mt-3 text-2xl font-semibold text-slate-900">
-                              ${item.totalRevenueProtected.toLocaleString()}
-                            </div>
-                            <div className="mt-1 text-xs text-slate-500">
-                              {item.totalDaysSaved}d recovered across {item.uses} uses
-                            </div>
-                            <div className="mt-2 text-xs text-slate-400">
-                              Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
-                            </div>
+                  {actionLearningSummary.length ? (
+                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                      {actionLearningSummary.map((item) => (
+                        <div
+                          key={item.actionLabel}
+                          className="rounded-2xl border border-slate-200 bg-white p-4"
+                        >
+                          <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
+                          <div className="mt-3 text-2xl font-semibold text-slate-900">
+                            ${item.totalRevenueProtected.toLocaleString()}
                           </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="mt-4 text-sm text-slate-500">
-                        No action outcomes logged yet. Apply actions in Control Center to start building a learning loop.
-                      </div>
-                    )}
-                  </Card>
-                </div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {item.totalDaysSaved}d recovered across {item.uses} uses
+                          </div>
+                          <div className="mt-2 text-xs text-slate-400">
+                            Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="mt-4 text-sm text-slate-500">
+                      No action outcomes logged yet. Apply actions in Control Center to start building a learning loop.
+                    </div>
+                  )}
+                </Card>
 
-                <div className="shrink-0">
-                  <Card>
+                <Card>
+                  <div ref={queueRef}>
                     <div className="flex flex-wrap items-center justify-between gap-4">
                       <div>
                         <div className="text-xl font-semibold text-slate-900">Live Working Queue</div>
@@ -1167,199 +1494,192 @@ export default function ControlCenterTab({
                       </div>
                     </div>
 
-                    <div className="mt-5 overflow-x-auto">
-                      <table className="min-w-[1760px] text-sm">
-                        <thead className="bg-slate-50 text-left text-slate-500">
+                    <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
+                      <table className="min-w-[1700px] w-full text-sm">
+                        <thead className="sticky top-0 z-10 bg-slate-50 text-left text-slate-500">
                           <tr>
-                            <th className="px-4 py-3 font-medium">Turn</th>
-                            <th className="px-4 py-3 font-medium">Priority</th>
-                            <th className="px-4 py-3 font-medium">Why Now</th>
-                            <th className="px-4 py-3 font-medium">Stage</th>
-                            <th className="px-4 py-3 font-medium">Days</th>
-                            <th className="px-4 py-3 font-medium">Owner</th>
-                            <th className="px-4 py-3 font-medium">Blocker</th>
-                            <th className="px-4 py-3 font-medium">Next Action</th>
-                            <th className="px-4 py-3 font-medium">Follow-up</th>
-                            <th className="px-4 py-3 font-medium">Notes</th>
-                            <th className="px-4 py-3 font-medium">PMS</th>
-                            <th className="px-4 py-3 font-medium">Actions</th>
+                            <th className="w-[340px] px-4 py-3 font-medium">Turn</th>
+                            <th className="w-[150px] px-4 py-3 font-medium">Priority</th>
+                            <th className="w-[240px] px-4 py-3 font-medium">Stage</th>
+                            <th className="w-[280px] px-4 py-3 font-medium">Step</th>
+                            <th className="w-[180px] px-4 py-3 font-medium">Owner</th>
+                            <th className="w-[170px] px-4 py-3 font-medium">Due / SLA</th>
+                            <th className="w-[240px] px-4 py-3 font-medium">Blocker</th>
+                            <th className="w-[280px] px-4 py-3 font-medium">Notes</th>
+                            <th className="w-[130px] px-4 py-3 font-medium">Action</th>
+                            <th className="w-[100px] px-4 py-3 font-medium">PMS</th>
                           </tr>
                         </thead>
                         <tbody>
-                          {workingRows.map((row) => (
-                            <tr
-                              key={row.id}
-                              className={`border-t border-slate-100 ${
-                                selectedPropertyId === row.id ? "bg-slate-50" : ""
-                              }`}
-                            >
-                              <td className="w-[300px] px-4 py-4 align-top">
-                                <button
-                                  onClick={() => setSelectedPropertyId(row.id)}
-                                  className="text-left"
-                                >
-                                  <div className="max-w-[220px] text-base font-medium text-blue-700 hover:underline">
-                                    {row.name}
-                                  </div>
-                                </button>
-                                <div className="mt-1 text-sm text-slate-500">
-                                  {row.market} • {row.currentStage}
-                                </div>
-                                <div className="mt-1 text-xs text-slate-400">
-                                  Risk {row.risk} • {row.turnStatus}
-                                </div>
-                                <div className="mt-2 text-xs text-slate-400">
-                                  {row.rentSourceLabel} • ${row.dailyRentValue}/day
-                                </div>
-                              </td>
+                          {workingRows.map((row) => {
+                            const workflowPlan = buildWorkflowPlan(row);
+                            const currentStepIndex = workflowPlan.steps.findIndex((step) => !step.done);
+                            const currentStep =
+                              currentStepIndex === -1 ? null : workflowPlan.steps[currentStepIndex];
+                            const nextStep =
+                              currentStepIndex >= 0 && currentStepIndex < workflowPlan.steps.length - 1
+                                ? workflowPlan.steps[currentStepIndex + 1]
+                                : null;
 
-                              <td className="w-[140px] px-4 py-4 align-top">
-                                <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                                <div className="mt-2 text-sm text-slate-500">
-                                  Score {row.priority.score}
-                                </div>
-                              </td>
-
-                              <td className="w-[320px] px-4 py-4 align-top">
-                                <div className="text-sm leading-7 text-slate-700">
-                                  {row.priority.whyNow}
-                                </div>
-                              </td>
-
-                              <td className="w-[220px] px-4 py-4 align-top">
-                                <div className="font-medium text-slate-900">{row.currentStage}</div>
-                                <div className="mt-1 text-sm text-slate-500">SLA {row.stageSla}d</div>
-                              </td>
-
-                              <td className="w-[140px] px-4 py-4 align-top">
-                                <Pill tone={row.overdue ? "red" : "slate"}>
-                                  {row.daysInStage || 0}d
-                                </Pill>
-                                <div className="mt-2 text-sm">
-                                  {row.overdue ? (
-                                    <span className="font-medium text-red-600">
-                                      {getDaysOverSla(row)}d over SLA
-                                    </span>
-                                  ) : (
-                                    <span className="text-slate-500">Within SLA</span>
-                                  )}
-                                </div>
-                              </td>
-
-                              <td className="w-[180px] px-4 py-4 align-top">
-                                <input
-                                  value={row.turnOwner || ""}
-                                  onChange={(e) => handleOwnerChange(row.id, e.target.value)}
-                                  className="w-[160px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                />
-                              </td>
-
-                              <td className="w-[230px] px-4 py-4 align-top">
-                                <select
-                                  value={row.blocker}
-                                  onChange={(e) => handleBlockerChange(row.id, e.target.value, row)}
-                                  className="w-[210px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                >
-                                  {BLOCKER_OPTIONS.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                              </td>
-
-                              <td className="w-[230px] px-4 py-4 align-top">
-                                <div className="space-y-2">
-                                  <select
-                                    value={row.nextAction}
-                                    onChange={(e) => handleNextActionChange(row.id, e.target.value)}
-                                    className="w-[210px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            return (
+                              <tr
+                                key={row.id}
+                                className={`border-t border-slate-100 align-top transition hover:bg-slate-50 ${
+                                  selectedPropertyId === row.id ? "bg-slate-50" : ""
+                                }`}
+                              >
+                                <td className="w-[340px] px-4 py-4">
+                                  <button
+                                    onClick={() => setSelectedPropertyId(row.id)}
+                                    className="text-left"
                                   >
-                                    {NEXT_ACTION_OPTIONS.map((option) => (
+                                    <div className="max-w-[260px] break-words text-base font-medium text-blue-700 hover:underline">
+                                      {row.name}
+                                    </div>
+                                  </button>
+                                  <div className="mt-2 text-sm text-slate-500">
+                                    {row.market} • {row.turnStatus}
+                                  </div>
+                                  <div className="mt-1 text-xs text-slate-400">
+                                    Risk {row.risk} • {row.priority.whyNow}
+                                  </div>
+                                  <div className="mt-2 text-xs text-slate-400">
+                                    {row.rentSourceLabel} • ${row.dailyRentValue}/day
+                                  </div>
+                                </td>
+
+                                <td className="w-[150px] px-4 py-4">
+                                  <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+                                  <div className="mt-2 text-sm text-slate-500">
+                                    Score {row.priority.score}
+                                  </div>
+                                </td>
+
+                                <td className="w-[240px] px-4 py-4">
+                                  <div className="font-medium text-slate-900">{row.currentStage}</div>
+                                  <div className="mt-1 text-sm text-slate-500">SLA {row.stageSla}d</div>
+                                </td>
+
+                                <td className="w-[280px] px-4 py-4">
+                                  {currentStep ? (
+                                    <div className="space-y-2">
+                                      <div className="text-xs text-slate-500">
+                                        Step {currentStepIndex + 1} of {workflowPlan.steps.length}
+                                      </div>
+                                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900">
+                                        {currentStep.label}
+                                      </div>
+                                      {nextStep ? (
+                                        <div className="text-xs text-slate-400">
+                                          Next: {nextStep.label}
+                                        </div>
+                                      ) : null}
+                                    </div>
+                                  ) : (
+                                    <div className="text-sm text-emerald-600">Workflow complete</div>
+                                  )}
+                                </td>
+
+                                <td className="w-[180px] px-4 py-4">
+                                  <input
+                                    value={row.turnOwner || ""}
+                                    onChange={(e) => handleOwnerChange(row.id, e.target.value)}
+                                    className="w-[160px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                  />
+                                </td>
+
+                                <td className="w-[170px] px-4 py-4">
+                                  <Pill tone={row.overdue ? "red" : "slate"}>
+                                    {row.daysInStage || 0}d
+                                  </Pill>
+                                  <div className="mt-2 text-sm">
+                                    {row.overdue ? (
+                                      <span className="font-medium text-red-600">
+                                        {getDaysOverSla(row)}d over SLA
+                                      </span>
+                                    ) : (
+                                      <span className="text-slate-500">Within SLA</span>
+                                    )}
+                                  </div>
+                                  <div className="mt-2 text-xs text-slate-500">
+                                    {getLastTouchedLabel(row)}
+                                  </div>
+                                </td>
+
+                                <td className="w-[240px] px-4 py-4">
+                                  <select
+                                    value={row.blocker}
+                                    onChange={(e) => handleBlockerChange(row.id, e.target.value, row)}
+                                    className="w-[220px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                  >
+                                    {BLOCKER_OPTIONS.map((option) => (
                                       <option key={option} value={option}>
                                         {option}
                                       </option>
                                     ))}
                                   </select>
+                                </td>
 
-                                  {(row.overdue || row.turnStatus === "Blocked") && (
-                                    <div className="text-xs font-medium text-red-600">Action required</div>
-                                  )}
-                                </div>
-                              </td>
-
-                              <td className="w-[150px] px-4 py-4 align-top">
-                                <input
-                                  type="date"
-                                  value={row.followUpDate || ""}
-                                  onChange={(e) => handleFollowUpChange(row.id, e.target.value)}
-                                  className="w-[140px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                />
-                                <div className="mt-2 text-xs text-slate-500">
-                                  {getLastTouchedLabel(row)}
-                                </div>
-                              </td>
-
-                              <td className="w-[250px] px-4 py-4 align-top">
-                                <div className="flex w-[230px] gap-2">
-                                  <input
-                                    value={draftNotes[row.id] || ""}
-                                    onChange={(e) =>
-                                      setDraftNotes((prev) => ({
-                                        ...prev,
-                                        [row.id]: e.target.value,
-                                      }))
-                                    }
-                                    placeholder="Add note"
-                                    className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                  />
-                                  <button
-                                    onClick={() => handleInlineNoteSave(row.id, row)}
-                                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                                  >
-                                    Save
-                                  </button>
-                                </div>
-                                {row.operationalNotes?.length ? (
-                                  <div className="mt-2 text-xs text-slate-500">
-                                    Latest: {row.operationalNotes[row.operationalNotes.length - 1]}
+                                <td className="w-[280px] px-4 py-4">
+                                  <div className="flex w-[250px] gap-2">
+                                    <input
+                                      value={draftNotes[row.id] || ""}
+                                      onChange={(e) =>
+                                        setDraftNotes((prev) => ({
+                                          ...prev,
+                                          [row.id]: e.target.value,
+                                        }))
+                                      }
+                                      placeholder="Add note"
+                                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                                    />
+                                    <button
+                                      onClick={() => handleInlineNoteSave(row.id, row)}
+                                      className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                                    >
+                                      Save
+                                    </button>
                                   </div>
-                                ) : null}
-                              </td>
+                                  {row.operationalNotes?.length ? (
+                                    <div className="mt-2 text-xs text-slate-500">
+                                      Latest: {row.operationalNotes[row.operationalNotes.length - 1]}
+                                    </div>
+                                  ) : null}
+                                </td>
 
-                              <td className="w-[100px] px-4 py-4 align-top whitespace-nowrap">
-                                <a
-                                  href={row.systemLink}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="text-sm font-medium text-blue-700 hover:underline"
-                                >
-                                  Open →
-                                </a>
-                              </td>
+                                <td className="w-[130px] px-4 py-4">
+                                  <div className="flex w-[110px] flex-col gap-2">
+                                    <button
+                                      onClick={() => handleWorkflowStep(row, currentStep)}
+                                      disabled={!currentStep}
+                                      className={`rounded-md px-3 py-2 text-xs font-medium ${
+                                        currentStep
+                                          ? "bg-slate-900 text-white hover:bg-slate-800"
+                                          : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                                      }`}
+                                    >
+                                      {currentStep ? "Complete Step" : "Done"}
+                                    </button>
+                                  </div>
+                                </td>
 
-                              <td className="w-[130px] px-4 py-4 align-top">
-                                <div className="flex w-[110px] flex-col gap-2">
-                                  <button
-                                    onClick={() => handleResolve(row.id)}
-                                    className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+                                <td className="w-[100px] px-4 py-4 whitespace-nowrap">
+                                  <a
+                                    href={row.systemLink}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="text-sm font-medium text-blue-700 hover:underline"
                                   >
-                                    Resolve
-                                  </button>
-                                  <button
-                                    onClick={() => handleFlagReady(row.id)}
-                                    className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                                  >
-                                    Mark ready
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
+                                    Open →
+                                  </a>
+                                </td>
+                              </tr>
+                            );
+                          })}
 
                           {!workingRows.length ? (
                             <tr>
-                              <td colSpan={12} className="px-4 py-10 text-center text-sm text-slate-500">
+                              <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
                                 No turns match the current filters.
                               </td>
                             </tr>
@@ -1367,72 +1687,68 @@ export default function ControlCenterTab({
                         </tbody>
                       </table>
                     </div>
-                  </Card>
-                </div>
+                  </div>
+                </Card>
               </div>
             </div>
 
             <div className="xl:col-span-3 min-w-0">
               <div className="flex flex-col gap-6">
-                <div className="shrink-0">
-                  <Card>
-                    <div className="text-xl font-semibold text-slate-900">Guided Workflow Summary</div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      The highest-friction execution issues standing out right now
+                <Card>
+                  <div className="text-xl font-semibold text-slate-900">Guided Workflow Summary</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    The highest-friction execution issues standing out right now
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                      <div className="text-xs uppercase tracking-wide text-red-700">Problem Child Turns</div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {workingRows.filter((row) => row.overdue || row.turnStatus === "Blocked").length}
+                      </div>
+                      <div className="mt-1 text-xs text-red-700">Over SLA or blocked</div>
                     </div>
 
-                    <div className="mt-4 space-y-3">
-                      <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                        <div className="text-xs uppercase tracking-wide text-red-700">Problem Child Turns</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">
-                          {workingRows.filter((row) => row.overdue || row.turnStatus === "Blocked").length}
-                        </div>
-                        <div className="mt-1 text-xs text-red-700">Over SLA or blocked</div>
-                      </div>
-
-                      <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                        <div className="text-xs uppercase tracking-wide text-amber-700">Stale Turns</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.stale}</div>
-                        <div className="mt-1 text-xs text-amber-700">No recent movement</div>
-                      </div>
-
-                      <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                        <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">
-                          {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
-                        </div>
-                        <div className="mt-1 text-xs text-blue-700">Waiting for owner action</div>
-                      </div>
-                    </div>
-                  </Card>
-                </div>
-
-                <div className="shrink-0">
-                  <Card>
-                    <div className="text-xl font-semibold text-slate-900">Team Load</div>
-                    <div className="mt-1 text-sm text-slate-500">
-                      Active turns and high-risk concentration by operator
+                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                      <div className="text-xs uppercase tracking-wide text-amber-700">Stale Turns</div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.stale}</div>
+                      <div className="mt-1 text-xs text-amber-700">No recent movement</div>
                     </div>
 
-                    <div className="mt-4 space-y-3">
-                      {operatorSummary.map((item) => (
-                        <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
-                          <div className="flex items-center justify-between gap-3">
-                            <div>
-                              <div className="font-medium text-slate-900">{item.owner}</div>
-                              <div className="mt-1 text-sm text-slate-500">
-                                {item.activeTurns} active turns
-                              </div>
+                    <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                      <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
+                      <div className="mt-2 text-2xl font-semibold text-slate-900">
+                        {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
+                      </div>
+                      <div className="mt-1 text-xs text-blue-700">Waiting for owner action</div>
+                    </div>
+                  </div>
+                </Card>
+
+                <Card>
+                  <div className="text-xl font-semibold text-slate-900">Team Load</div>
+                  <div className="mt-1 text-sm text-slate-500">
+                    Active turns and high-risk concentration by operator
+                  </div>
+
+                  <div className="mt-4 space-y-3">
+                    {operatorSummary.map((item) => (
+                      <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="font-medium text-slate-900">{item.owner}</div>
+                            <div className="mt-1 text-sm text-slate-500">
+                              {item.activeTurns} active turns
                             </div>
-                            <Pill tone={item.highRisk > 0 ? "red" : "green"}>
-                              {item.highRisk} high risk
-                            </Pill>
                           </div>
+                          <Pill tone={item.highRisk > 0 ? "red" : "green"}>
+                            {item.highRisk} high risk
+                          </Pill>
                         </div>
-                      ))}
-                    </div>
-                  </Card>
-                </div>
+                      </div>
+                    ))}
+                  </div>
+                </Card>
               </div>
             </div>
           </div>
@@ -1440,14 +1756,19 @@ export default function ControlCenterTab({
       ) : (
         <>
           <Card>
-            <div className="text-xl font-semibold text-slate-900">Executive Readout</div>
-            <div className="mt-3 text-sm leading-6 text-slate-700">
-              TurnIQ is currently surfacing <span className="font-medium">{execReadout.critical}</span> critical turns,
-              <span className="font-medium"> {execReadout.blocked}</span> blocked turns, and
-              <span className="font-medium"> {execReadout.failed}</span> failed-rent-ready homes.
-              {topStageBottleneck
-                ? ` The current portfolio bottleneck is ${topStageBottleneck.stage}, averaging ${topStageBottleneck.avgDaysInStage} days in stage.`
-                : ""}
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Executive Readout</div>
+                <div className="mt-3 text-sm leading-6 text-slate-700">
+                  TurnIQ is currently surfacing <span className="font-medium">{execReadout.critical}</span> critical turns,
+                  <span className="font-medium"> {execReadout.blocked}</span> blocked turns, and
+                  <span className="font-medium"> {execReadout.failed}</span> failed-rent-ready homes.
+                  {topStageBottleneck
+                    ? ` The current portfolio bottleneck is ${topStageBottleneck.stage}, averaging ${topStageBottleneck.avgDaysInStage} days in stage.`
+                    : ""}
+                </div>
+              </div>
+              <div className="text-xs text-slate-500">{formatRelativeTime(computedLastUpdated)}</div>
             </div>
           </Card>
 
