@@ -66,6 +66,81 @@ function buildSimulation(row, selectedOptions) {
   };
 }
 
+function getTimelineRows(row) {
+  const items = [
+    {
+      id: "projected_completion",
+      label: "Projected completion",
+      value: formatShortDate(row.projectedCompletion),
+      tone: "slate",
+    },
+    {
+      id: "current_stage",
+      label: "Current stage",
+      value: row.currentStage,
+      tone: "slate",
+    },
+    {
+      id: "days_in_stage",
+      label: "Days in stage",
+      value: `${row.daysInStage || 0}d`,
+      tone: (row.daysInStage || 0) > (row.stageSla || 0) ? "red" : "green",
+    },
+    {
+      id: "sla",
+      label: "Stage SLA",
+      value: `${row.stageSla || 0}d`,
+      tone: "slate",
+    },
+  ];
+
+  if (row.lastAction?.timestamp) {
+    items.unshift({
+      id: "last_action",
+      label: row.lastAction.label || "Last action",
+      value: formatShortDate(row.lastAction.timestamp),
+      tone: row.lastAction.daysRecovered > 0 ? "green" : "slate",
+      subtext:
+        row.lastAction.daysRecovered > 0
+          ? `${row.lastAction.daysRecovered}d saved • $${(
+              row.lastAction.revenueProtected || 0
+            ).toLocaleString()} protected`
+          : "Tracked activity",
+    });
+  }
+
+  return items;
+}
+
+function getWorkflowHistory(row) {
+  const completed = Array.isArray(row.workflowCompletedSteps)
+    ? row.workflowCompletedSteps
+    : [];
+
+  const labels = {
+    rework: "Cleared rework items",
+    inspect: "Re-inspected home",
+    certify: "Confirmed rent ready",
+    escalate_approval: "Escalated owner approval",
+    confirm_scope: "Confirmed scope signoff",
+    dispatch_vendor: "Dispatched vendor",
+    identify_owner: "Identified blocker owner",
+    remove_blocker: "Removed blocker",
+    resume_execution: "Resumed execution",
+    confirm_eta: "Confirmed appliance ETA",
+    resequence_vendors: "Re-sequenced vendors",
+    hold_ecd: "Held ECD",
+    confirm_owner: "Confirmed owner",
+    advance_action: "Advanced next action",
+    ready_execution: "Ready for execution",
+  };
+
+  return completed.map((id) => ({
+    id,
+    label: labels[id] || id,
+  }));
+}
+
 export default function TurnDetailDrawer({
   row,
   onClose,
@@ -92,6 +167,21 @@ export default function TurnDetailDrawer({
     return getSimulatorOptions(row);
   }, [row]);
 
+  const timelineRows = useMemo(() => {
+    if (!row) return [];
+    return getTimelineRows(row);
+  }, [row]);
+
+  const workflowHistory = useMemo(() => {
+    if (!row) return [];
+    return getWorkflowHistory(row);
+  }, [row]);
+
+  const recentNotes = useMemo(() => {
+    if (!row) return [];
+    return Array.isArray(row.operationalNotes) ? [...row.operationalNotes].slice(-5).reverse() : [];
+  }, [row]);
+
   if (!row) return null;
 
   function toggleOption(optionId) {
@@ -110,10 +200,10 @@ export default function TurnDetailDrawer({
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/30" onClick={onClose} />
 
-      <div className="w-[560px] overflow-y-auto bg-white p-6 shadow-xl">
-        <div className="flex items-start justify-between">
+      <div className="w-[640px] overflow-y-auto bg-white p-6 shadow-xl">
+        <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-xl font-semibold text-slate-900">{row.name}</div>
+            <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
             <div className="mt-1 text-sm text-slate-500">{row.market}</div>
           </div>
 
@@ -125,72 +215,151 @@ export default function TurnDetailDrawer({
           </button>
         </div>
 
-        <div className="mt-4 flex items-center gap-2">
+        <div className="mt-4 flex flex-wrap items-center gap-2">
           <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
           <Pill tone="slate">{row.currentStage}</Pill>
           <Pill tone={row.turnStatus === "Blocked" ? "red" : "green"}>
             {row.turnStatus}
           </Pill>
+          <Pill tone="blue">Risk {row.risk}</Pill>
+        </div>
+
+        <div className="mt-6 grid gap-4 md:grid-cols-2">
+          <Card>
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Why Now
+            </div>
+            <div className="mt-2 text-sm leading-6 text-slate-700">
+              {row.priority.whyNow}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Recovery Signal
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              +{row.impact.daysRecovered}d
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              ${row.impact.revenueRecovered.toLocaleString()} protectable
+            </div>
+          </Card>
         </div>
 
         <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Execution Summary</div>
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium text-slate-900">Execution Summary</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Current operating context for this turn
+              </div>
+            </div>
+            <Pill tone="slate">{row.turnOwner || "Unassigned"}</Pill>
+          </div>
 
-          <div className="mt-3 text-sm text-slate-700">{row.priority.whyNow}</div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Next Action</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">{row.nextAction}</div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Blocker</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">{row.blocker}</div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Daily Rent</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                ${row.impact.dailyRentValue}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Projected Completion</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {formatShortDate(row.projectedCompletion)}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="mt-6">
+          <div className="text-sm font-medium text-slate-900">Timeline & Stage Health</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Operational timing, milestones, and SLA position
+          </div>
 
           <div className="mt-4 space-y-3">
-            <div>
-              <div className="text-xs text-slate-500">Next Action</div>
-              <div className="text-sm font-medium">{row.nextAction}</div>
-            </div>
-
-            <div>
-              <div className="text-xs text-slate-500">Blocker</div>
-              <div className="text-sm font-medium">{row.blocker}</div>
-            </div>
+            {timelineRows.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-2xl border border-slate-200 bg-white p-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium text-slate-900">{item.label}</div>
+                    {item.subtext ? (
+                      <div className="mt-1 text-xs text-slate-500">{item.subtext}</div>
+                    ) : null}
+                  </div>
+                  <Pill tone={item.tone}>{item.value}</Pill>
+                </div>
+              </div>
+            ))}
           </div>
         </Card>
 
         <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Timeline</div>
-
-          <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-xs text-slate-500">Days in Stage</div>
-              <div className="font-medium">{row.daysInStage}d</div>
-            </div>
-
-            <div>
-              <div className="text-xs text-slate-500">SLA</div>
-              <div className="font-medium">{row.stageSla}d</div>
-            </div>
-
-            <div>
-              <div className="text-xs text-slate-500">Projected Completion</div>
-              <div className="font-medium">{formatShortDate(row.projectedCompletion)}</div>
-            </div>
+          <div className="text-sm font-medium text-slate-900">Workflow History</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Completed execution steps and observed progress
           </div>
+
+          {workflowHistory.length ? (
+            <div className="mt-4 space-y-3">
+              {workflowHistory.map((item, index) => (
+                <div
+                  key={`${item.id}-${index}`}
+                  className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4"
+                >
+                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-xs text-white">
+                    ✓
+                  </span>
+                  <div className="text-sm text-slate-700">{item.label}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+              No workflow milestones completed yet.
+            </div>
+          )}
         </Card>
 
         <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Financial Impact</div>
-
-          <div className="mt-3 grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <div className="text-xs text-slate-500">Daily Rent</div>
-              <div className="font-medium">${row.impact.dailyRentValue}</div>
-            </div>
-
-            <div>
-              <div className="text-xs text-slate-500">Days Recoverable</div>
-              <div className="font-medium">{row.impact.daysRecovered}d</div>
-            </div>
-
-            <div>
-              <div className="text-xs text-slate-500">Revenue Protected</div>
-              <div className="font-medium">${row.impact.revenueRecovered}</div>
-            </div>
+          <div className="text-sm font-medium text-slate-900">Recent Notes</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Latest execution notes attached to this turn
           </div>
+
+          {recentNotes.length ? (
+            <div className="mt-4 space-y-3">
+              {recentNotes.map((note, index) => (
+                <div
+                  key={`${index}-${note}`}
+                  className="rounded-2xl border border-slate-200 bg-white p-4"
+                >
+                  <div className="text-sm text-slate-700">{note}</div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+              No notes logged yet for this turn.
+            </div>
+          )}
         </Card>
 
         <Card className="mt-6">
@@ -272,28 +441,28 @@ export default function TurnDetailDrawer({
           </button>
         </Card>
 
-        <div className="mt-6 flex gap-2">
+        <div className="mt-6 grid gap-2 md:grid-cols-3">
           <button
             onClick={() => onResolve(row.id)}
-            className="flex-1 rounded-md bg-slate-900 px-3 py-2 text-sm text-white"
+            className="rounded-md bg-slate-900 px-3 py-2 text-sm text-white"
           >
             Resolve
           </button>
 
           <button
             onClick={() => onMarkReady(row.id)}
-            className="flex-1 rounded-md border border-slate-200 px-3 py-2 text-sm"
+            className="rounded-md border border-slate-200 px-3 py-2 text-sm"
           >
             Mark Ready
           </button>
-        </div>
 
-        <button
-          onClick={() => onApplyAction(row)}
-          className="mt-2 w-full rounded-md bg-blue-600 px-3 py-2 text-sm text-white"
-        >
-          Apply Top Action
-        </button>
+          <button
+            onClick={() => onApplyAction(row)}
+            className="rounded-md bg-blue-600 px-3 py-2 text-sm text-white"
+          >
+            Apply Top Action
+          </button>
+        </div>
       </div>
     </div>
   );
