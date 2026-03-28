@@ -3,8 +3,7 @@
 import { useMemo } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
-
-const DAILY_RENT_ASSUMPTION = 120;
+import { getDailyRentValue, getRevenueProtected } from "../../utils/economics";
 
 function toDate(value) {
   const d = new Date(value);
@@ -31,6 +30,7 @@ function getStageDelay(stage) {
   if (stage === "Dispatch") return 2;
   if (stage === "Scope Review") return 2;
   if (stage === "Move Out Inspection") return 1;
+  if (stage === "Failed Rent Ready") return 3;
   return 0;
 }
 
@@ -82,7 +82,8 @@ function calculateRevenueImpact(properties) {
   properties.forEach((p) => {
     const delayDays = p.forecastDaysLate || 0;
     const riskWeight = (p.risk || 0) / 100;
-    const exposure = delayDays * DAILY_RENT_ASSUMPTION;
+    const dailyRent = getDailyRentValue(p);
+    const exposure = delayDays * dailyRent;
 
     atRisk += exposure * Math.max(0.3, riskWeight);
     recoverable += exposure * Math.max(0, 1 - riskWeight * 0.6);
@@ -126,25 +127,36 @@ function buildMarketSummary(properties) {
     .sort((a, b) => b.avgDelay - a.avgDelay || b.avgRisk - a.avgRisk);
 }
 
-function buildExecutiveNarrative({ properties, revenueImpact, topStageBottleneck }) {
+function buildExecutiveNarrative({ properties, revenueImpact, topStageBottleneck, planSummary }) {
   const highRisk = properties.filter((p) => p.risk >= 75).length;
   const blocked = properties.filter((p) => p.turnStatus === "Blocked").length;
   const delay = properties.reduce((sum, p) => sum + (p.forecastDaysLate || 0), 0);
 
+  const headline =
+    planSummary.daysRecovered > 0
+      ? `If the current recommended plan is executed, modeled portfolio delay falls from ${delay}d to ${Math.max(
+          0,
+          delay - planSummary.daysRecovered
+        )}d.`
+      : highRisk > 0
+      ? `${highRisk} high-risk turns are driving portfolio performance.`
+      : "Portfolio is operating within acceptable risk thresholds.";
+
+  const body = topStageBottleneck
+    ? ` ${topStageBottleneck.stage} is the primary bottleneck, with ${topStageBottleneck.avgDaysInStage} days in stage. TurnIQ models $${revenueImpact.atRisk.toLocaleString()} of portfolio exposure.`
+    : ` TurnIQ models $${revenueImpact.atRisk.toLocaleString()} of portfolio exposure.`;
+
+  const footer =
+    planSummary.daysRecovered > 0
+      ? `The current simulated plan protects approximately $${planSummary.revenueProtected.toLocaleString()} and concentrates on ${planSummary.topLeverLabel}.`
+      : blocked > 0
+      ? `${blocked} blocked turns represent the fastest path to unlocking value.`
+      : "Execution flow is largely unblocked.";
+
   return {
-    headline:
-      highRisk > 0
-        ? `${highRisk} high-risk turns are driving portfolio performance.`
-        : "Portfolio is operating within acceptable risk thresholds.",
-
-    body: topStageBottleneck
-      ? `${topStageBottleneck.stage} is the primary bottleneck, with ${topStageBottleneck.avgDaysInStage} days in stage. TurnIQ models ${delay} delay-days and $${revenueImpact.atRisk.toLocaleString()} of exposure.`
-      : `TurnIQ models ${delay} delay-days and $${revenueImpact.atRisk.toLocaleString()} of exposure.`,
-
-    footer:
-      blocked > 0
-        ? `${blocked} blocked turns represent the fastest path to unlocking value.`
-        : "Execution flow is largely unblocked.",
+    headline,
+    body: `${headline}${body}`,
+    footer,
   };
 }
 
@@ -160,13 +172,135 @@ function buildImpactSummary(properties) {
   }, 0);
 
   const daysSaved = Math.max(0, totalDelay - optimizedDelay);
-  const revenueRecovered = daysSaved * DAILY_RENT_ASSUMPTION;
+
+  const revenueRecovered = Math.round(
+    properties.reduce((sum, p) => {
+      const recoverable = Math.min(
+        p.forecastDaysLate || 0,
+        Math.max(0, Math.ceil(((p.risk || 0) - 50) / 20))
+      );
+      return sum + getRevenueProtected(recoverable, p);
+    }, 0)
+  );
 
   return {
     totalDelay,
     optimizedDelay,
     daysSaved,
     revenueRecovered,
+  };
+}
+
+function getPlanLeverOptions() {
+  return [
+    {
+      id: "clear_blocked",
+      label: "Clear blocked turns",
+    },
+    {
+      id: "accelerate_approvals",
+      label: "Accelerate approvals",
+    },
+    {
+      id: "recover_failed_ready",
+      label: "Recover failed rent ready",
+    },
+    {
+      id: "compress_over_sla",
+      label: "Compress over-SLA stage time",
+    },
+  ];
+}
+
+function getPlanRecoveryForRow(row, leverId) {
+  if (leverId === "clear_blocked" && row.turnStatus === "Blocked") return 2;
+  if (leverId === "accelerate_approvals" && row.currentStage === "Owner Approval") return 2;
+  if (leverId === "recover_failed_ready" && row.currentStage === "Failed Rent Ready") return 3;
+
+  if (leverId === "compress_over_sla") {
+    const stageSla =
+      row.currentStage === "Failed Rent Ready"
+        ? 0
+        : row.currentStage === "Dispatch"
+        ? 2
+        : row.currentStage === "Owner Approval"
+        ? 3
+        : row.currentStage === "Move Out Inspection"
+        ? 2
+        : 3;
+
+    const overSlaDays = Math.max(0, (row.daysInStage || 0) - stageSla);
+    return Math.min(2, overSlaDays);
+  }
+
+  return 0;
+}
+
+function buildExecutivePlan(properties) {
+  const levers = getPlanLeverOptions();
+
+  const leverResults = levers
+    .map((lever) => {
+      const impactedRows = properties
+        .map((row) => {
+          const recoveredDays = getPlanRecoveryForRow(row, lever.id);
+          return {
+            ...row,
+            recoveredDays,
+            revenueProtected: getRevenueProtected(recoveredDays, row),
+          };
+        })
+        .filter((row) => row.recoveredDays > 0);
+
+      return {
+        ...lever,
+        impactedRows,
+        impactedTurns: impactedRows.length,
+        daysRecovered: impactedRows.reduce((sum, row) => sum + row.recoveredDays, 0),
+        revenueProtected: impactedRows.reduce((sum, row) => sum + row.revenueProtected, 0),
+      };
+    })
+    .sort(
+      (a, b) =>
+        b.revenueProtected - a.revenueProtected || b.daysRecovered - a.daysRecovered
+    );
+
+  const topLevers = leverResults.filter((lever) => lever.daysRecovered > 0).slice(0, 3);
+
+  const rowMap = new Map();
+
+  topLevers.forEach((lever) => {
+    lever.impactedRows.forEach((row) => {
+      if (!rowMap.has(row.id)) {
+        rowMap.set(row.id, {
+          ...row,
+          totalRecoveredDays: 0,
+          totalRevenueProtected: 0,
+          levers: [],
+        });
+      }
+
+      const existing = rowMap.get(row.id);
+      existing.totalRecoveredDays += row.recoveredDays;
+      existing.totalRevenueProtected += row.revenueProtected;
+      existing.levers.push(lever.label);
+    });
+  });
+
+  const topTurns = [...rowMap.values()]
+    .sort(
+      (a, b) =>
+        b.totalRevenueProtected - a.totalRevenueProtected ||
+        b.totalRecoveredDays - a.totalRecoveredDays
+    )
+    .slice(0, 3);
+
+  return {
+    topLevers,
+    topTurns,
+    daysRecovered: topTurns.reduce((sum, row) => sum + row.totalRecoveredDays, 0),
+    revenueProtected: topTurns.reduce((sum, row) => sum + row.totalRevenueProtected, 0),
+    topLeverLabel: topLevers[0]?.label || "priority interventions",
   };
 }
 
@@ -187,17 +321,20 @@ export default function OverviewTab({
   );
 
   const revenue = useMemo(() => calculateRevenueImpact(enriched), [enriched]);
+  const impact = useMemo(() => buildImpactSummary(enriched), [enriched]);
+  const marketSummary = useMemo(() => buildMarketSummary(enriched), [enriched]);
+  const executivePlan = useMemo(() => buildExecutivePlan(enriched), [enriched]);
+
   const narrative = useMemo(
     () =>
       buildExecutiveNarrative({
         properties: enriched,
         revenueImpact: revenue,
         topStageBottleneck,
+        planSummary: executivePlan,
       }),
-    [enriched, revenue, topStageBottleneck]
+    [enriched, revenue, topStageBottleneck, executivePlan]
   );
-  const impact = useMemo(() => buildImpactSummary(enriched), [enriched]);
-  const marketSummary = useMemo(() => buildMarketSummary(enriched), [enriched]);
 
   const isExec = mode === "exec";
 
@@ -253,9 +390,7 @@ export default function OverviewTab({
           <div className="mt-2 text-3xl font-semibold text-red-600">
             ${revenue.atRisk.toLocaleString()}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
-            Modeled portfolio exposure
-          </div>
+          <div className="mt-1 text-xs text-slate-500">Modeled portfolio exposure</div>
         </Card>
 
         <Card>
@@ -263,17 +398,13 @@ export default function OverviewTab({
           <div className="mt-2 text-3xl font-semibold text-emerald-600">
             ${revenue.recoverable.toLocaleString()}
           </div>
-          <div className="mt-1 text-xs text-slate-500">
-            Potential upside from execution
-          </div>
+          <div className="mt-1 text-xs text-slate-500">Potential upside from execution</div>
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days</div>
           <div className="mt-2 text-3xl font-semibold text-slate-900">{impact.totalDelay}</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Total modeled portfolio slippage
-          </div>
+          <div className="mt-1 text-xs text-slate-500">Total modeled portfolio slippage</div>
         </Card>
 
         <Card>
@@ -288,6 +419,124 @@ export default function OverviewTab({
           </div>
         </Card>
       </div>
+
+      <Card>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <div className="text-2xl font-semibold text-slate-900">Executive Plan</div>
+            <div className="mt-1 text-sm text-slate-500">
+              The highest-value portfolio plan based on current modeled recovery levers
+            </div>
+          </div>
+          <button
+            onClick={() => setActiveTab("Forecast")}
+            className="rounded-xl border border-slate-200 px-3 py-2 text-sm hover:bg-slate-50"
+          >
+            Open Forecast
+          </button>
+        </div>
+
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Current Delay</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{impact.totalDelay}d</div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Best Plan Delay</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              {Math.max(0, impact.totalDelay - executivePlan.daysRecovered)}d
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Days Recoverable</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              {executivePlan.daysRecovered}d
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-slate-200 p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Revenue Protected</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">
+              ${executivePlan.revenueProtected.toLocaleString()}
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-5">
+            <div className="text-sm font-medium text-slate-900">Top Recovery Levers</div>
+            <div className="mt-3 space-y-3">
+              {executivePlan.topLevers.length ? (
+                executivePlan.topLevers.map((lever) => (
+                  <div
+                    key={lever.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="font-medium text-slate-900">{lever.label}</div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {lever.impactedTurns} turns impacted
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold text-slate-900">
+                          ${lever.revenueProtected.toLocaleString()}
+                        </div>
+                        <div className="text-xs text-slate-500">{lever.daysRecovered}d recovered</div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  No meaningful portfolio levers identified yet.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="xl:col-span-7">
+            <div className="text-sm font-medium text-slate-900">Top Impacted Turns</div>
+            <div className="mt-3 space-y-3">
+              {executivePlan.topTurns.length ? (
+                executivePlan.topTurns.map((turn) => (
+                  <div
+                    key={turn.id}
+                    className="rounded-2xl border border-slate-200 bg-white p-4"
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div>
+                        <div className="font-medium text-slate-900">{turn.name}</div>
+                        <div className="mt-1 text-sm text-slate-500">
+                          {turn.market} • {turn.currentStage}
+                        </div>
+                        <div className="mt-2 text-xs text-slate-500">
+                          {turn.levers.join(" • ")}
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-semibold text-slate-900">
+                          ${turn.totalRevenueProtected.toLocaleString()}
+                        </div>
+                        <div className="text-xs text-slate-500">
+                          {turn.totalRecoveredDays}d recovered
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                  No priority turns surfaced for the current plan.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </Card>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-8">
