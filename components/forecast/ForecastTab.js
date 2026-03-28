@@ -9,6 +9,7 @@ import {
   getDailyRentValue,
   getRentSourceLabel,
   getRevenueProtected,
+  shiftDate,
 } from "../../utils/economics";
 
 const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
@@ -259,6 +260,117 @@ function getExecHeadline(portfolio, scenarioQueue) {
   return `The current forecast shows ${portfolio.baseDelay} modeled delay-days across the portfolio, with approximately $${portfolio.revenueAtRisk.toLocaleString()} of rent exposure. The highest-leverage intervention is ${top.name}, where the optimized scenario protects $${top.protectedRevenue.toLocaleString()}.`;
 }
 
+function getSimulatorActionOptions() {
+  return [
+    {
+      id: "clear_blocked",
+      label: "Clear blocked turns",
+      description: "Recover 2 days per blocked turn",
+    },
+    {
+      id: "accelerate_approvals",
+      label: "Accelerate approvals",
+      description: "Recover 2 days per Owner Approval turn",
+    },
+    {
+      id: "recover_failed_ready",
+      label: "Recover failed rent ready",
+      description: "Recover 3 days per failed-ready turn",
+    },
+    {
+      id: "compress_over_sla",
+      label: "Compress over-SLA stage time",
+      description: "Recover up to 2 days per over-SLA turn",
+    },
+  ];
+}
+
+function getSimulatedRecoveryForRow(row, selectedActions) {
+  let recoveredDays = 0;
+
+  if (selectedActions.includes("clear_blocked") && row.turnStatus === "Blocked") {
+    recoveredDays += 2;
+  }
+
+  if (
+    selectedActions.includes("accelerate_approvals") &&
+    row.currentStage === "Owner Approval"
+  ) {
+    recoveredDays += 2;
+  }
+
+  if (
+    selectedActions.includes("recover_failed_ready") &&
+    row.currentStage === "Failed Rent Ready"
+  ) {
+    recoveredDays += 3;
+  }
+
+  if (selectedActions.includes("compress_over_sla")) {
+    const stageSla =
+      row.currentStage === "Failed Rent Ready"
+        ? 0
+        : row.currentStage === "Dispatch"
+        ? 2
+        : row.currentStage === "Owner Approval"
+        ? 3
+        : row.currentStage === "Move Out Inspection"
+        ? 2
+        : 3;
+
+    const overSlaDays = Math.max(0, (row.daysInStage || 0) - stageSla);
+    recoveredDays += Math.min(2, overSlaDays);
+  }
+
+  const scenario = buildScenarioModel(row);
+  const cap = Math.max(0, scenario.base.delayDays);
+  const finalRecoveredDays = Math.min(recoveredDays, cap);
+
+  return {
+    recoveredDays: finalRecoveredDays,
+    revenueProtected: getRevenueProtected(finalRecoveredDays, row),
+    nextCompletion:
+      finalRecoveredDays > 0
+        ? shiftDate(row.projectedCompletion, -finalRecoveredDays)
+        : row.projectedCompletion,
+  };
+}
+
+function buildPortfolioDelaySimulation(properties, selectedActions) {
+  const impactedTurns = properties
+    .map((row) => {
+      const recovery = getSimulatedRecoveryForRow(row, selectedActions);
+      return {
+        ...row,
+        simulatedRecoveredDays: recovery.recoveredDays,
+        simulatedRevenueProtected: recovery.revenueProtected,
+        simulatedCompletion: recovery.nextCompletion,
+      };
+    })
+    .filter((row) => row.simulatedRecoveredDays > 0)
+    .sort(
+      (a, b) =>
+        b.simulatedRevenueProtected - a.simulatedRevenueProtected ||
+        b.simulatedRecoveredDays - a.simulatedRecoveredDays
+    );
+
+  const totalRecoveredDays = impactedTurns.reduce(
+    (sum, row) => sum + row.simulatedRecoveredDays,
+    0
+  );
+
+  const totalRevenueProtected = impactedTurns.reduce(
+    (sum, row) => sum + row.simulatedRevenueProtected,
+    0
+  );
+
+  return {
+    impactedTurns,
+    totalRecoveredDays,
+    totalRevenueProtected,
+  };
+}
+
 export default function ForecastTab({
   mode = "operator",
   selectedProperty,
@@ -272,6 +384,7 @@ export default function ForecastTab({
 }) {
   const [activeScenario, setActiveScenario] = useState("Optimized Case");
   const [actionLearningLog, setActionLearningLog] = useState([]);
+  const [selectedSimulatorActions, setSelectedSimulatorActions] = useState([]);
 
   useEffect(() => {
     try {
@@ -289,6 +402,11 @@ export default function ForecastTab({
 
   const portfolio = useMemo(() => buildPortfolioSummary(properties), [properties]);
   const scenarioQueue = useMemo(() => buildScenarioQueue(properties), [properties]);
+  const simulatorActionOptions = useMemo(() => getSimulatorActionOptions(), []);
+  const portfolioSimulation = useMemo(
+    () => buildPortfolioDelaySimulation(properties, selectedSimulatorActions),
+    [properties, selectedSimulatorActions]
+  );
 
   const isExecMode = mode === "exec";
   const isPresentationMode = mode === "presentation";
@@ -338,6 +456,11 @@ export default function ForecastTab({
   const execHeadline = useMemo(
     () => getExecHeadline(portfolio, scenarioQueue),
     [portfolio, scenarioQueue]
+  );
+
+  const simulatedPortfolioDelay = Math.max(
+    0,
+    portfolio.baseDelay - portfolioSimulation.totalRecoveredDays
   );
 
   const kpis = [
@@ -413,6 +536,32 @@ export default function ForecastTab({
     );
   }
 
+  function toggleSimulatorAction(actionId) {
+    setSelectedSimulatorActions((prev) =>
+      prev.includes(actionId)
+        ? prev.filter((id) => id !== actionId)
+        : [...prev, actionId]
+    );
+  }
+
+  function applyPortfolioSimulatorPlan() {
+    if (!portfolioSimulation.impactedTurns.length) return;
+
+    const patches = portfolioSimulation.impactedTurns.map((row) => ({
+      id: row.id,
+      patch: {
+        daysInStage: Math.max(0, (row.daysInStage || 0) - row.simulatedRecoveredDays),
+        projectedCompletion: row.simulatedCompletion,
+        risk: Math.max(20, (row.risk || 0) - Math.min(10, row.simulatedRecoveredDays * 2)),
+      },
+    }));
+
+    applyForecastBatch(
+      patches,
+      `Apply portfolio delay simulator plan (${selectedSimulatorActions.length} levers)`
+    );
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -476,6 +625,176 @@ export default function ForecastTab({
           </Card>
         ))}
       </div>
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-2xl font-semibold text-slate-900">Portfolio Delay Simulator</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Simulate portfolio-wide delay recovery levers before committing a forecast plan.
+            </div>
+          </div>
+          <Pill tone="blue">{selectedSimulatorActions.length} levers selected</Pill>
+        </div>
+
+        <div className="mt-5 grid gap-6 xl:grid-cols-12">
+          <div className="xl:col-span-5">
+            <div className="space-y-3">
+              {simulatorActionOptions.map((action) => (
+                <label
+                  key={action.id}
+                  className="flex cursor-pointer items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4"
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      checked={selectedSimulatorActions.includes(action.id)}
+                      onChange={() => toggleSimulatorAction(action.id)}
+                      className="mt-1"
+                    />
+                    <div>
+                      <div className="font-medium text-slate-900">{action.label}</div>
+                      <div className="mt-1 text-sm text-slate-500">{action.description}</div>
+                    </div>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div className="xl:col-span-7">
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <Card>
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Current Delay
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {portfolio.baseDelay}d
+                </div>
+                <div className="mt-1 text-sm text-slate-500">Base case delay</div>
+              </Card>
+
+              <Card>
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Simulated Delay
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {simulatedPortfolioDelay}d
+                </div>
+                <div className="mt-1 text-sm text-slate-500">After selected levers</div>
+              </Card>
+
+              <Card>
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Days Recovered
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  {portfolioSimulation.totalRecoveredDays}d
+                </div>
+                <div className="mt-1 text-sm text-slate-500">Modeled portfolio lift</div>
+              </Card>
+
+              <Card>
+                <div className="text-xs uppercase tracking-wide text-slate-500">
+                  Revenue Protected
+                </div>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">
+                  ${portfolioSimulation.totalRevenueProtected.toLocaleString()}
+                </div>
+                <div className="mt-1 text-sm text-slate-500">Based on current rent signals</div>
+              </Card>
+            </div>
+
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-sm text-slate-700">
+                {portfolioSimulation.totalRecoveredDays > 0 ? (
+                  <>
+                    The selected plan reduces portfolio delay from{" "}
+                    <span className="font-medium">{portfolio.baseDelay}d</span> to{" "}
+                    <span className="font-medium">{simulatedPortfolioDelay}d</span> and protects
+                    approximately{" "}
+                    <span className="font-medium">
+                      ${portfolioSimulation.totalRevenueProtected.toLocaleString()}
+                    </span>.
+                  </>
+                ) : (
+                  <>
+                    Select one or more recovery levers to simulate the portfolio effect before
+                    applying the plan.
+                  </>
+                )}
+              </div>
+            </div>
+
+            <div className="mt-4">
+              <button
+                onClick={applyPortfolioSimulatorPlan}
+                disabled={!portfolioSimulation.impactedTurns.length}
+                className={`rounded-md px-4 py-2 text-sm font-medium ${
+                  portfolioSimulation.impactedTurns.length
+                    ? "bg-slate-900 text-white hover:bg-slate-800"
+                    : "cursor-not-allowed border border-slate-100 bg-slate-50 text-slate-300"
+                }`}
+              >
+                Apply Portfolio Plan
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 overflow-x-auto">
+          <table className="min-w-[860px] text-sm">
+            <thead className="bg-slate-50 text-left text-slate-500">
+              <tr>
+                <th className="px-4 py-3 font-medium">Property</th>
+                <th className="px-4 py-3 font-medium">Stage</th>
+                <th className="px-4 py-3 font-medium">Current Delay</th>
+                <th className="px-4 py-3 font-medium">Recovered Days</th>
+                <th className="px-4 py-3 font-medium">New ECD</th>
+                <th className="px-4 py-3 font-medium">$ Protected</th>
+              </tr>
+            </thead>
+            <tbody>
+              {portfolioSimulation.impactedTurns.slice(0, 8).map((row) => (
+                <tr key={row.id} className="border-t border-slate-100">
+                  <td className="px-4 py-4">
+                    <button
+                      onClick={() => setSelectedPropertyId(row.id)}
+                      className="text-left"
+                    >
+                      <div className="font-medium text-blue-700 hover:underline">{row.name}</div>
+                    </button>
+                    <div className="mt-1 text-xs text-slate-400">
+                      {getRentSourceLabel(row)} • ${getDailyRentValue(row)}/day
+                    </div>
+                  </td>
+                  <td className="px-4 py-4 text-slate-700">{row.currentStage}</td>
+                  <td className="px-4 py-4">
+                    <Pill tone="red">+{buildScenarioModel(row).base.delayDays}d</Pill>
+                  </td>
+                  <td className="px-4 py-4">
+                    <Pill tone="green">-{row.simulatedRecoveredDays}d</Pill>
+                  </td>
+                  <td className="px-4 py-4 font-medium text-slate-900">
+                    {formatShortDate(row.simulatedCompletion)}
+                  </td>
+                  <td className="px-4 py-4 font-medium text-slate-900">
+                    ${row.simulatedRevenueProtected.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+
+              {!portfolioSimulation.impactedTurns.length ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-10 text-center text-sm text-slate-500">
+                    No simulated impact yet. Select one or more recovery levers to model a portfolio plan.
+                  </td>
+                </tr>
+              ) : null}
+            </tbody>
+          </table>
+        </div>
+      </Card>
 
       {!isExecMode && forecastTarget?.lastAction ? (
         <Card>
@@ -882,6 +1201,18 @@ export default function ForecastTab({
                   The largest opportunities are concentrated in blocked, approval-dependent, and
                   high-risk turns where scenario spread is widest.
                 </div>
+                {portfolioSimulation.totalRecoveredDays > 0 ? (
+                  <div>
+                    The current simulated portfolio plan recovers{" "}
+                    <span className="font-medium">
+                      {portfolioSimulation.totalRecoveredDays}d
+                    </span>{" "}
+                    and protects approximately{" "}
+                    <span className="font-medium">
+                      ${portfolioSimulation.totalRevenueProtected.toLocaleString()}
+                    </span>.
+                  </div>
+                ) : null}
               </div>
             </Card>
           </div>
