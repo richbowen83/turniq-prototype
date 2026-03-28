@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { getStageTone } from "../../utils/tone";
+import TurnDetailDrawer from "./TurnDetailDrawer";
 import {
   formatShortDate,
   getDailyRentValue,
@@ -567,6 +568,7 @@ export default function ControlCenterTab({
   const [customRowFilter, setCustomRowFilter] = useState(null);
   const [actionLearningLog, setActionLearningLog] = useState([]);
   const [localLastUpdated, setLocalLastUpdated] = useState(new Date().toISOString());
+  const [drawerRow, setDrawerRow] = useState(null);
 
   const queueRef = useRef(null);
 
@@ -1530,7 +1532,10 @@ export default function ControlCenterTab({
                               >
                                 <td className="w-[340px] px-4 py-4">
                                   <button
-                                    onClick={() => setSelectedPropertyId(row.id)}
+                                    onClick={() => {
+  setSelectedPropertyId(row.id);
+  setDrawerRow(row);
+}}
                                     className="text-left"
                                   >
                                     <div className="max-w-[260px] break-words text-base font-medium text-blue-700 hover:underline">
@@ -1929,8 +1934,17 @@ export default function ControlCenterTab({
               </Card>
             </div>
           </div>
-        </>
+                </>
       )}
+
+      <TurnDetailDrawer
+        row={drawerRow}
+        onClose={() => setDrawerRow(null)}
+        onResolve={handleResolve}
+        onMarkReady={handleFlagReady}
+        onApplyAction={handleApplyTopAction}
+      />
+
     </div>
   );
 }
