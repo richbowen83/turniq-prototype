@@ -955,6 +955,65 @@ export default function ControlCenterTab({
     touchUpdated();
   }
 
+function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
+  const daysSaved = simulation.daysRecovered;
+
+  if (daysSaved <= 0) return;
+
+  const existingSteps = Array.isArray(row.workflowCompletedSteps)
+    ? row.workflowCompletedSteps
+    : [];
+
+  const nextSteps = [...new Set([...existingSteps, ...selectedOptions])];
+
+  const patch = {
+    daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
+    projectedCompletion: shiftDate(row.projectedCompletion, -daysSaved),
+    workflowCompletedSteps: nextSteps,
+  };
+
+  if (selectedOptions.includes("clear_blocker")) {
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+  }
+
+  if (selectedOptions.includes("accelerate_approval")) {
+    patch.currentStage = "Dispatch";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Confirm vendor schedule";
+  }
+
+  if (selectedOptions.includes("recover_failed_ready")) {
+    patch.currentStage = "Rent Ready Open";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Re-inspect and confirm ready state";
+  }
+
+  if (selectedOptions.includes("resequence_vendors")) {
+    patch.nextAction = "Re-sequenced vendor plan";
+  }
+
+  if (selectedOptions.includes("switch_vendor")) {
+    patch.vendor =
+      !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
+        ? "Best-Fit Vendor"
+        : `${row.vendor} (replacement queued)`;
+    patch.nextAction = "Confirm replacement vendor schedule";
+  }
+
+  if (selectedOptions.includes("expedite_vendor")) {
+    patch.nextAction = "Expedite vendor execution";
+  }
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Apply simulated plan");
+}
+
   function handleApplyTopAction(row) {
     if (row.turnStatus === "Blocked") {
       handleResolve(row.id);
@@ -1035,6 +1094,31 @@ export default function ControlCenterTab({
     patchRow(row.id, patch);
     recordActionOutcome(row, patch, "Apply top action");
   }
+
+function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
+  const daysSaved = simulation.daysRecovered;
+
+  if (daysSaved <= 0) return;
+
+  const nextProjectedCompletion = shiftDate(
+    row.projectedCompletion,
+    -daysSaved
+  );
+
+  const patch = {
+    daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
+    projectedCompletion: nextProjectedCompletion,
+    turnStatus: "Monitoring",
+    nextAction: "Execution adjusted via simulation",
+    workflowCompletedSteps: [
+      ...(row.workflowCompletedSteps || []),
+      ...selectedOptions,
+    ],
+  };
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Apply simulated plan");
+}
 
   function handleWorkflowStep(row, step) {
     if (!step) return;
@@ -2013,12 +2097,13 @@ export default function ControlCenterTab({
       )}
 
       <TurnDetailDrawer
-        row={drawerRow}
-        onClose={() => setDrawerRow(null)}
-        onResolve={handleResolve}
-        onMarkReady={handleFlagReady}
-        onApplyAction={handleApplyTopAction}
-      />
+  row={drawerRow}
+  onClose={() => setDrawerRow(null)}
+  onResolve={handleResolve}
+  onMarkReady={handleFlagReady}
+  onApplyAction={handleApplyTopAction}
+  onApplySimulatedPlan={handleApplySimulatedPlan}
+/>
     </div>
   );
 }

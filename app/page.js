@@ -283,7 +283,7 @@ export default function Page() {
   const [lastSkippedCount, setLastSkippedCount] = useState(0);
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
   const [audienceMode, setAudienceMode] = useState("operator");
-   const [controlCenterMode, setControlCenterMode] = useState("guided");
+  const [controlCenterMode, setControlCenterMode] = useState("guided");
 
   useEffect(() => {
   if (!hasHydrated) return;

@@ -5,19 +5,63 @@ import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { formatShortDate, shiftDate } from "../../utils/economics";
 
+function getVendorSignal(row) {
+  const vendorName = row.vendor || "Unassigned";
+  const workOrders = Array.isArray(row.workOrders) ? row.workOrders : [];
+
+  const delayedWorkOrders = workOrders.filter((workOrder) =>
+    ["Delayed", "Overdue", "Blocked"].includes(workOrder.status)
+  );
+
+  const openWorkOrders = workOrders.filter(
+    (workOrder) => !["Completed", "Closed"].includes(workOrder.status)
+  );
+
+  const missingVendor = !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned";
+
+  const vendorRisk =
+    missingVendor
+      ? "high"
+      : delayedWorkOrders.length > 0
+      ? "high"
+      : openWorkOrders.length >= 2
+      ? "medium"
+      : "low";
+
+  return {
+    vendorName,
+    missingVendor,
+    delayedWorkOrders,
+    openWorkOrders,
+    vendorRisk,
+    recommendation:
+      missingVendor
+        ? "Assign a vendor to unlock execution"
+        : vendorRisk === "high"
+        ? `Current vendor (${vendorName}) is creating delay risk`
+        : vendorRisk === "medium"
+        ? `Monitor ${vendorName} closely`
+        : `${vendorName} looks stable`,
+  };
+}
+
 function getSimulatorOptions(row) {
+  const vendorSignal = getVendorSignal(row);
+
   return [
     {
       id: "clear_blocker",
       label: "Clear blocker",
       enabled: row.turnStatus === "Blocked" || row.blocker !== "None",
       days: row.turnStatus === "Blocked" || row.blocker !== "None" ? 2 : 0,
+      category: "workflow",
     },
     {
       id: "accelerate_approval",
       label: "Accelerate approval",
       enabled: row.currentStage === "Owner Approval",
       days: row.currentStage === "Owner Approval" ? 2 : 0,
+      category: "workflow",
     },
     {
       id: "resequence_vendors",
@@ -27,12 +71,39 @@ function getSimulatorOptions(row) {
         (row.daysInStage || 0) > (row.stageSla || 0)
           ? Math.min(2, Math.max(1, (row.daysInStage || 0) - (row.stageSla || 0)))
           : 0,
+      category: "vendor",
+    },
+    {
+  id: "switch_vendor",
+  label: vendorSignal.missingVendor
+    ? "Assign best-fit vendor"
+    : "Switch vendor",
+      enabled: vendorSignal.missingVendor || vendorSignal.vendorRisk !== "low",
+      days:
+        vendorSignal.missingVendor
+          ? 2
+          : vendorSignal.vendorRisk === "high"
+          ? 2
+          : vendorSignal.vendorRisk === "medium"
+          ? 1
+          : 0,
+      category: "vendor",
+    },
+    {
+      id: "expedite_vendor",
+      label: vendorSignal.missingVendor
+        ? "Escalate vendor assignment"
+         : "Expedite current vendor",
+      enabled: vendorSignal.vendorRisk === "high" || vendorSignal.missingVendor,
+      days: vendorSignal.vendorRisk === "high" || vendorSignal.missingVendor ? 1 : 0,
+      category: "vendor",
     },
     {
       id: "recover_failed_ready",
       label: "Recover failed rent ready",
       enabled: row.currentStage === "Failed Rent Ready",
       days: row.currentStage === "Failed Rent Ready" ? 3 : 0,
+      category: "workflow",
     },
   ];
 }
@@ -64,6 +135,29 @@ function buildSimulation(row, selectedOptions) {
     simulatedCompletion,
     revenueProtected: Math.round(simulatedRevenueProtected),
   };
+}
+
+function getRecommendedOptions(row) {
+  const options = getSimulatorOptions(row).filter((option) => option.enabled);
+
+  const ranked = [...options].sort((a, b) => {
+    const categoryWeight = (category) => (category === "vendor" ? 1 : 0);
+    return b.days - a.days || categoryWeight(b.category) - categoryWeight(a.category);
+  });
+
+  const selected = [];
+  let totalDays = 0;
+  const maxDays = Math.max(1, (row.impact?.daysRecovered || 0) + 2);
+
+  for (const option of ranked) {
+    if (selected.includes(option.id)) continue;
+    if (totalDays >= maxDays) break;
+
+    selected.push(option.id);
+    totalDays += option.days || 0;
+  }
+
+  return selected;
 }
 
 function getTimelineRows(row) {
@@ -153,48 +247,76 @@ export default function TurnDetailDrawer({
   onResolve,
   onMarkReady,
   onApplyAction,
+  onApplySimulatedPlan,
 }) {
   const [selectedOptions, setSelectedOptions] = useState([]);
 
-  useEffect(() => {
+const recommendedOptions = useMemo(() => {
+  if (!row) return [];
+  return getRecommendedOptions(row);
+}, [row]);
+
+useEffect(() => {
+  if (!row) {
     setSelectedOptions([]);
-  }, [row?.id]);
+    return;
+  }
 
-  const simulation = useMemo(() => {
-    if (!row) {
-      return {
-        daysRecovered: 0,
-        simulatedCompletion: null,
-        revenueProtected: 0,
-      };
-    }
+  setSelectedOptions(recommendedOptions);
+}, [row?.id, recommendedOptions]);
 
-    return buildSimulation(row, selectedOptions);
-  }, [row, selectedOptions]);
+// --- CORE COMPUTATION ---
 
-  const simulatorOptions = useMemo(() => {
-    if (!row) return [];
-    return getSimulatorOptions(row);
-  }, [row]);
+const simulation = useMemo(() => {
+  if (!row) {
+    return {
+      daysRecovered: 0,
+      simulatedCompletion: null,
+      revenueProtected: 0,
+    };
+  }
 
-  const timelineRows = useMemo(() => {
-    if (!row) return [];
-    return getTimelineRows(row);
-  }, [row]);
+  return buildSimulation(row, selectedOptions);
+}, [row, selectedOptions]);
 
-  const workflowHistory = useMemo(() => {
-    if (!row) return [];
-    return getWorkflowHistory(row);
-  }, [row]);
+// --- OPTION SETS ---
 
-  const recentNotes = useMemo(() => {
-    if (!row) return [];
-    return Array.isArray(row.operationalNotes)
-      ? [...row.operationalNotes].slice(-5).reverse()
-      : [];
-  }, [row]);
+const simulatorOptions = useMemo(() => {
+  if (!row) return [];
+  return getSimulatorOptions(row);
+}, [row]);
 
+// --- DERIVED STATE ---
+
+const isRecommendedPlan =
+  selectedOptions.length === recommendedOptions.length &&
+  selectedOptions.every((opt) => recommendedOptions.includes(opt));
+
+// --- SUPPORTING DATA ---
+
+const timelineRows = useMemo(() => {
+  if (!row) return [];
+  return getTimelineRows(row);
+}, [row]);
+
+const workflowHistory = useMemo(() => {
+  if (!row) return [];
+  return getWorkflowHistory(row);
+}, [row]);
+
+const recentNotes = useMemo(() => {
+  if (!row) return [];
+  return Array.isArray(row.operationalNotes)
+    ? [...row.operationalNotes].slice(-5).reverse()
+    : [];
+}, [row]);
+
+const vendorSignal = useMemo(() => {
   if (!row) return null;
+  return getVendorSignal(row);
+}, [row]);
+
+if (!row) return null;
 
   function toggleOption(optionId) {
     setSelectedOptions((prev) =>
@@ -204,8 +326,14 @@ export default function TurnDetailDrawer({
     );
   }
 
-  function applySimulatedPlan() {
-    onApplyAction(row);
+    function applySimulatedPlan() {
+    if (!selectedOptions.length || simulation.daysRecovered <= 0) return;
+
+    onApplySimulatedPlan({
+      row,
+      selectedOptions,
+      simulation,
+    });
   }
 
   return (
@@ -537,6 +665,59 @@ export default function TurnDetailDrawer({
         <Card className="mt-6">
           <div className="flex items-start justify-between gap-4">
             <div>
+              <div className="text-sm font-medium text-slate-900">Vendor Intelligence</div>
+              <div className="mt-1 text-xs text-slate-500">
+                Dispatch and execution signal based on linked work orders and vendor posture
+              </div>
+            </div>
+            <Pill
+              tone={
+                vendorSignal?.vendorRisk === "high"
+                  ? "red"
+                  : vendorSignal?.vendorRisk === "medium"
+                  ? "amber"
+                  : "green"
+              }
+            >
+              {vendorSignal?.vendorRisk === "high"
+                ? "High vendor risk"
+                : vendorSignal?.vendorRisk === "medium"
+                ? "Medium vendor risk"
+                : "Stable vendor signal"}
+            </Pill>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Assigned Vendor</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {vendorSignal?.vendorName}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Open Work Orders</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {vendorSignal?.openWorkOrders.length || 0}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Delayed Work Orders</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {vendorSignal?.delayedWorkOrders.length || 0}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            {vendorSignal?.recommendation}
+          </div>
+        </Card>
+
+        <Card className="mt-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
               <div className="text-sm font-medium text-slate-900">Delay Simulator</div>
               <div className="mt-1 text-xs text-slate-500">
                 Test likely recovery actions before applying the plan
@@ -544,6 +725,20 @@ export default function TurnDetailDrawer({
             </div>
             <Pill tone="blue">Scenario</Pill>
           </div>
+
+                   <div className="mt-4 flex flex-wrap items-center gap-2">
+  <Pill tone="green">AI-selected plan</Pill>
+  <button
+    onClick={() => setSelectedOptions(recommendedOptions)}
+    className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+  >
+    Reapply recommendation
+  </button>
+</div>
+
+<div className="mt-2 text-xs text-slate-500">
+  Recommended plan selected based on blocker state, stage friction, vendor risk, and recoverable revenue.
+</div>
 
           <div className="mt-4 space-y-3">
             {simulatorOptions.map((option) => (
@@ -556,14 +751,23 @@ export default function TurnDetailDrawer({
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedOptions.includes(option.id)}
-                    disabled={!option.enabled}
-                    onChange={() => toggleOption(option.id)}
-                  />
-                  <span>{option.label}</span>
-                </div>
+  <input
+    type="checkbox"
+    checked={selectedOptions.includes(option.id)}
+    disabled={!option.enabled}
+    onChange={() => toggleOption(option.id)}
+  />
+
+  <div className="flex items-center gap-2">
+    <span>{option.label}</span>
+
+    {option.category && (
+      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+        {option.category === "vendor" ? "Vendor" : "Workflow"}
+      </span>
+    )}
+  </div>
+</div>
 
                 <div className="text-xs font-medium">
                   {option.enabled ? `+${option.days}d` : "N/A"}
@@ -607,7 +811,7 @@ export default function TurnDetailDrawer({
                 : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
             }`}
           >
-            Apply Simulated Plan
+            {isRecommendedPlan ? "Apply Recommended Plan" : "Apply Custom Plan"}
           </button>
         </Card>
 
