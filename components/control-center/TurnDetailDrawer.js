@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { formatShortDate, shiftDate } from "../../utils/economics";
@@ -141,6 +141,12 @@ function getWorkflowHistory(row) {
   }));
 }
 
+function getSyncTone(status) {
+  if (status === "Delayed") return "amber";
+  if (status === "Disconnected") return "red";
+  return "green";
+}
+
 export default function TurnDetailDrawer({
   row,
   onClose,
@@ -149,6 +155,10 @@ export default function TurnDetailDrawer({
   onApplyAction,
 }) {
   const [selectedOptions, setSelectedOptions] = useState([]);
+
+  useEffect(() => {
+    setSelectedOptions([]);
+  }, [row?.id]);
 
   const simulation = useMemo(() => {
     if (!row) {
@@ -179,7 +189,9 @@ export default function TurnDetailDrawer({
 
   const recentNotes = useMemo(() => {
     if (!row) return [];
-    return Array.isArray(row.operationalNotes) ? [...row.operationalNotes].slice(-5).reverse() : [];
+    return Array.isArray(row.operationalNotes)
+      ? [...row.operationalNotes].slice(-5).reverse()
+      : [];
   }, [row]);
 
   if (!row) return null;
@@ -200,17 +212,16 @@ export default function TurnDetailDrawer({
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/30" onClick={onClose} />
 
-      <div className="w-[640px] overflow-y-auto bg-white p-6 shadow-xl">
+      <div className="w-[720px] overflow-y-auto bg-white p-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
-            <div className="mt-1 text-sm text-slate-500">{row.market}</div>
+            <div className="mt-1 text-sm text-slate-500">
+              {row.market} • {row.portfolioName || "Portfolio not set"}
+            </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-600"
-          >
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             ✕
           </button>
         </div>
@@ -224,14 +235,57 @@ export default function TurnDetailDrawer({
           <Pill tone="blue">Risk {row.risk}</Pill>
         </div>
 
+        <Card className="mt-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-sm font-medium text-slate-900">
+                System of Record Sync
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                PMS-agnostic sync posture and source-system coverage
+              </div>
+            </div>
+            <Pill tone={getSyncTone(row.syncStatus)}>{row.syncStatus}</Pill>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Source System</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.sourceSystemName}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Last Synced</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.lastSyncedAt ? formatShortDate(row.lastSyncedAt) : "—"}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                {row.lastSyncedLabel || "No sync metadata"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Field Coverage</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.fieldCoverageLabel}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Record ID</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.externalRecordId || row.id}
+              </div>
+            </div>
+          </div>
+        </Card>
+
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <Card>
-            <div className="text-xs uppercase tracking-wide text-slate-500">
-              Why Now
-            </div>
-            <div className="mt-2 text-sm leading-6 text-slate-700">
-              {row.priority.whyNow}
-            </div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Why Now</div>
+            <div className="mt-2 text-sm leading-6 text-slate-700">{row.priority.whyNow}</div>
           </Card>
 
           <Card>
@@ -270,9 +324,9 @@ export default function TurnDetailDrawer({
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Daily Rent</div>
+              <div className="text-xs text-slate-500">Assigned Vendor</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
-                ${row.impact.dailyRentValue}
+                {row.vendor || "Unassigned"}
               </div>
             </div>
 
@@ -282,6 +336,124 @@ export default function TurnDetailDrawer({
                 {formatShortDate(row.projectedCompletion)}
               </div>
             </div>
+          </div>
+        </Card>
+
+        <Card className="mt-6">
+          <div className="text-sm font-medium text-slate-900">Key Dates & Financials</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Useful source-of-record fields surfaced for operating review
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Move-Out Date</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.moveOutDate ? formatShortDate(row.moveOutDate) : "—"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Initial ECD</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.initialProjectedCompletion
+                  ? formatShortDate(row.initialProjectedCompletion)
+                  : "—"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Current ECD</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {formatShortDate(row.projectedCompletion)}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Estimate Amount</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                ${Number(row.estimatedAmount || 0).toLocaleString()}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Approved Amount</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                ${Number(row.approvedAmount || 0).toLocaleString()}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Daily Rent</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                ${row.impact.dailyRentValue}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">{row.rentSourceLabel}</div>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="mt-6">
+          <div className="text-sm font-medium text-slate-900">Operational Coverage</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Linked source-system objects and detected record coverage
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Work Orders</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {row.workOrderCount || 0}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {row.workOrderCount > 0 ? "Detected from source system" : "No linked work orders"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Approvals</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {row.approvalCount || 0}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {row.approvalCount > 0 ? "Approval trail present" : "No approval records linked"}
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Attachments</div>
+              <div className="mt-2 text-2xl font-semibold text-slate-900">
+                {row.attachmentCount || 0}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {row.attachmentCount > 0 ? "Attachments detected" : "No linked attachments"}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-4 space-y-3">
+            {(row.workOrders || []).slice(0, 3).map((workOrder) => (
+              <div
+                key={workOrder.id}
+                className="rounded-2xl border border-slate-200 bg-white p-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium text-slate-900">{workOrder.title}</div>
+                    <div className="mt-1 text-xs text-slate-500">
+                      {workOrder.trade} • {workOrder.vendor}
+                    </div>
+                  </div>
+                  <Pill tone={workOrder.statusTone || "slate"}>{workOrder.status}</Pill>
+                </div>
+              </div>
+            ))}
+
+            {!row.workOrders?.length ? (
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
+                No detailed linked work orders surfaced yet.
+              </div>
+            ) : null}
           </div>
         </Card>
 
@@ -367,7 +539,7 @@ export default function TurnDetailDrawer({
             <div>
               <div className="text-sm font-medium text-slate-900">Delay Simulator</div>
               <div className="mt-1 text-xs text-slate-500">
-                Test likely recovery actions before applying the plan.
+                Test likely recovery actions before applying the plan
               </div>
             </div>
             <Pill tone="blue">Scenario</Pill>
@@ -403,9 +575,7 @@ export default function TurnDetailDrawer({
           <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Current ECD</div>
-              <div className="mt-1 font-medium">
-                {formatShortDate(row.projectedCompletion)}
-              </div>
+              <div className="mt-1 font-medium">{formatShortDate(row.projectedCompletion)}</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">

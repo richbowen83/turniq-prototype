@@ -101,7 +101,7 @@ const SYSTEM_VIEWS = [
   },
 ];
 
-const STORAGE_KEY = "turniq_control_center_saved_views_v10";
+const STORAGE_KEY = "turniq_control_center_saved_views_v11";
 const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
 
 function getStageSla(stage) {
@@ -262,6 +262,74 @@ function buildImpact(row) {
   };
 }
 
+function buildSourceSystemMetadata(row) {
+  const sourceSystemName = row.sourceSystemName || "Connected PMS";
+  const syncStatus = row.syncStatus || "Connected";
+  const lastSyncedAt = row.lastSyncedAt || new Date().toISOString();
+  const fieldCoverageLabel = row.fieldCoverageLabel || "Core fields";
+  const externalRecordId = row.externalRecordId || `turn-${row.id}`;
+  const portfolioName = row.portfolioName || "Default Portfolio";
+
+  const workOrders =
+    row.workOrders ||
+    (row.scope
+      ? [
+          {
+            id: `${row.id}-wo-1`,
+            title: row.scope,
+            trade: row.scope.includes("Paint")
+              ? "Paint"
+              : row.scope.includes("Floor")
+              ? "Flooring"
+              : row.scope.includes("Clean")
+              ? "Cleaning"
+              : "General",
+            vendor: row.vendor || "Unassigned",
+            status: row.turnStatus === "Blocked" ? "Blocked" : "In Progress",
+            statusTone: row.turnStatus === "Blocked" ? "red" : "amber",
+          },
+        ]
+      : []);
+
+  const approvals =
+    row.approvals ||
+    (row.currentStage === "Owner Approval"
+      ? [{ id: `${row.id}-approval-1`, status: "Pending owner approval" }]
+      : []);
+
+  const attachments =
+    row.attachments ||
+    (workOrders.length
+      ? [{ id: `${row.id}-attachment-1`, label: "Scope detail" }]
+      : []);
+
+  return {
+    sourceSystemName,
+    syncStatus,
+    lastSyncedAt,
+    lastSyncedLabel: row.lastSyncedLabel || "Source system update",
+    fieldCoverageLabel,
+    externalRecordId,
+    portfolioName,
+    moveOutDate: row.moveOutDate || row.leaseEnd || null,
+    initialProjectedCompletion:
+      row.initialProjectedCompletion || row.projectedCompletion || null,
+    estimatedAmount:
+      row.estimatedAmount || row.projectedCost || row.estimatedCost || 0,
+    approvedAmount:
+      row.approvedAmount ||
+      (row.currentStage === "Owner Approval"
+        ? 0
+        : row.projectedCost || row.estimatedCost || 0),
+    workOrders,
+    approvals,
+    attachments,
+    workOrderCount: workOrders.length,
+    approvalCount: approvals.length,
+    attachmentCount: attachments.length,
+  };
+}
+
 function buildEnrichedRows(rows) {
   return rows.map((row) => {
     const stale = isStale(row);
@@ -283,6 +351,7 @@ function buildEnrichedRows(rows) {
       workflowCompletedSteps: Array.isArray(row.workflowCompletedSteps)
         ? row.workflowCompletedSteps
         : [],
+      ...buildSourceSystemMetadata(row),
     };
 
     return {
@@ -504,7 +573,9 @@ function buildWorkflowPlan(row) {
           id: "resequence_vendors",
           label: "Re-sequence vendors",
           action: "progress",
-          done: completed.has("resequence_vendors") || row.daysInStage <= Math.max(0, row.stageSla - 1),
+          done:
+            completed.has("resequence_vendors") ||
+            row.daysInStage <= Math.max(0, row.stageSla - 1),
         },
         {
           id: "hold_ecd",
@@ -531,7 +602,9 @@ function buildWorkflowPlan(row) {
         id: "advance_action",
         label: "Advance next action",
         action: "progress",
-        done: completed.has("advance_action") || row.daysInStage <= Math.max(0, row.stageSla - 1),
+        done:
+          completed.has("advance_action") ||
+          row.daysInStage <= Math.max(0, row.stageSla - 1),
       },
       {
         id: "ready_execution",
@@ -1282,7 +1355,9 @@ export default function ControlCenterTab({
                     </div>
 
                     <div className="mt-3 text-xs text-slate-500">
-                      {currentStep ? `Step ${currentStepIndex + 1} of ${row.workflowPlan.steps.length}` : "Workflow complete"}
+                      {currentStep
+                        ? `Step ${currentStepIndex + 1} of ${row.workflowPlan.steps.length}`
+                        : "Workflow complete"}
                     </div>
 
                     <div className="mt-3 space-y-2">
@@ -1533,9 +1608,9 @@ export default function ControlCenterTab({
                                 <td className="w-[340px] px-4 py-4">
                                   <button
                                     onClick={() => {
-  setSelectedPropertyId(row.id);
-  setDrawerRow(row);
-}}
+                                      setSelectedPropertyId(row.id);
+                                      setDrawerRow(row);
+                                    }}
                                     className="text-left"
                                   >
                                     <div className="max-w-[260px] break-words text-base font-medium text-blue-700 hover:underline">
@@ -1934,7 +2009,7 @@ export default function ControlCenterTab({
               </Card>
             </div>
           </div>
-                </>
+        </>
       )}
 
       <TurnDetailDrawer
@@ -1944,7 +2019,6 @@ export default function ControlCenterTab({
         onMarkReady={handleFlagReady}
         onApplyAction={handleApplyTopAction}
       />
-
     </div>
   );
 }
