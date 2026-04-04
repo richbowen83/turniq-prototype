@@ -7,6 +7,7 @@ import GlobalKpiStrip from "../components/layout/GlobalKpiStrip";
 import TabNav from "../components/layout/TabNav";
 import DashboardTab from "../components/dashboard/DashboardTab";
 import ControlCenterTab from "../components/control-center/ControlCenterTab";
+import PipelineTab from "../components/pipeline/PipelineTab";
 import AnalyticsTab from "../components/analytics/AnalyticsTab";
 import ForecastTab from "../components/forecast/ForecastTab";
 import VendorsTab from "../components/vendors/VendorsTab";
@@ -210,6 +211,7 @@ const TABS = [
   "Import",
   "Dashboard",
   "Control Center",
+  "Pipeline",
   "Forecast",
   "Vendors",
   "Analytics",
@@ -914,6 +916,15 @@ if (!hasHydrated) {
       markDirtyRow={markDirtyRow}
     />
   )}
+
+{activeTab === "Pipeline" && (
+  <PipelineTab
+  rows={filteredProperties}
+  selectedPropertyId={selectedPropertyId}
+  setSelectedPropertyId={setSelectedPropertyId}
+  updateProperty={updateProperty}
+/>
+)}
 
   {activeTab === "Forecast" && (
     <ForecastTab

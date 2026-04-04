@@ -355,7 +355,9 @@ if (!row) return null;
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+          <Pill tone={row.priority?.tone || "slate"}>
+  {row.priority?.label || "Review"}
+</Pill>
           <Pill tone="slate">{row.currentStage}</Pill>
           <Pill tone={row.turnStatus === "Blocked" ? "red" : "green"}>
             {row.turnStatus}
