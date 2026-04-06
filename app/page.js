@@ -5,13 +5,11 @@ import { useState, useEffect, useMemo } from "react";
 import AppHeader from "../components/layout/AppHeader";
 import GlobalKpiStrip from "../components/layout/GlobalKpiStrip";
 import TabNav from "../components/layout/TabNav";
-import DashboardTab from "../components/dashboard/DashboardTab";
 import ControlCenterTab from "../components/control-center/ControlCenterTab";
 import PipelineTab from "../components/pipeline/PipelineTab";
 import AnalyticsTab from "../components/analytics/AnalyticsTab";
 import ForecastTab from "../components/forecast/ForecastTab";
 import VendorsTab from "../components/vendors/VendorsTab";
-import OverviewTab from "../components/overview/OverviewTab";
 
 const INITIAL_PROPERTIES = [
   {
@@ -208,14 +206,12 @@ const INITIAL_ACTIVITY = {
 const INITIAL_ACTION_HISTORY = [];
 
 const TABS = [
-  "Import",
-  "Dashboard",
   "Control Center",
   "Pipeline",
   "Forecast",
   "Vendors",
   "Analytics",
-  "Overview",
+  "Import",
 ];
 
 const PIPELINE_STAGES = [
@@ -262,7 +258,7 @@ function getStageFlow(properties) {
 }
 
 export default function Page() {
-  const [activeTab, setActiveTab] = useState("Dashboard");
+  const [activeTab, setActiveTab] = useState("Control Center");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
   const [selectedPropertyId, setSelectedPropertyId] = useState("p1");
   const [forecastUndoStack, setForecastUndoStack] = useState([]);
@@ -285,57 +281,56 @@ export default function Page() {
   const [lastSkippedCount, setLastSkippedCount] = useState(0);
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
   const [audienceMode, setAudienceMode] = useState("operator");
-  const [controlCenterMode, setControlCenterMode] = useState("guided");
 
   useEffect(() => {
-  if (!hasHydrated) return;
+    if (!hasHydrated) return;
 
-  try {
-    localStorage.setItem(
-      "turniq_imported_properties",
-      JSON.stringify(importedProperties)
-    );
-  } catch (error) {
-    console.error("Failed to persist imported properties", error);
-  }
-}, [importedProperties, hasHydrated]);
-
-  useEffect(() => {
-  try {
-    const saved = localStorage.getItem("turniq_imported_properties");
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed)) {
-        setImportedProperties(parsed);
-      }
-    }
-  } catch (error) {
-    console.error("Failed to load imported properties", error);
-  } finally {
-    setHasHydrated(true);
-  }
-}, []);
-
-useEffect(() => {
-  const savedUndo = localStorage.getItem("turniq_forecast_undo_stack");
-  if (savedUndo) {
     try {
-      const parsed = JSON.parse(savedUndo);
-      if (Array.isArray(parsed)) {
-        setForecastUndoStack(parsed);
+      localStorage.setItem(
+        "turniq_imported_properties",
+        JSON.stringify(importedProperties)
+      );
+    } catch (error) {
+      console.error("Failed to persist imported properties", error);
+    }
+  }, [importedProperties, hasHydrated]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("turniq_imported_properties");
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setImportedProperties(parsed);
+        }
       }
     } catch (error) {
-      console.error("Failed to load forecast undo stack", error);
+      console.error("Failed to load imported properties", error);
+    } finally {
+      setHasHydrated(true);
     }
-  }
-}, []);
+  }, []);
 
-useEffect(() => {
-  localStorage.setItem(
-    "turniq_forecast_undo_stack",
-    JSON.stringify(forecastUndoStack)
-  );
-}, [forecastUndoStack]);
+  useEffect(() => {
+    const savedUndo = localStorage.getItem("turniq_forecast_undo_stack");
+    if (savedUndo) {
+      try {
+        const parsed = JSON.parse(savedUndo);
+        if (Array.isArray(parsed)) {
+          setForecastUndoStack(parsed);
+        }
+      } catch (error) {
+        console.error("Failed to load forecast undo stack", error);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(
+      "turniq_forecast_undo_stack",
+      JSON.stringify(forecastUndoStack)
+    );
+  }, [forecastUndoStack]);
 
   const activeProperties = useMemo(
     () => (importedProperties.length ? importedProperties : properties),
@@ -421,16 +416,16 @@ useEffect(() => {
     ).length;
 
     const failedRentReadyCount = rows.filter(
-  (x) => x.currentStage === "Failed Rent Ready"
-).length;
+      (x) => x.currentStage === "Failed Rent Ready"
+    ).length;
 
-const rentReadyRelatedCount = rows.filter((x) =>
-  ["Pending RRI", "Rent Ready Open", "Failed Rent Ready"].includes(x.currentStage)
-).length;
+    const rentReadyRelatedCount = rows.filter((x) =>
+      ["Pending RRI", "Rent Ready Open", "Failed Rent Ready"].includes(x.currentStage)
+    ).length;
 
-const rriFailRate = rentReadyRelatedCount
-  ? `${Math.round((failedRentReadyCount / rentReadyRelatedCount) * 100)}%`
-  : "0%";
+    const rriFailRate = rentReadyRelatedCount
+      ? `${Math.round((failedRentReadyCount / rentReadyRelatedCount) * 100)}%`
+      : "0%";
 
     return {
       allOpenTurns: rows.length,
@@ -496,111 +491,112 @@ const rriFailRate = rentReadyRelatedCount
   }, [filteredProperties, queueFilter, selectedStageFilter, sortBy]);
 
   function updateProperty(id, patch) {
-  if (importedProperties.length) {
-    setImportedProperties((prev) =>
+    if (importedProperties.length) {
+      setImportedProperties((prev) =>
+        prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+      );
+      return;
+    }
+
+    setProperties((prev) =>
       prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
     );
-    return;
   }
 
-  setProperties((prev) =>
-    prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
-  );
-}
-
-function getActiveDatasetInfo() {
-  return {
-    datasetType: importedProperties.length ? "imported" : "demo",
-    rows: importedProperties.length ? importedProperties : properties,
-  };
-}
-
-function applyRowsToDataset(datasetType, nextRows) {
-  if (datasetType === "imported") {
-    setImportedProperties(nextRows);
-  } else {
-    setProperties(nextRows);
-  }
-}
-
-function applyForecastPatch(id, patch, label = "Forecast action") {
-  const { datasetType, rows } = getActiveDatasetInfo();
-
-  const originalRow = rows.find((row) => row.id === id);
-  if (!originalRow) return;
-
-  const nextRows = rows.map((row) =>
-    row.id === id ? { ...row, ...patch } : row
-  );
-
-  applyRowsToDataset(datasetType, nextRows);
-
-  setForecastUndoStack((prev) => [
-    {
-      id: `forecast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      kind: "single",
-      label,
-      datasetType,
-      timestamp: new Date().toISOString(),
-      rows: [{ id, before: originalRow }],
-    },
-    ...prev.slice(0, 19),
-  ]);
-}
-function applyForecastBatch(patches, label = "Forecast batch action") {
-  if (!patches?.length) return;
-
-  const datasetType = importedProperties.length ? "imported" : "demo";
-  const rows = importedProperties.length ? importedProperties : properties;
-
-  const patchMap = new Map(patches.map((item) => [item.id, item.patch]));
-
-  const beforeRows = rows
-    .filter((row) => patchMap.has(row.id))
-    .map((row) => ({
-      id: row.id,
-      before: row,
-    }));
-
-  if (!beforeRows.length) return;
-
-  const nextRows = rows.map((row) =>
-    patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
-  );
-
-  if (datasetType === "imported") {
-    setImportedProperties(nextRows);
-  } else {
-    setProperties(nextRows);
+  function getActiveDatasetInfo() {
+    return {
+      datasetType: importedProperties.length ? "imported" : "demo",
+      rows: importedProperties.length ? importedProperties : properties,
+    };
   }
 
-  setForecastUndoStack((prev) => [
-    {
-      id: `forecast-batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      kind: "batch",
-      label,
-      datasetType,
-      timestamp: new Date().toISOString(),
-      rows: beforeRows,
-    },
-    ...prev.slice(0, 19),
-  ]);
-}
+  function applyRowsToDataset(datasetType, nextRows) {
+    if (datasetType === "imported") {
+      setImportedProperties(nextRows);
+    } else {
+      setProperties(nextRows);
+    }
+  }
 
-function undoLastForecastAction() {
-  if (!forecastUndoStack.length) return;
+  function applyForecastPatch(id, patch, label = "Forecast action") {
+    const { datasetType, rows } = getActiveDatasetInfo();
 
-  const [latest, ...rest] = forecastUndoStack;
-  const targetRows = latest.datasetType === "imported" ? importedProperties : properties;
-  const restoreMap = new Map(latest.rows.map((item) => [item.id, item.before]));
+    const originalRow = rows.find((row) => row.id === id);
+    if (!originalRow) return;
 
-  const restoredRows = targetRows.map((row) =>
-    restoreMap.has(row.id) ? restoreMap.get(row.id) : row
-  );
+    const nextRows = rows.map((row) =>
+      row.id === id ? { ...row, ...patch } : row
+    );
 
-  applyRowsToDataset(latest.datasetType, restoredRows);
-  setForecastUndoStack(rest);
-}
+    applyRowsToDataset(datasetType, nextRows);
+
+    setForecastUndoStack((prev) => [
+      {
+        id: `forecast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "single",
+        label,
+        datasetType,
+        timestamp: new Date().toISOString(),
+        rows: [{ id, before: originalRow }],
+      },
+      ...prev.slice(0, 19),
+    ]);
+  }
+
+  function applyForecastBatch(patches, label = "Forecast batch action") {
+    if (!patches?.length) return;
+
+    const datasetType = importedProperties.length ? "imported" : "demo";
+    const rows = importedProperties.length ? importedProperties : properties;
+
+    const patchMap = new Map(patches.map((item) => [item.id, item.patch]));
+
+    const beforeRows = rows
+      .filter((row) => patchMap.has(row.id))
+      .map((row) => ({
+        id: row.id,
+        before: row,
+      }));
+
+    if (!beforeRows.length) return;
+
+    const nextRows = rows.map((row) =>
+      patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
+    );
+
+    if (datasetType === "imported") {
+      setImportedProperties(nextRows);
+    } else {
+      setProperties(nextRows);
+    }
+
+    setForecastUndoStack((prev) => [
+      {
+        id: `forecast-batch-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+        kind: "batch",
+        label,
+        datasetType,
+        timestamp: new Date().toISOString(),
+        rows: beforeRows,
+      },
+      ...prev.slice(0, 19),
+    ]);
+  }
+
+  function undoLastForecastAction() {
+    if (!forecastUndoStack.length) return;
+
+    const [latest, ...rest] = forecastUndoStack;
+    const targetRows = latest.datasetType === "imported" ? importedProperties : properties;
+    const restoreMap = new Map(latest.rows.map((item) => [item.id, item.before]));
+
+    const restoredRows = targetRows.map((row) =>
+      restoreMap.has(row.id) ? restoreMap.get(row.id) : row
+    );
+
+    applyRowsToDataset(latest.datasetType, restoredRows);
+    setForecastUndoStack(rest);
+  }
 
   function addNote(propertyName, note) {
     if (!note.trim()) return;
@@ -663,7 +659,7 @@ function undoLastForecastAction() {
 
   function openRow(id) {
     setSelectedPropertyId(id);
-    setActiveTab("Dashboard");
+    setActiveTab("Control Center");
   }
 
   function markDirtyRow(id) {
@@ -720,7 +716,7 @@ function undoLastForecastAction() {
     if (importedTurns.length) {
       setSelectedPropertyId(importedTurns[0].id);
       setSelectedMarket("All Markets");
-      setActiveTab("Dashboard");
+      setActiveTab("Control Center");
     }
   }
 
@@ -728,20 +724,20 @@ function undoLastForecastAction() {
     ? `Imported dataset • ${importedProperties.length} turns`
     : "Demo dataset";
 
-if (!hasHydrated) {
-  return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <div className="mx-auto max-w-7xl px-6 py-8">
-        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
-          <div className="mt-2 text-sm text-slate-500">
-            Loading workspace...
+  if (!hasHydrated) {
+    return (
+      <div className="min-h-screen bg-slate-50 text-slate-900">
+        <div className="mx-auto max-w-7xl px-6 py-8">
+          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
+            <div className="mt-2 text-sm text-slate-500">
+              Loading workspace...
+            </div>
           </div>
         </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -753,241 +749,179 @@ if (!hasHydrated) {
             markets={markets}
           />
 
-<div className="mt-1 text-sm text-slate-500">
-  TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
-</div>
+          <div className="mt-1 text-sm text-slate-500">
+            TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
+          </div>
 
-         <div className="flex flex-wrap items-center justify-between gap-3">
-  <div className="flex flex-wrap items-center gap-2">
-    <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-      {activeDatasetLabel}
-    </div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                {activeDatasetLabel}
+              </div>
 
-    <div className="flex items-center gap-2">
-      {[
-        { id: "operator", label: "Operator View" },
-        { id: "exec", label: "Executive View" },
-      ].map((item) => (
-        <button
-          key={item.id}
-          onClick={() => setAudienceMode(item.id)}
-          className={`rounded-xl px-3 py-2 text-xs ${
-            audienceMode === item.id
-              ? "bg-slate-900 text-white"
-              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+              <div className="flex items-center gap-2">
+                {[
+                  { id: "operator", label: "Operator View" },
+                  { id: "exec", label: "Executive View" },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setAudienceMode(item.id)}
+                    className={`rounded-xl px-3 py-2 text-xs ${
+                      audienceMode === item.id
+                        ? "bg-slate-900 text-white"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-    {activeTab === "Control Center" ? (
-  <>
-    <div className="mx-2 h-5 w-px bg-slate-200" />
+            {lastImportTimestamp ? (
+              <div className="text-xs text-slate-500">
+                Last import: {new Date(lastImportTimestamp).toLocaleString()}
+              </div>
+            ) : null}
+          </div>
 
-    <div className="flex items-center gap-2">
-      {[
-        { id: "guided", label: "Guided Workflow" },
-        { id: "exec", label: "Portfolio Heatmap" },
-      ].map((item) => (
-        <button
-          key={item.id}
-          onClick={() => setControlCenterMode(item.id)}
-          className={`rounded-xl px-3 py-2 text-xs ${
-            controlCenterMode === item.id
-              ? "bg-slate-900 text-white"
-              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
-  </>
-) : null}
-  </div>
+          <GlobalKpiStrip
+            kpis={kpis}
+            onOpenTurnsClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onBlockedTurnsClick={() => {
+              setQueueFilter("Blocked Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onScopeReviewsClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter("Scope Review");
+              setActiveTab("Control Center");
+            }}
+            onOwnerApprovalClick={() => {
+              setQueueFilter("All Open Turns");
+              setSelectedStageFilter("Owner Approval");
+              setActiveTab("Control Center");
+            }}
+            onHighRiskClick={() => {
+              setQueueFilter("High-Risk Turns");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onPastDueClick={() => {
+              setQueueFilter("ECD Past Due");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onEcdThisWeekClick={() => {
+              setQueueFilter("ECD This Week");
+              setSelectedStageFilter(null);
+              setActiveTab("Control Center");
+            }}
+            onRriFailRateClick={() => {
+              setActiveTab("Analytics");
+            }}
+          />
+        </div>
+      </div>
 
-  {lastImportTimestamp ? (
-    <div className="text-xs text-slate-500">
-      Last import: {new Date(lastImportTimestamp).toLocaleString()}
-    </div>
-  ) : null}
-</div>
+      <div className="mx-auto max-w-7xl px-6 py-4">
+        <TabNav
+          tabs={TABS}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          mode={audienceMode}
+        />
+      </div>
 
-<GlobalKpiStrip
-  kpis={kpis}
-  onOpenTurnsClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onBlockedTurnsClick={() => {
-    setQueueFilter("Blocked Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Dashboard");
-  }}
-  onScopeReviewsClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter("Scope Review");
-    setActiveTab("Control Center");
-  }}
-  onOwnerApprovalClick={() => {
-    setQueueFilter("All Open Turns");
-    setSelectedStageFilter("Owner Approval");
-    setActiveTab("Control Center");
-  }}
-  onHighRiskClick={() => {
-    setQueueFilter("High-Risk Turns");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onPastDueClick={() => {
-    setQueueFilter("ECD Past Due");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onEcdThisWeekClick={() => {
-    setQueueFilter("ECD This Week");
-    setSelectedStageFilter(null);
-    setActiveTab("Control Center");
-  }}
-  onRriFailRateClick={() => {
-    setActiveTab("Analytics");
-  }}
-/>
-</div>
-</div>
+      <div className="mx-auto max-w-7xl px-6 py-4">
+        {activeTab === "Control Center" && (
+          <ControlCenterTab
+            mode={audienceMode}
+            rows={queueRows}
+            queueFilter={queueFilter}
+            setQueueFilter={setQueueFilter}
+            resetQueueView={resetQueueView}
+            selectedStageFilter={selectedStageFilter}
+            toggleStageFilter={toggleStageFilter}
+            sortBy={sortBy}
+            setSortBy={setSortBy}
+            operatorSummary={operatorSummary}
+            selectedPropertyId={selectedPropertyId}
+            setSelectedPropertyId={setSelectedPropertyId}
+            updateProperty={updateProperty}
+            getToneFromRisk={getToneFromRisk}
+            stagePipeline={stagePipeline}
+            topStageBottleneck={topStageBottleneck}
+            saveRow={saveRow}
+            openRow={openRow}
+            savedRowIds={savedRowIds}
+            dirtyRowIds={dirtyRowIds}
+            markDirtyRow={markDirtyRow}
+          />
+        )}
 
-<div className="mx-auto max-w-7xl px-6 py-4">
-  <TabNav
-    tabs={TABS}
-    activeTab={activeTab}
-    onChange={setActiveTab}
-    mode={audienceMode}
-  />
-</div>
+        {activeTab === "Pipeline" && (
+          <PipelineTab
+            rows={filteredProperties}
+            selectedPropertyId={selectedPropertyId}
+            setSelectedPropertyId={setSelectedPropertyId}
+            updateProperty={updateProperty}
+          />
+        )}
 
-     <div className="mx-auto max-w-7xl px-6 py-4">
-  {activeTab === "Dashboard" && (
-    <DashboardTab
-      mode={audienceMode}
-      properties={filteredProperties}
-      selectedProperty={selectedProperty}
-      setSelectedPropertyId={setSelectedPropertyId}
-      selectedMarket={selectedMarket}
-      setSelectedMarket={setSelectedMarket}
-      notes={notesMap[selectedProperty.name] || []}
-      activity={activityMap[selectedProperty.name] || []}
-      addNote={addNote}
-      addActivity={addActivity}
-      addActionHistory={addActionHistory}
-      actionHistory={actionHistory}
-      updateProperty={updateProperty}
-      formatMoney={formatMoney}
-      getToneFromRisk={getToneFromRisk}
-      topStageBottleneck={topStageBottleneck}
-    />
-  )}
+        {activeTab === "Forecast" && (
+          <ForecastTab
+            mode={audienceMode}
+            selectedProperty={selectedProperty}
+            properties={filteredProperties}
+            setSelectedPropertyId={setSelectedPropertyId}
+            applyForecastPatch={applyForecastPatch}
+            applyForecastBatch={applyForecastBatch}
+            undoLastForecastAction={undoLastForecastAction}
+            canUndoForecastAction={forecastUndoStack.length > 0}
+            lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+          />
+        )}
 
-  {activeTab === "Control Center" && (
-    <ControlCenterTab
-      mode={audienceMode}
-      viewMode={controlCenterMode}
-      rows={queueRows}
-      queueFilter={queueFilter}
-      setQueueFilter={setQueueFilter}
-      resetQueueView={resetQueueView}
-      selectedStageFilter={selectedStageFilter}
-      toggleStageFilter={toggleStageFilter}
-      sortBy={sortBy}
-      setSortBy={setSortBy}
-      operatorSummary={operatorSummary}
-      selectedPropertyId={selectedPropertyId}
-      setSelectedPropertyId={setSelectedPropertyId}
-      updateProperty={updateProperty}
-      getToneFromRisk={getToneFromRisk}
-      stagePipeline={stagePipeline}
-      topStageBottleneck={topStageBottleneck}
-      saveRow={saveRow}
-      openRow={openRow}
-      savedRowIds={savedRowIds}
-      dirtyRowIds={dirtyRowIds}
-      markDirtyRow={markDirtyRow}
-    />
-  )}
+        {activeTab === "Analytics" && (
+          <AnalyticsTab
+            properties={filteredProperties}
+            actionHistory={actionHistory}
+          />
+        )}
 
-{activeTab === "Pipeline" && (
-  <PipelineTab
-  rows={filteredProperties}
-  selectedPropertyId={selectedPropertyId}
-  setSelectedPropertyId={setSelectedPropertyId}
-  updateProperty={updateProperty}
-/>
-)}
+        {activeTab === "Vendors" && (
+          <VendorsTab properties={filteredProperties} />
+        )}
 
-  {activeTab === "Forecast" && (
-    <ForecastTab
-      mode={audienceMode}
-      selectedProperty={selectedProperty}
-      properties={filteredProperties}
-      setSelectedPropertyId={setSelectedPropertyId}
-      applyForecastPatch={applyForecastPatch}
-      applyForecastBatch={applyForecastBatch}
-      undoLastForecastAction={undoLastForecastAction}
-      canUndoForecastAction={forecastUndoStack.length > 0}
-      lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
-    />
-  )}
-
-  {activeTab === "Analytics" && (
-    <AnalyticsTab
-      properties={filteredProperties}
-      actionHistory={actionHistory}
-    />
-  )}
-
-  {activeTab === "Vendors" && (
-    <VendorsTab properties={filteredProperties} />
-  )}
-
-  {activeTab === "Import" && (
-    <ImportPanel
-      onImport={handleImportTurns}
-      onClearSuccess={() => {
-        setLastImportCount(0);
-        setLastUploadedCount(0);
-        setLastSkippedCount(0);
-        setLastImportTimestamp(null);
-      }}
-      onClearImportedData={handleClearImportedData}
-      onUndoImport={handleUndoImport}
-      canUndoImport={canUndoImport}
-      hasImportedData={importedProperties.length > 0}
-      importMode={importMode}
-      setImportMode={setImportMode}
-      lastImportCount={lastImportCount}
-      lastUploadedCount={lastUploadedCount}
-      lastSkippedCount={lastSkippedCount}
-      lastImportTimestamp={lastImportTimestamp}
-    />
-  )}
-
-  {activeTab === "Overview" && (
-    <OverviewTab
-      mode={audienceMode}
-      properties={filteredProperties}
-      kpis={kpis}
-      selectedMarket={selectedMarket}
-      setSelectedMarket={setSelectedMarket}
-      setActiveTab={setActiveTab}
-      actionHistory={actionHistory}
-      hasImportedData={importedProperties.length > 0}
-      topStageBottleneck={topStageBottleneck}
-      lastImportCount={lastImportCount}
-    />
-  )}
-</div>
+        {activeTab === "Import" && (
+          <ImportPanel
+            onImport={handleImportTurns}
+            onClearSuccess={() => {
+              setLastImportCount(0);
+              setLastUploadedCount(0);
+              setLastSkippedCount(0);
+              setLastImportTimestamp(null);
+            }}
+            onClearImportedData={handleClearImportedData}
+            onUndoImport={handleUndoImport}
+            canUndoImport={canUndoImport}
+            hasImportedData={importedProperties.length > 0}
+            importMode={importMode}
+            setImportMode={setImportMode}
+            lastImportCount={lastImportCount}
+            lastUploadedCount={lastUploadedCount}
+            lastSkippedCount={lastSkippedCount}
+            lastImportTimestamp={lastImportTimestamp}
+          />
+        )}
+      </div>
     </div>
   );
 }

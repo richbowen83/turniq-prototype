@@ -16,6 +16,19 @@ import {
   buildPatchForApplyRecommendation,
 } from "../../utils/turnActions";
 import {
+  AreaChart,
+  Area,
+  BarChart,
+  Bar,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Legend,
+} from "recharts";
+import {
   formatShortDate,
   getDailyRentValue,
   getRentSourceLabel,
@@ -102,7 +115,7 @@ const SYSTEM_VIEWS = [
     }),
   },
   {
-    id: "exec",
+    id: "exec_focus",
     name: "Exec Focus",
     getFilters: () => ({
       queueFilter: "At-Risk Turns",
@@ -111,7 +124,7 @@ const SYSTEM_VIEWS = [
   },
 ];
 
-const STORAGE_KEY = "turniq_control_center_saved_views_v11";
+const STORAGE_KEY = "turniq_control_center_saved_views_v12";
 const ACTION_LEARNING_STORAGE_KEY = "turniq_action_learning_v1";
 
 function getStageSla(stage) {
@@ -119,11 +132,11 @@ function getStageSla(stage) {
 }
 
 function getPrimaryBlocker(row) {
-  const blockers = Array.isArray(row.blockers) ? row.blockers : [];
+  const blockers = row.blockers || [];
   const live = blockers.filter(
     (b) => b && b !== "No active blockers" && b !== "No major blockers"
   );
-  return row.blocker || live[0] || "None";
+  return live[0] || "None";
 }
 
 function getDaysOverSla(row) {
@@ -239,27 +252,13 @@ function buildPriority(row) {
 function buildImpact(row) {
   let daysRecovered = 0;
 
-  if (row.currentStage === "Failed Rent Ready") {
-    daysRecovered += 3;
-  }
+  if (row.currentStage === "Failed Rent Ready") daysRecovered += 3;
+  if (row.turnStatus === "Blocked") daysRecovered += 2;
+  if (row.currentStage === "Owner Approval") daysRecovered += 2;
 
   const daysOver = getDaysOverSla(row);
-
-  if (row.turnStatus === "Blocked") {
-    daysRecovered += 2;
-  }
-
-  if (row.currentStage === "Owner Approval") {
-    daysRecovered += 2;
-  }
-
-  if (daysOver > 0) {
-    daysRecovered += Math.min(4, daysOver);
-  }
-
-  if (row.stale) {
-    daysRecovered += 1;
-  }
+  if (daysOver > 0) daysRecovered += Math.min(4, daysOver);
+  if (row.stale) daysRecovered += 1;
 
   const dailyRentValue = getDailyRentValue(row);
   const revenueRecovered = getRevenueProtected(daysRecovered, row);
@@ -364,24 +363,13 @@ function buildEnrichedRows(rows) {
       ...buildSourceSystemMetadata(row),
     };
 
-    const priority = buildPriority(base);
-    const impact = buildImpact(base);
-
-    const enriched = {
-      ...base,
-      priority,
-      impact,
-    };
-
-    const aiRecommendation = getAiRecommendation(enriched);
-    const aiPriorityScore = getAiPriorityScore({ ...enriched, aiRecommendation });
-    const aiRiskDrivers = getAiRiskDrivers({ ...enriched, aiRecommendation });
-
     return {
-      ...enriched,
-      aiRecommendation,
-      aiPriorityScore,
-      aiRiskDrivers,
+      ...base,
+      priority: buildPriority(base),
+      impact: buildImpact(base),
+      aiRecommendation: getAiRecommendation(base),
+      aiPriorityScore: getAiPriorityScore(base),
+      aiRiskDrivers: getAiRiskDrivers(base),
     };
   });
 }
@@ -411,9 +399,10 @@ function buildStageBuckets(rows) {
       : 0;
 
     const overdueCount = stageRows.filter((row) => row.overdue).length;
-    const blockedCount = stageRows.filter((row) => row.turnStatus === "Blocked").length;
+    const blockedCount = stageRows.filter(
+      (row) => row.turnStatus === "Blocked"
+    ).length;
     const blockedPercent = count ? Math.round((blockedCount / count) * 100) : 0;
-    const sla = getStageSla(stage);
 
     return {
       stage,
@@ -422,21 +411,37 @@ function buildStageBuckets(rows) {
       overdueCount,
       blockedCount,
       blockedPercent,
-      sla,
-      tone: getStageTone(overdueCount, avgDays, sla),
+      sla: getStageSla(stage),
+      tone: getStageTone(overdueCount, avgDays, getStageSla(stage)),
     };
   });
 }
 
 function applyFilter(rows, queueFilter) {
-  if (queueFilter === "Blocked Turns") return rows.filter((row) => row.turnStatus === "Blocked");
-  if (queueFilter === "At-Risk Turns") return rows.filter((row) => row.risk >= 75 || row.overdue);
-  if (queueFilter === "Stale Turns") return rows.filter((row) => row.stale);
-  if (queueFilter === "Pending Approvals") return rows.filter((row) => row.currentStage === "Owner Approval");
-  if (queueFilter === "Vendorless Turns") return rows.filter((row) => !row.vendor || row.vendor === "TBD");
-  if (queueFilter === "Over SLA") return rows.filter((row) => row.overdue);
-  if (queueFilter === "Critical Priority") return rows.filter((row) => row.priority.label === "Critical");
-  if (queueFilter === "Failed Rent Ready") return rows.filter((row) => row.currentStage === "Failed Rent Ready");
+  if (queueFilter === "Blocked Turns") {
+    return rows.filter((row) => row.turnStatus === "Blocked");
+  }
+  if (queueFilter === "At-Risk Turns") {
+    return rows.filter((row) => row.risk >= 75 || row.overdue);
+  }
+  if (queueFilter === "Stale Turns") {
+    return rows.filter((row) => row.stale);
+  }
+  if (queueFilter === "Pending Approvals") {
+    return rows.filter((row) => row.currentStage === "Owner Approval");
+  }
+  if (queueFilter === "Vendorless Turns") {
+    return rows.filter((row) => !row.vendor || row.vendor === "TBD");
+  }
+  if (queueFilter === "Over SLA") {
+    return rows.filter((row) => row.overdue);
+  }
+  if (queueFilter === "Critical Priority") {
+    return rows.filter((row) => row.priority.label === "Critical");
+  }
+  if (queueFilter === "Failed Rent Ready") {
+    return rows.filter((row) => row.currentStage === "Failed Rent Ready");
+  }
   return rows;
 }
 
@@ -444,11 +449,7 @@ function sortRows(rows, sortBy) {
   const sorted = [...rows];
 
   if (sortBy === "Priority") {
-    sorted.sort(
-      (a, b) =>
-        (b.aiPriorityScore || b.priority.score) -
-        (a.aiPriorityScore || a.priority.score)
-    );
+    sorted.sort((a, b) => b.aiPriorityScore - a.aiPriorityScore);
   } else if (sortBy === "Risk") {
     sorted.sort((a, b) => (b.risk || 0) - (a.risk || 0));
   } else if (sortBy === "Open Days") {
@@ -503,7 +504,8 @@ function buildWorkflowPlan(row) {
           action: "resolve_rework",
           done:
             completed.has("rework") ||
-            (row.currentStage !== "Failed Rent Ready" && row.turnStatus !== "Blocked"),
+            (row.currentStage !== "Failed Rent Ready" &&
+              row.turnStatus !== "Blocked"),
         },
         {
           id: "inspect",
@@ -542,13 +544,15 @@ function buildWorkflowPlan(row) {
           id: "confirm_scope",
           label: "Confirm scope signoff",
           action: "mark_step_only",
-          done: completed.has("confirm_scope") || row.currentStage === "Dispatch",
+          done:
+            completed.has("confirm_scope") || row.currentStage === "Dispatch",
         },
         {
           id: "dispatch_vendor",
           label: "Dispatch vendor",
           action: "progress",
-          done: completed.has("dispatch_vendor") || row.currentStage === "Dispatch",
+          done:
+            completed.has("dispatch_vendor") || row.currentStage === "Dispatch",
         },
       ],
     };
@@ -570,7 +574,8 @@ function buildWorkflowPlan(row) {
           id: "remove_blocker",
           label: "Remove blocker",
           action: "resolve",
-          done: completed.has("remove_blocker") || row.turnStatus !== "Blocked",
+          done:
+            completed.has("remove_blocker") || row.turnStatus !== "Blocked",
         },
         {
           id: "resume_execution",
@@ -585,7 +590,11 @@ function buildWorkflowPlan(row) {
     };
   }
 
-  if ((row.blockers || []).some((b) => String(b).toLowerCase().includes("appliance"))) {
+  if (
+    (row.blockers || []).some((b) =>
+      String(b).toLowerCase().includes("appliance")
+    )
+  ) {
     return {
       title: "Protect ECD from appliance dependency",
       summary: "Appliance timing is the avoidable source of slippage.",
@@ -638,10 +647,208 @@ function buildWorkflowPlan(row) {
         id: "ready_execution",
         label: "Ready for execution",
         action: "ready",
-        done: completed.has("ready_execution") || row.turnStatus === "Ready",
+        done:
+          completed.has("ready_execution") || row.turnStatus === "Ready",
       },
     ],
   };
+}
+
+function StatCard({ label, value, tone = "slate", subtext }) {
+  const toneClasses = {
+    slate: "border-slate-200 bg-white",
+    red: "border-red-200 bg-red-50",
+    amber: "border-amber-200 bg-amber-50",
+    blue: "border-blue-200 bg-blue-50",
+    green: "border-emerald-200 bg-emerald-50",
+  };
+
+  return (
+    <div className={`rounded-2xl border p-4 ${toneClasses[tone] || toneClasses.slate}`}>
+      <div className="text-xs uppercase tracking-wide text-slate-500">{label}</div>
+      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+      {subtext ? <div className="mt-1 text-xs text-slate-500">{subtext}</div> : null}
+    </div>
+  );
+}
+
+const TREND_SERIES = [
+  {
+    month: "Apr 2025",
+    passRate: 49,
+    failRate: 11,
+    passGoal: 85,
+    avgRriDays: 3.8,
+    medianRriDays: 3.7,
+    rriGoal: 2,
+    turnsCompleted: 57,
+    avgTurnDays: 19.1,
+    avgCost: 6571,
+  },
+  {
+    month: "May 2025",
+    passRate: 56,
+    failRate: 11,
+    passGoal: 85,
+    avgRriDays: 2.7,
+    medianRriDays: 2.8,
+    rriGoal: 2,
+    turnsCompleted: 58,
+    avgTurnDays: 15.1,
+    avgCost: 3932,
+  },
+  {
+    month: "Jun 2025",
+    passRate: 37,
+    failRate: 6,
+    passGoal: 85,
+    avgRriDays: 3.5,
+    medianRriDays: 3.3,
+    rriGoal: 2,
+    turnsCompleted: 73,
+    avgTurnDays: 16.9,
+    avgCost: 4450,
+  },
+  {
+    month: "Jul 2025",
+    passRate: 63,
+    failRate: 12,
+    passGoal: 85,
+    avgRriDays: 3.4,
+    medianRriDays: 3.1,
+    rriGoal: 2,
+    turnsCompleted: 77,
+    avgTurnDays: 16.7,
+    avgCost: 4650,
+  },
+  {
+    month: "Aug 2025",
+    passRate: 69,
+    failRate: 3,
+    passGoal: 85,
+    avgRriDays: 3.1,
+    medianRriDays: 3.0,
+    rriGoal: 2,
+    turnsCompleted: 57,
+    avgTurnDays: 15.0,
+    avgCost: 4604,
+  },
+  {
+    month: "Sep 2025",
+    passRate: 75,
+    failRate: 3,
+    passGoal: 85,
+    avgRriDays: 3.3,
+    medianRriDays: 3.1,
+    rriGoal: 2,
+    turnsCompleted: 68,
+    avgTurnDays: 16.9,
+    avgCost: 4959,
+  },
+  {
+    month: "Oct 2025",
+    passRate: 76,
+    failRate: 3,
+    passGoal: 85,
+    avgRriDays: 2.6,
+    medianRriDays: 2.3,
+    rriGoal: 2,
+    turnsCompleted: 55,
+    avgTurnDays: 15.9,
+    avgCost: 4704,
+  },
+  {
+    month: "Nov 2025",
+    passRate: 66,
+    failRate: 6,
+    passGoal: 85,
+    avgRriDays: 3.3,
+    medianRriDays: 3.1,
+    rriGoal: 2,
+    turnsCompleted: 51,
+    avgTurnDays: 20.8,
+    avgCost: 5632,
+  },
+  {
+    month: "Dec 2025",
+    passRate: 68,
+    failRate: 13,
+    passGoal: 85,
+    avgRriDays: 3.4,
+    medianRriDays: 3.1,
+    rriGoal: 2,
+    turnsCompleted: 45,
+    avgTurnDays: 22.7,
+    avgCost: 5443,
+  },
+  {
+    month: "Jan 2026",
+    passRate: 53,
+    failRate: 19,
+    passGoal: 85,
+    avgRriDays: 3.8,
+    medianRriDays: 3.0,
+    rriGoal: 2,
+    turnsCompleted: 41,
+    avgTurnDays: 27.0,
+    avgCost: 5899,
+  },
+  {
+    month: "Feb 2026",
+    passRate: 58,
+    failRate: 22,
+    passGoal: 85,
+    avgRriDays: 0.9,
+    medianRriDays: 0.2,
+    rriGoal: 2,
+    turnsCompleted: 39,
+    avgTurnDays: 19.8,
+    avgCost: 4699,
+  },
+  {
+    month: "Mar 2026",
+    passRate: 45,
+    failRate: 11,
+    passGoal: 85,
+    avgRriDays: 1.0,
+    medianRriDays: 0.4,
+    rriGoal: 2,
+    turnsCompleted: 46,
+    avgTurnDays: 18.3,
+    avgCost: 5234,
+  },
+  {
+    month: "Apr 2026",
+    passRate: 25,
+    failRate: 25,
+    passGoal: 85,
+    avgRriDays: 1.7,
+    medianRriDays: 1.1,
+    rriGoal: 2,
+    turnsCompleted: 3,
+    avgTurnDays: 28.0,
+    avgCost: 3086,
+  },
+];
+
+function TrendChartCard({ title, subtitle, children }) {
+  return (
+    <Card>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="text-lg font-semibold text-slate-900">{title}</div>
+          {subtitle ? (
+            <div className="mt-1 text-sm text-slate-500">{subtitle}</div>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-4 h-[280px] w-full">
+        <ResponsiveContainer width="100%" height="100%">
+          {children}
+        </ResponsiveContainer>
+      </div>
+    </Card>
+  );
 }
 
 export default function ControlCenterTab({
@@ -668,13 +875,18 @@ export default function ControlCenterTab({
   const [activeSystemView, setActiveSystemView] = useState(null);
   const [customRowFilter, setCustomRowFilter] = useState(null);
   const [actionLearningLog, setActionLearningLog] = useState([]);
-  const [localLastUpdated, setLocalLastUpdated] = useState(new Date().toISOString());
+  const [localLastUpdated, setLocalLastUpdated] = useState(
+    new Date().toISOString()
+  );
   const [drawerRow, setDrawerRow] = useState(null);
 
   const queueRef = useRef(null);
 
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
-  const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
+  const stageBuckets = useMemo(
+    () => buildStageBuckets(enrichedRows),
+    [enrichedRows]
+  );
 
   const workingRows = useMemo(() => {
     let next = applyFilter(enrichedRows, queueFilter);
@@ -686,15 +898,22 @@ export default function ControlCenterTab({
   }, [enrichedRows, queueFilter, customRowFilter, selectedStageFilter, sortBy]);
 
   const queueSummary = useMemo(() => {
-    const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
+    const blocked = workingRows.filter(
+      (row) => row.turnStatus === "Blocked"
+    ).length;
     const overdue = workingRows.filter((row) => row.overdue).length;
     const stale = workingRows.filter((row) => row.stale).length;
-    const critical = workingRows.filter((row) => row.priority.label === "Critical").length;
+    const critical = workingRows.filter(
+      (row) => row.priority.label === "Critical"
+    ).length;
     const failedRentReady = workingRows.filter(
       (row) => row.currentStage === "Failed Rent Ready"
     ).length;
+    const vendorless = workingRows.filter(
+      (row) => !row.vendor || row.vendor === "TBD"
+    ).length;
 
-    return { blocked, overdue, stale, critical, failedRentReady };
+    return { blocked, overdue, stale, critical, failedRentReady, vendorless };
   }, [workingRows]);
 
   const topActions = useMemo(() => {
@@ -706,11 +925,7 @@ export default function ControlCenterTab({
           row.priority.score >= 18 ||
           row.impact.daysRecovered > 0
       )
-      .sort(
-        (a, b) =>
-          (b.aiPriorityScore || b.priority.score) -
-          (a.aiPriorityScore || a.priority.score)
-      )
+      .sort((a, b) => b.aiPriorityScore - a.aiPriorityScore)
       .slice(0, 5)
       .map((row) => ({
         ...row,
@@ -729,11 +944,37 @@ export default function ControlCenterTab({
     );
   }, [topActions]);
 
+  const trendData = useMemo(() => TREND_SERIES, []);
+
+  const operatorTrendCards = useMemo(
+    () => [
+      "rri_pass_rate",
+      "rri_completion_time",
+      "avg_turn_time",
+    ],
+    []
+  );
+
+  const execTrendCards = useMemo(
+    () => [
+      "turns_completed",
+      "avg_turn_time",
+      "rri_pass_rate",
+      "avg_cost",
+    ],
+    []
+  );
+
+  const visibleTrendCards =
+    mode === "exec" ? execTrendCards : operatorTrendCards;
+
   const actionLearningSummary = useMemo(() => {
     const grouped = {};
 
     for (const entry of actionLearningLog) {
-      if ((entry.daysSaved || 0) <= 0 && (entry.revenueProtected || 0) <= 0) continue;
+      if ((entry.daysSaved || 0) <= 0 && (entry.revenueProtected || 0) <= 0) {
+        continue;
+      }
 
       if (!grouped[entry.actionLabel]) {
         grouped[entry.actionLabel] = {
@@ -746,13 +987,16 @@ export default function ControlCenterTab({
 
       grouped[entry.actionLabel].uses += 1;
       grouped[entry.actionLabel].totalDaysSaved += entry.daysSaved || 0;
-      grouped[entry.actionLabel].totalRevenueProtected += entry.revenueProtected || 0;
+      grouped[entry.actionLabel].totalRevenueProtected +=
+        entry.revenueProtected || 0;
     }
 
     return Object.values(grouped)
       .map((item) => ({
         ...item,
-        avgDaysSaved: item.uses ? Number((item.totalDaysSaved / item.uses).toFixed(1)) : 0,
+        avgDaysSaved: item.uses
+          ? Number((item.totalDaysSaved / item.uses).toFixed(1))
+          : 0,
         avgRevenueProtected: item.uses
           ? Math.round(item.totalRevenueProtected / item.uses)
           : 0,
@@ -764,7 +1008,9 @@ export default function ControlCenterTab({
   const computedLastUpdated = useMemo(() => {
     const timestamps = [];
 
-    if (localLastUpdated) timestamps.push(new Date(localLastUpdated).getTime());
+    if (localLastUpdated) {
+      timestamps.push(new Date(localLastUpdated).getTime());
+    }
 
     enrichedRows.forEach((row) => {
       if (row.lastAction?.timestamp) {
@@ -773,7 +1019,9 @@ export default function ControlCenterTab({
     });
 
     actionLearningLog.slice(0, 10).forEach((entry) => {
-      if (entry.timestamp) timestamps.push(new Date(entry.timestamp).getTime());
+      if (entry.timestamp) {
+        timestamps.push(new Date(entry.timestamp).getTime());
+      }
     });
 
     const valid = timestamps.filter((n) => Number.isFinite(n));
@@ -781,15 +1029,6 @@ export default function ControlCenterTab({
 
     return new Date(Math.max(...valid)).toISOString();
   }, [actionLearningLog, enrichedRows, localLastUpdated]);
-
-  const isExecView = viewMode === "exec";
-
-  const execReadout = useMemo(() => {
-    const blocked = enrichedRows.filter((row) => row.turnStatus === "Blocked").length;
-    const failed = enrichedRows.filter((row) => row.currentStage === "Failed Rent Ready").length;
-    const critical = enrichedRows.filter((row) => row.priority.label === "Critical").length;
-    return { blocked, failed, critical };
-  }, [enrichedRows]);
 
   useEffect(() => {
     try {
@@ -879,7 +1118,10 @@ export default function ControlCenterTab({
       timestamp: new Date().toISOString(),
     };
 
-    const nextLearningLog = [learningEntry, ...actionLearningLog].slice(0, 200);
+    const nextLearningLog = [learningEntry, ...actionLearningLog].slice(
+      0,
+      200
+    );
     persistActionLearning(nextLearningLog);
 
     patchRow(row.id, {
@@ -1055,7 +1297,10 @@ export default function ControlCenterTab({
     touchUpdated();
 
     setTimeout(() => {
-      queueRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+      queueRef.current?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
     }, 80);
   }
 
@@ -1080,10 +1325,16 @@ export default function ControlCenterTab({
     setSortBy(view.sortBy || "Priority");
     setActiveSavedViewId(view.id);
 
-    if (selectedStageFilter && selectedStageFilter !== view.selectedStageFilter) {
+    if (
+      selectedStageFilter &&
+      selectedStageFilter !== view.selectedStageFilter
+    ) {
       toggleStageFilter(selectedStageFilter);
     }
-    if (view.selectedStageFilter && view.selectedStageFilter !== selectedStageFilter) {
+    if (
+      view.selectedStageFilter &&
+      view.selectedStageFilter !== selectedStageFilter
+    ) {
       toggleStageFilter(view.selectedStageFilter);
     }
 
@@ -1103,13 +1354,7 @@ export default function ControlCenterTab({
     setSortBy(config.sortBy || "Priority");
     setActiveSystemView(view.id);
     setActiveSavedViewId(null);
-
-    if (config.customFilter) {
-      setCustomRowFilter(() => config.customFilter);
-    } else {
-      setCustomRowFilter(null);
-    }
-
+    setCustomRowFilter(config.customFilter ? () => config.customFilter : null);
     touchUpdated();
   }
 
@@ -1121,186 +1366,318 @@ export default function ControlCenterTab({
     touchUpdated();
   }
 
+  function renderTrendCard(cardId) {
+    if (cardId === "rri_pass_rate") {
+      return (
+        <TrendChartCard
+          title="First Rent Ready Inspection Pass Rate"
+          subtitle="Pass rate vs fail rate and target"
+        >
+          <AreaChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis domain={[0, 100]} />
+            <Tooltip />
+            <Legend />
+            <Area
+              type="monotone"
+              dataKey="passRate"
+              name="Pass Rate"
+              fillOpacity={0.2}
+            />
+            <Line type="monotone" dataKey="passGoal" name="Pass Goal" dot={false} />
+            <Line type="monotone" dataKey="failRate" name="Fail Rate" dot={false} />
+          </AreaChart>
+        </TrendChartCard>
+      );
+    }
+
+    if (cardId === "rri_completion_time") {
+      return (
+        <TrendChartCard
+          title="Time to Complete Rent Ready Inspection"
+          subtitle="Average and median days vs goal"
+        >
+          <AreaChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Area
+              type="monotone"
+              dataKey="avgRriDays"
+              name="Average"
+              fillOpacity={0.18}
+            />
+            <Area
+              type="monotone"
+              dataKey="medianRriDays"
+              name="Median"
+              fillOpacity={0.12}
+            />
+            <Line type="monotone" dataKey="rriGoal" name="Goal" dot={false} />
+          </AreaChart>
+        </TrendChartCard>
+      );
+    }
+
+    if (cardId === "turns_completed") {
+      return (
+        <TrendChartCard
+          title="Turns Completed"
+          subtitle="Monthly throughput trend"
+        >
+          <BarChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip />
+            <Bar dataKey="turnsCompleted" name="Turns Completed" />
+          </BarChart>
+        </TrendChartCard>
+      );
+    }
+
+    if (cardId === "avg_turn_time") {
+      return (
+        <TrendChartCard
+          title="Average Turn Completion Time"
+          subtitle="Trend in total turn duration"
+        >
+          <BarChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip
+              formatter={(value) => [`${value} days`, "Average Turn Days"]}
+            />
+            <Bar dataKey="avgTurnDays" name="Average Turn Days" />
+          </BarChart>
+        </TrendChartCard>
+      );
+    }
+
+    if (cardId === "avg_cost") {
+      return (
+        <TrendChartCard
+          title="Average Cost per Completed Turn"
+          subtitle="Monthly cost trend"
+        >
+          <BarChart data={trendData}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="month" />
+            <YAxis />
+            <Tooltip
+              formatter={(value) => [`$${Number(value).toLocaleString()}`, "Average Cost"]}
+            />
+            <Bar dataKey="avgCost" name="Average Cost" />
+          </BarChart>
+        </TrendChartCard>
+      );
+    }
+
+    return null;
+  }
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="text-3xl font-semibold text-slate-900">Control Center</div>
-          <div className="mt-1 text-sm text-slate-500">
-            {isExecView
-              ? "Portfolio-level execution intelligence with bottlenecks, heatmap signals, and intervention priorities."
-              : "Work the live turn pipeline directly from TurnIQ."}
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-3xl font-semibold text-slate-900">
+              Control Center
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              One working surface for action, bottlenecks, and queue management.
+            </div>
+            <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+              <span className="flex items-center gap-1">
+                <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
+                Live
+              </span>
+              <span>{formatRelativeTime(computedLastUpdated)}</span>
+              <span>•</span>
+              <span>{mode === "exec" ? "Executive audience" : "Operator audience"}</span>
+            </div>
           </div>
-          <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
-            <span className="flex items-center gap-1">
-              <span className="h-2 w-2 rounded-full bg-emerald-500"></span>
-              Live
-            </span>
-            <span>{formatRelativeTime(computedLastUpdated)}</span>
-            <span>•</span>
-            <span>{mode === "exec" ? "Executive audience" : "Operator audience"}</span>
-          </div>
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            onClick={resetQueueViewFull}
-            className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Reset view
-          </button>
-          {!isExecView ? (
-            <>
-              <button
-                onClick={() => setQueueFilter("Blocked Turns")}
-                className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Focus blocked
-              </button>
-              <button
-                onClick={() => setQueueFilter("Over SLA")}
-                className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-              >
-                Focus over SLA
-              </button>
-            </>
-          ) : null}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={resetQueueViewFull}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Reset view
+            </button>
+            <button
+              onClick={() => setQueueFilter("Blocked Turns")}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Focus blocked
+            </button>
+            <button
+              onClick={() => setQueueFilter("Over SLA")}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+            >
+              Focus over SLA
+            </button>
+          </div>
         </div>
-      </div>
+      </Card>
 
       {lastActionImpact ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
           Action applied on <span className="font-medium">{lastActionImpact.property}</span> — saved{" "}
           {lastActionImpact.daysSaved} days, moved ECD from{" "}
-          <span className="font-medium">{formatShortDate(lastActionImpact.prevECD)}</span> to{" "}
-          <span className="font-medium">{formatShortDate(lastActionImpact.nextECD)}</span>, and protected $
-          {lastActionImpact.revenueProtected}.
+          <span className="font-medium">
+            {formatShortDate(lastActionImpact.prevECD)}
+          </span>{" "}
+          to{" "}
+          <span className="font-medium">
+            {formatShortDate(lastActionImpact.nextECD)}
+          </span>
+          , and protected ${lastActionImpact.revenueProtected}.
         </div>
       ) : null}
 
-      {!isExecView ? (
-        <>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <StatCard
+          label="Critical"
+          value={queueSummary.critical}
+          tone="red"
+          subtext="Highest urgency"
+        />
+        <StatCard
+          label="Blocked"
+          value={queueSummary.blocked}
+          tone="red"
+          subtext="Needs unblock"
+        />
+        <StatCard
+          label="Over SLA"
+          value={queueSummary.overdue}
+          tone="amber"
+          subtext="Delay pressure"
+        />
+        <StatCard
+          label="Pending Approval"
+          value={
+            workingRows.filter((row) => row.currentStage === "Owner Approval")
+              .length
+          }
+          tone="blue"
+          subtext="Owner action needed"
+        />
+        <StatCard
+          label="Vendorless"
+          value={queueSummary.vendorless}
+          tone="amber"
+          subtext="Coverage gap"
+        />
+        <StatCard
+          label="Recoverable Value"
+          value={`$${portfolioImpact.revenueRecovered.toLocaleString()}`}
+          tone="green"
+          subtext={`${portfolioImpact.daysRecovered} modeled days`}
+        />
+      </div>
+
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-8">
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <div className="text-xl font-semibold text-slate-900">AI Recommended Actions</div>
+                <div className="text-xl font-semibold text-slate-900">
+                  Recommended Actions
+                </div>
                 <div className="mt-1 text-sm text-slate-500">
-                  Highest-leverage actions based on delay risk, blocked state, and recoverable value.
+                  The few turns most worth acting on right now.
                 </div>
               </div>
               <Pill tone="blue">AI</Pill>
             </div>
 
-            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {topActions.slice(0, 3).map((row) => (
+            <div className="mt-4 space-y-3">
+              {topActions.slice(0, 4).map((row) => (
                 <div
                   key={row.id}
                   className="rounded-2xl border border-slate-200 bg-white p-4"
                 >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-slate-900">{row.name}</div>
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <button
+                        onClick={() => {
+                          setSelectedPropertyId(row.id);
+                          setDrawerRow(row);
+                        }}
+                        className="text-left"
+                      >
+                        <div className="break-words text-base font-medium text-blue-700 hover:underline">
+                          {row.name}
+                        </div>
+                      </button>
                       <div className="mt-1 text-xs text-slate-500">
                         {row.market} • {row.currentStage}
                       </div>
+                      <div className="mt-2 text-sm font-medium text-slate-900">
+                        {row.aiRecommendation?.title || "Review turn"}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {row.aiRecommendation?.reason || row.priority.whyNow}
+                      </div>
+                      {row.aiRiskDrivers?.length ? (
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {row.aiRiskDrivers.slice(0, 3).map((driver) => (
+                            <span
+                              key={driver}
+                              className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
+                            >
+                              {driver}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null}
                     </div>
 
-                    <Pill tone={row.aiRecommendation?.urgency === "High" ? "red" : "amber"}>
-                      {row.aiRecommendation?.urgency || "Review"}
-                    </Pill>
-                  </div>
-
-                  <div className="mt-3 text-sm font-medium text-slate-900">
-                    {row.aiRecommendation?.title || "Review turn"}
-                  </div>
-
-                  <div className="mt-1 text-xs text-slate-500">
-                    {row.aiRecommendation?.reason || row.priority.whyNow}
-                  </div>
-
-                  {row.aiRiskDrivers?.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {row.aiRiskDrivers.map((driver) => (
-                        <span
-                          key={driver}
-                          className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-                        >
-                          {driver}
-                        </span>
-                      ))}
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <Pill
+                        tone={
+                          row.aiRecommendation?.urgency === "High"
+                            ? "red"
+                            : row.aiRecommendation?.urgency === "Medium"
+                            ? "amber"
+                            : "slate"
+                        }
+                      >
+                        {row.aiRecommendation?.urgency || "Review"}
+                      </Pill>
+                      <div className="text-right text-xs text-slate-500">
+                        <div>{row.aiRecommendation?.confidence || 0}% confidence</div>
+                        <div>+{row.aiRecommendation?.impactDays || 0}d</div>
+                        <div>
+                          ${(row.aiRecommendation?.impactRevenue || 0).toLocaleString()}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => handleApplyTopAction(row)}
+                        className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+                      >
+                        Apply
+                      </button>
                     </div>
-                  ) : null}
-
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span>{row.aiRecommendation?.confidence || 0}% confidence</span>
-                    <span>•</span>
-                    <span>+{row.aiRecommendation?.impactDays || 0}d</span>
-                    <span>•</span>
-                    <span>${row.aiRecommendation?.impactRevenue || 0}</span>
-                  </div>
-
-                  <div className="mt-4">
-                    <button
-                      onClick={() => handleApplyTopAction(row)}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
-                    >
-                      Apply recommendation
-                    </button>
                   </div>
                 </div>
               ))}
             </div>
           </Card>
+        </div>
 
+        <div className="xl:col-span-4">
           <Card>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Today’s Focus</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Highest-value work to move the portfolio forward today.
-                </div>
+            <div className="flex items-center justify-between gap-3">
+              <div className="text-xl font-semibold text-slate-900">
+                Queue Views
               </div>
-              <Pill tone="slate">
-                ${portfolioImpact.revenueRecovered.toLocaleString()} recoverable
-              </Pill>
-            </div>
-
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-red-700">Blocked Turns</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.blocked}</div>
-                <div className="mt-1 text-xs text-red-700">Clear blockers first</div>
-              </div>
-
-              <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
-                </div>
-                <div className="mt-1 text-xs text-blue-700">Push to dispatch</div>
-              </div>
-
-              <div className="rounded-2xl border border-rose-200 bg-rose-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-rose-700">Failed Rent Ready</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {queueSummary.failedRentReady}
-                </div>
-                <div className="mt-1 text-xs text-rose-700">Recover rework homes</div>
-              </div>
-
-              <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
-                <div className="text-xs uppercase tracking-wide text-emerald-700">Recoverable Days</div>
-                <div className="mt-2 text-2xl font-semibold text-slate-900">
-                  {portfolioImpact.daysRecovered}
-                </div>
-                <div className="mt-1 text-xs text-emerald-700">Modeled workflow upside</div>
-              </div>
-            </div>
-          </Card>
-
-          <Card>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="text-xl font-semibold text-slate-900">Quick Views</div>
               <button onClick={saveCurrentView} className="text-sm underline">
                 Save current view
               </button>
@@ -1322,6 +1699,22 @@ export default function ControlCenterTab({
               ))}
             </div>
 
+            <div className="mt-4 flex flex-wrap gap-2">
+              {DEFAULT_FILTER_VIEWS.map((view) => (
+                <button
+                  key={view}
+                  onClick={() => setQueueFilter(view)}
+                  className={`rounded-xl px-3 py-2 text-sm ${
+                    queueFilter === view
+                      ? "bg-slate-900 text-white"
+                      : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                  }`}
+                >
+                  {view}
+                </button>
+              ))}
+            </div>
+
             {savedViews.length ? (
               <div className="mt-4 flex flex-wrap gap-2">
                 {savedViews.map((view) => (
@@ -1333,10 +1726,16 @@ export default function ControlCenterTab({
                         : "border border-slate-200 bg-white"
                     }`}
                   >
-                    <button onClick={() => applySavedViewPreset(view)}>{view.name}</button>
+                    <button onClick={() => applySavedViewPreset(view)}>
+                      {view.name}
+                    </button>
                     <button
                       onClick={() => deleteSavedView(view.id)}
-                      className={activeSavedViewId === view.id ? "text-white/70" : "text-slate-400"}
+                      className={
+                        activeSavedViewId === view.id
+                          ? "text-white/70"
+                          : "text-slate-400"
+                      }
                     >
                       ✕
                     </button>
@@ -1344,743 +1743,446 @@ export default function ControlCenterTab({
                 ))}
               </div>
             ) : (
-              <div className="mt-3 text-sm text-slate-500">No saved views yet.</div>
+              <div className="mt-3 text-sm text-slate-500">
+                No saved views yet.
+              </div>
             )}
           </Card>
+        </div>
+      </div>
 
-          <Card>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Guided Workflow</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Step-by-step operator actions prioritized by recoverable time and revenue.
-                </div>
-              </div>
-              <div className="flex gap-8">
-                <div>
-                  <div className="text-3xl font-semibold text-slate-900">
-                    {portfolioImpact.daysRecovered}
-                  </div>
-                  <div className="text-sm text-slate-500">Days recoverable</div>
-                </div>
-                <div>
-                  <div className="text-3xl font-semibold text-slate-900">
-                    ${portfolioImpact.revenueRecovered.toLocaleString()}
-                  </div>
-                  <div className="text-sm text-slate-500">Revenue protected</div>
-                </div>
-              </div>
+      <Card>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <div className="text-xl font-semibold text-slate-900">
+              Stage Health
             </div>
+            <div className="mt-1 text-sm text-slate-500">
+              Compact portfolio bottleneck view. Click any stage to filter the queue.
+            </div>
+          </div>
+          {topStageBottleneck ? (
+            <Pill tone="amber">{topStageBottleneck.stage} bottleneck</Pill>
+          ) : null}
+        </div>
 
-            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-              {topActions.map((row) => {
-                const currentStepIndex = row.workflowPlan.steps.findIndex((step) => !step.done);
-                const currentStep =
-                  currentStepIndex === -1 ? null : row.workflowPlan.steps[currentStepIndex];
-                const nextStep =
-                  currentStepIndex >= 0 && currentStepIndex < row.workflowPlan.steps.length - 1
-                    ? row.workflowPlan.steps[currentStepIndex + 1]
-                    : null;
+        <div className="mb-6 grid gap-4 xl:grid-cols-2">
+        {visibleTrendCards.map((cardId) => (
+          <div key={cardId}>{renderTrendCard(cardId)}</div>
+        ))}
+      </div>
 
-                return (
-                  <div
-                    key={row.id}
-                    className="flex min-h-[380px] flex-col rounded-2xl border border-slate-200 bg-white p-4"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium text-slate-900">{row.name}</div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {row.currentStage} • {row.market}
-                        </div>
-                      </div>
-                      <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {stageBuckets.map((bucket) => (
+            <button
+              key={bucket.stage}
+              onClick={() => handleStageDrillDown(bucket.stage)}
+              className="text-left"
+            >
+        <div
+                className={`min-h-[148px] rounded-2xl border p-4 transition ${
+                  selectedStageFilter === bucket.stage
+                    ? "border-slate-900 bg-slate-50"
+                    : bucket.stage === "Failed Rent Ready"
+                    ? "border-red-200 bg-red-50 hover:bg-red-100"
+                    : "border-slate-200 bg-white hover:bg-slate-50"
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+  <div className="flex-1">
+    <div className="min-h-[48px] font-semibold text-slate-900">
+      {bucket.stage}
+    </div>
+    <div className="mt-1 text-sm text-slate-500">
+      {bucket.count} turns • avg {bucket.avgDays}d
+    </div>
+  </div>
+
+  <Pill
+    tone={
+      bucket.stage === "Failed Rent Ready" ? "red" : bucket.tone
+    }
+  >
+    {bucket.stage === "Failed Rent Ready"
+      ? `${bucket.count} failed`
+      : `${bucket.overdueCount} overdue`}
+  </Pill>
+</div>
+
+                <div className="mt-2 text-xs text-slate-500">
+                  SLA {bucket.sla}d • {bucket.blockedCount} blocked •{" "}
+                  {bucket.blockedPercent}% blocked
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid items-start gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-9 min-w-0">
+          <div className="flex flex-col gap-6">
+            <Card>
+              <div ref={queueRef}>
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                  <div>
+                    <div className="text-xl font-semibold text-slate-900">
+                      Live Working Queue
                     </div>
-
-                    <div className="mt-3 text-sm font-medium text-slate-900">
-                      {row.workflowPlan.title}
+                    <div className="mt-1 text-sm text-slate-500">
+                      Core operating surface for reviewing turns and taking action.
                     </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {row.workflowPlan.summary}
-                    </div>
+                  </div>
 
-                    <div className="mt-3 text-xs text-slate-500">
-                      {currentStep
-                        ? `Step ${currentStepIndex + 1} of ${row.workflowPlan.steps.length}`
-                        : "Workflow complete"}
-                    </div>
-
-                    <div className="mt-3 space-y-2">
-                      {row.workflowPlan.steps.map((step, index) => {
-                        const isCurrent = currentStep?.id === step.id;
-
-                        return (
-                          <div
-                            key={step.id}
-                            className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-xs ${
-                              step.done
-                                ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                                : isCurrent
-                                ? "border-slate-300 bg-slate-50 text-slate-800"
-                                : "border-slate-200 bg-white text-slate-500"
-                            }`}
-                          >
-                            <span
-                              className={`inline-flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${
-                                step.done
-                                  ? "bg-emerald-600 text-white"
-                                  : isCurrent
-                                  ? "bg-slate-900 text-white"
-                                  : "bg-slate-200 text-slate-600"
-                              }`}
-                            >
-                              {step.done ? "✓" : index + 1}
-                            </span>
-                            <span>{step.label}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-
-                    <div className="mt-4 text-sm text-slate-700">
-                      +{row.impact.daysRecovered} days • ${row.impact.revenueRecovered}
-                    </div>
-
-                    <div className="mt-1 text-xs text-slate-500">
-                      {row.rentSourceLabel} • ${row.impact.dailyRentValue}/day
-                    </div>
-
-                    {row.lastAction ? (
-                      <div className="mt-2 text-xs text-emerald-600">
-                        {row.lastAction.label} • {row.lastAction.daysRecovered}d saved • $
-                        {row.lastAction.revenueProtected || 0} protected
-                      </div>
-                    ) : (
-                      <div className="mt-2 text-xs text-slate-400">
-                        No action taken yet — learning starts after first intervention
-                      </div>
-                    )}
-
-                    {nextStep ? (
-                      <div className="mt-2 text-xs text-slate-400">Next: {nextStep.label}</div>
-                    ) : null}
-
-                    <div className="mt-auto pt-4">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <div className="text-sm text-slate-500">Sort by</div>
+                    {[
+                      "Priority",
+                      "Risk",
+                      "Days in Stage",
+                      "Open Days",
+                      "ECD",
+                      "Stage",
+                    ].map((option) => (
                       <button
-                        onClick={() => handleWorkflowStep(row, currentStep)}
-                        disabled={!currentStep || row.impact.daysRecovered <= 0}
-                        className={`w-full rounded-md px-3 py-2 text-xs font-medium ${
-                          currentStep && row.impact.daysRecovered > 0
-                            ? "bg-slate-900 text-white hover:bg-slate-800"
-                            : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
+                        key={option}
+                        onClick={() => setSortBy(option)}
+                        className={`rounded-xl px-3 py-2 text-sm ${
+                          sortBy === option
+                            ? "bg-slate-900 text-white"
+                            : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
                         }`}
                       >
-                        {currentStep ? row.workflowPlan.primaryActionLabel : "Workflow complete"}
+                        {option}
                       </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          <Card>
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Stage Buckets</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Click a stage to drill into the queue and surface friction fast.
-                </div>
-              </div>
-
-              <div className="flex flex-wrap gap-2">
-                {DEFAULT_FILTER_VIEWS.map((view) => (
-                  <button
-                    key={view}
-                    onClick={() => setQueueFilter(view)}
-                    className={`rounded-xl px-3 py-2 text-sm ${
-                      queueFilter === view
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    {view}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              {stageBuckets.map((bucket) => (
-                <button
-                  key={bucket.stage}
-                  onClick={() => handleStageDrillDown(bucket.stage)}
-                  className="text-left"
-                >
-                  <div
-                    className={`rounded-2xl border p-4 transition ${
-                      selectedStageFilter === bucket.stage
-                        ? "border-slate-900 bg-slate-50"
-                        : bucket.stage === "Failed Rent Ready"
-                        ? "border-red-200 bg-red-50 hover:bg-red-100"
-                        : "border-slate-200 bg-white"
-                    }`}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">{bucket.stage}</div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {bucket.stage === "Failed Rent Ready"
-                            ? `${bucket.count} turns`
-                            : `${bucket.count} turns • avg ${bucket.avgDays}d`}
-                        </div>
-                      </div>
-                      {bucket.stage === "Failed Rent Ready" ? (
-                        <Pill tone={bucket.count > 0 ? "red" : "green"}>
-                          {bucket.count > 0 ? `${bucket.count} failed` : "No failures"}
-                        </Pill>
-                      ) : (
-                        <Pill tone={bucket.tone}>{bucket.overdueCount} overdue</Pill>
-                      )}
-                    </div>
-
-                    <div className="mt-3 text-xs text-slate-500">
-                      {bucket.stage === "Failed Rent Ready"
-                        ? bucket.count > 0
-                          ? `${bucket.blockedCount} blocked`
-                          : "No recovery required"
-                        : `SLA ${bucket.sla}d • ${bucket.blockedCount} blocked`}
-                    </div>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </Card>
-
-          <div className="grid items-start gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-9 min-w-0">
-              <div className="flex flex-col gap-6">
-                <Card>
-                  <div className="text-2xl font-semibold text-slate-900">Action Outcome Learning</div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    Tracks which interventions are creating the most operational and financial impact.
-                  </div>
-
-                  {actionLearningSummary.length ? (
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-                      {actionLearningSummary.map((item) => (
-                        <div
-                          key={item.actionLabel}
-                          className="rounded-2xl border border-slate-200 bg-white p-4"
-                        >
-                          <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
-                          <div className="mt-3 text-2xl font-semibold text-slate-900">
-                            ${item.totalRevenueProtected.toLocaleString()}
-                          </div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {item.totalDaysSaved}d recovered across {item.uses} uses
-                          </div>
-                          <div className="mt-2 text-xs text-slate-400">
-                            Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="mt-4 text-sm text-slate-500">
-                      No action outcomes logged yet. Apply actions in Control Center to start building a learning loop.
-                    </div>
-                  )}
-                </Card>
-
-                <Card>
-                  <div ref={queueRef}>
-                    <div className="flex flex-wrap items-center justify-between gap-4">
-                      <div>
-                        <div className="text-xl font-semibold text-slate-900">Live Working Queue</div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          Built to reduce dependency on Google Sheets and make TurnIQ the working surface.
-                        </div>
-                      </div>
-
-                      <div className="flex flex-wrap items-center gap-2">
-                        <div className="text-sm text-slate-500">Sort by</div>
-                        {["Priority", "Risk", "Days in Stage", "Open Days", "ECD", "Stage"].map((option) => (
-                          <button
-                            key={option}
-                            onClick={() => setSortBy(option)}
-                            className={`rounded-xl px-3 py-2 text-sm ${
-                              sortBy === option
-                                ? "bg-slate-900 text-white"
-                                : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                            }`}
-                          >
-                            {option}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
-                      <table className="min-w-[1900px] w-full text-sm">
-                        <thead className="sticky top-0 z-10 bg-slate-50 text-left text-slate-500">
-                          <tr>
-                            <th className="w-[340px] px-4 py-3 font-medium">Turn</th>
-                            <th className="w-[160px] px-4 py-3 font-medium">Priority</th>
-                            <th className="w-[240px] px-4 py-3 font-medium">AI Recommendation</th>
-                            <th className="w-[240px] px-4 py-3 font-medium">Stage</th>
-                            <th className="w-[280px] px-4 py-3 font-medium">Step</th>
-                            <th className="w-[180px] px-4 py-3 font-medium">Owner</th>
-                            <th className="w-[170px] px-4 py-3 font-medium">Due / SLA</th>
-                            <th className="w-[240px] px-4 py-3 font-medium">Blocker</th>
-                            <th className="w-[280px] px-4 py-3 font-medium">Notes</th>
-                            <th className="w-[130px] px-4 py-3 font-medium">Action</th>
-                            <th className="w-[100px] px-4 py-3 font-medium">PMS</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {workingRows.map((row) => {
-                            const workflowPlan = buildWorkflowPlan(row);
-                            const currentStepIndex = workflowPlan.steps.findIndex((step) => !step.done);
-                            const currentStep =
-                              currentStepIndex === -1 ? null : workflowPlan.steps[currentStepIndex];
-                            const nextStep =
-                              currentStepIndex >= 0 && currentStepIndex < workflowPlan.steps.length - 1
-                                ? workflowPlan.steps[currentStepIndex + 1]
-                                : null;
-
-                            return (
-                              <tr
-                                key={row.id}
-                                className={`border-t border-slate-100 align-top transition hover:bg-slate-50 ${
-                                  selectedPropertyId === row.id ? "bg-slate-50" : ""
-                                }`}
-                              >
-                                <td className="w-[340px] px-4 py-4">
-                                  <button
-                                    onClick={() => {
-                                      setSelectedPropertyId(row.id);
-                                      setDrawerRow(row);
-                                    }}
-                                    className="text-left"
-                                  >
-                                    <div className="max-w-[260px] break-words text-base font-medium text-blue-700 hover:underline">
-                                      {row.name}
-                                    </div>
-                                  </button>
-                                  <div className="mt-2 text-sm text-slate-500">
-                                    {row.market} • {row.turnStatus}
-                                  </div>
-                                  <div className="mt-1 text-xs text-slate-400">
-                                    Risk {row.risk} • {row.priority.whyNow}
-                                  </div>
-                                  <div className="mt-2 text-xs text-slate-400">
-                                    {row.rentSourceLabel} • ${row.dailyRentValue}/day
-                                  </div>
-                                </td>
-
-                                <td className="w-[160px] px-4 py-4">
-                                  <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                                  <div className="mt-2 text-sm text-slate-500">
-                                    AI score {row.aiPriorityScore}
-                                  </div>
-                                </td>
-
-                                <td className="w-[240px] px-4 py-4">
-                                  <div className="text-sm font-medium text-slate-900">
-                                    {row.aiRecommendation?.title || "Review turn"}
-                                  </div>
-                                  <div className="mt-1 text-xs text-slate-500">
-                                    {row.aiRecommendation?.reason || row.priority.whyNow}
-                                  </div>
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {(row.aiRiskDrivers || []).slice(0, 2).map((driver) => (
-                                      <span
-                                        key={driver}
-                                        className="rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-600"
-                                      >
-                                        {driver}
-                                      </span>
-                                    ))}
-                                  </div>
-                                </td>
-
-                                <td className="w-[240px] px-4 py-4">
-                                  <div className="font-medium text-slate-900">{row.currentStage}</div>
-                                  <div className="mt-1 text-sm text-slate-500">SLA {row.stageSla}d</div>
-                                </td>
-
-                                <td className="w-[280px] px-4 py-4">
-                                  {currentStep ? (
-                                    <div className="space-y-2">
-                                      <div className="text-xs text-slate-500">
-                                        Step {currentStepIndex + 1} of {workflowPlan.steps.length}
-                                      </div>
-                                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900">
-                                        {currentStep.label}
-                                      </div>
-                                      {nextStep ? (
-                                        <div className="text-xs text-slate-400">
-                                          Next: {nextStep.label}
-                                        </div>
-                                      ) : null}
-                                    </div>
-                                  ) : (
-                                    <div className="text-sm text-emerald-600">Workflow complete</div>
-                                  )}
-                                </td>
-
-                                <td className="w-[180px] px-4 py-4">
-                                  <input
-                                    value={row.turnOwner || ""}
-                                    onChange={(e) => handleOwnerChange(row.id, e.target.value)}
-                                    className="w-[160px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                  />
-                                </td>
-
-                                <td className="w-[170px] px-4 py-4">
-                                  <Pill tone={row.overdue ? "red" : "slate"}>
-                                    {row.daysInStage || 0}d
-                                  </Pill>
-                                  <div className="mt-2 text-sm">
-                                    {row.overdue ? (
-                                      <span className="font-medium text-red-600">
-                                        {getDaysOverSla(row)}d over SLA
-                                      </span>
-                                    ) : (
-                                      <span className="text-slate-500">Within SLA</span>
-                                    )}
-                                  </div>
-                                  <div className="mt-2 text-xs text-slate-500">
-                                    {getLastTouchedLabel(row)}
-                                  </div>
-                                </td>
-
-                                <td className="w-[240px] px-4 py-4">
-                                  <select
-                                    value={row.blocker}
-                                    onChange={(e) => handleBlockerChange(row.id, e.target.value, row)}
-                                    className="w-[220px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                  >
-                                    {BLOCKER_OPTIONS.map((option) => (
-                                      <option key={option} value={option}>
-                                        {option}
-                                      </option>
-                                    ))}
-                                  </select>
-                                </td>
-
-                                <td className="w-[280px] px-4 py-4">
-                                  <div className="flex w-[250px] gap-2">
-                                    <input
-                                      value={draftNotes[row.id] || ""}
-                                      onChange={(e) =>
-                                        setDraftNotes((prev) => ({
-                                          ...prev,
-                                          [row.id]: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="Add note"
-                                      className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
-                                    />
-                                    <button
-                                      onClick={() => handleInlineNoteSave(row.id, row)}
-                                      className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
-                                    >
-                                      Save
-                                    </button>
-                                  </div>
-                                  {row.operationalNotes?.length ? (
-                                    <div className="mt-2 text-xs text-slate-500">
-                                      Latest: {row.operationalNotes[row.operationalNotes.length - 1]}
-                                    </div>
-                                  ) : null}
-                                </td>
-
-                                <td className="w-[130px] px-4 py-4">
-                                  <div className="flex w-[110px] flex-col gap-2">
-                                    <button
-                                      onClick={() => handleWorkflowStep(row, currentStep)}
-                                      disabled={!currentStep}
-                                      className={`rounded-md px-3 py-2 text-xs font-medium ${
-                                        currentStep
-                                          ? "bg-slate-900 text-white hover:bg-slate-800"
-                                          : "cursor-not-allowed border border-slate-200 bg-slate-50 text-slate-400"
-                                      }`}
-                                    >
-                                      {currentStep ? "Complete Step" : "Done"}
-                                    </button>
-                                  </div>
-                                </td>
-
-                                <td className="w-[100px] px-4 py-4 whitespace-nowrap">
-                                  <a
-                                    href={row.systemLink}
-                                    target="_blank"
-                                    rel="noreferrer"
-                                    className="text-sm font-medium text-blue-700 hover:underline"
-                                  >
-                                    Open →
-                                  </a>
-                                </td>
-                              </tr>
-                            );
-                          })}
-
-                          {!workingRows.length ? (
-                            <tr>
-                              <td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-500">
-                                No turns match the current filters.
-                              </td>
-                            </tr>
-                          ) : null}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                </Card>
-              </div>
-            </div>
-
-            <div className="xl:col-span-3 min-w-0">
-              <div className="flex flex-col gap-6">
-                <Card>
-                  <div className="text-xl font-semibold text-slate-900">Guided Workflow Summary</div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    The highest-friction execution issues standing out right now
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
-                      <div className="text-xs uppercase tracking-wide text-red-700">Problem Child Turns</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        {workingRows.filter((row) => row.overdue || row.turnStatus === "Blocked").length}
-                      </div>
-                      <div className="mt-1 text-xs text-red-700">Over SLA or blocked</div>
-                    </div>
-
-                    <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-                      <div className="text-xs uppercase tracking-wide text-amber-700">Stale Turns</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">{queueSummary.stale}</div>
-                      <div className="mt-1 text-xs text-amber-700">No recent movement</div>
-                    </div>
-
-                    <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
-                      <div className="text-xs uppercase tracking-wide text-blue-700">Pending Approvals</div>
-                      <div className="mt-2 text-2xl font-semibold text-slate-900">
-                        {workingRows.filter((row) => row.currentStage === "Owner Approval").length}
-                      </div>
-                      <div className="mt-1 text-xs text-blue-700">Waiting for owner action</div>
-                    </div>
-                  </div>
-                </Card>
-
-                <Card>
-                  <div className="text-xl font-semibold text-slate-900">Team Load</div>
-                  <div className="mt-1 text-sm text-slate-500">
-                    Active turns and high-risk concentration by operator
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    {operatorSummary.map((item) => (
-                      <div key={item.owner} className="rounded-2xl border border-slate-200 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-medium text-slate-900">{item.owner}</div>
-                            <div className="mt-1 text-sm text-slate-500">
-                              {item.activeTurns} active turns
-                            </div>
-                          </div>
-                          <Pill tone={item.highRisk > 0 ? "red" : "green"}>
-                            {item.highRisk} high risk
-                          </Pill>
-                        </div>
-                      </div>
                     ))}
                   </div>
-                </Card>
-              </div>
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          <Card>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">Executive Readout</div>
-                <div className="mt-3 text-sm leading-6 text-slate-700">
-                  TurnIQ is currently surfacing <span className="font-medium">{execReadout.critical}</span> critical turns,
-                  <span className="font-medium"> {execReadout.blocked}</span> blocked turns, and
-                  <span className="font-medium"> {execReadout.failed}</span> failed-rent-ready homes.
-                  {topStageBottleneck
-                    ? ` The current portfolio bottleneck is ${topStageBottleneck.stage}, averaging ${topStageBottleneck.avgDaysInStage} days in stage.`
-                    : ""}
-                </div>
-              </div>
-              <div className="text-xs text-slate-500">{formatRelativeTime(computedLastUpdated)}</div>
-            </div>
-          </Card>
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Critical Turns</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{execReadout.critical}</div>
-              <div className="mt-1 text-sm text-slate-500">Highest intervention urgency</div>
-            </Card>
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Blocked Turns</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{execReadout.blocked}</div>
-              <div className="mt-1 text-sm text-slate-500">Immediate flow disruption</div>
-            </Card>
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Failed Rent Ready</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">{execReadout.failed}</div>
-              <div className="mt-1 text-sm text-slate-500">Direct rework signal</div>
-            </Card>
-            <Card>
-              <div className="text-xs uppercase tracking-wide text-slate-500">Modeled Value</div>
-              <div className="mt-2 text-3xl font-semibold text-slate-900">
-                ${portfolioImpact.revenueRecovered.toLocaleString()}
-              </div>
-              <div className="mt-1 text-sm text-slate-500">Recoverable revenue signal</div>
-            </Card>
-          </div>
-
-          <Card>
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <div className="text-2xl font-semibold text-slate-900">Stage Flow / Bottleneck Heatmap</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  A portfolio view of stage congestion, blocked concentration, and delay pressure.
-                </div>
-              </div>
-              {topStageBottleneck ? (
-                <Pill tone="amber">{topStageBottleneck.stage} bottleneck</Pill>
-              ) : null}
-            </div>
-
-            <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {stageBuckets.map((bucket) => {
-                const heatClass =
-                  bucket.stage === "Failed Rent Ready"
-                    ? "border-red-200 bg-red-50"
-                    : bucket.blockedPercent >= 40 || bucket.overdueCount > 0
-                    ? "border-red-200 bg-red-50"
-                    : bucket.avgDays > bucket.sla
-                    ? "border-amber-200 bg-amber-50"
-                    : "border-slate-200 bg-white";
-
-                return (
-                  <div key={bucket.stage} className={`rounded-2xl border p-4 ${heatClass}`}>
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-900">{bucket.stage}</div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {bucket.count} turns • avg {bucket.avgDays}d
-                        </div>
-                      </div>
-                      <Pill tone={bucket.stage === "Failed Rent Ready" ? "red" : bucket.tone}>
-                        {bucket.blockedPercent}% blocked
-                      </Pill>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-3 gap-3">
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="text-[11px] uppercase tracking-wide text-slate-500">Count</div>
-                        <div className="mt-1 text-lg font-semibold text-slate-900">{bucket.count}</div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="text-[11px] uppercase tracking-wide text-slate-500">Avg Days</div>
-                        <div className="mt-1 text-lg font-semibold text-slate-900">{bucket.avgDays}</div>
-                      </div>
-                      <div className="rounded-xl border border-slate-200 bg-white p-3">
-                        <div className="text-[11px] uppercase tracking-wide text-slate-500">Overdue</div>
-                        <div className="mt-1 text-lg font-semibold text-slate-900">
-                          {bucket.overdueCount}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
-
-          <div className="grid gap-6 xl:grid-cols-12">
-            <div className="xl:col-span-7">
-              <Card>
-                <div className="text-2xl font-semibold text-slate-900">Intervention Focus</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Highest-leverage turns based on blocked state, delay exposure, and recovery upside.
                 </div>
 
-                <div className="mt-4 space-y-3">
-                  {topActions.slice(0, 5).map((row) => (
+                <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
+                  <table className="min-w-[1600px] w-full text-sm">
+                    <thead className="sticky top-0 z-10 bg-slate-50 text-left text-slate-500">
+                      <tr>
+                        <th className="w-[320px] px-4 py-3 font-medium">Turn</th>
+                        <th className="w-[140px] px-4 py-3 font-medium">AI Priority</th>
+                        <th className="w-[220px] px-4 py-3 font-medium">Stage</th>
+                        <th className="w-[260px] px-4 py-3 font-medium">Recommendation</th>
+                        <th className="w-[180px] px-4 py-3 font-medium">Owner</th>
+                        <th className="w-[170px] px-4 py-3 font-medium">SLA</th>
+                        <th className="w-[220px] px-4 py-3 font-medium">Blocker</th>
+                        <th className="w-[260px] px-4 py-3 font-medium">Notes</th>
+                        <th className="w-[140px] px-4 py-3 font-medium">Action</th>
+                        <th className="w-[100px] px-4 py-3 font-medium">PMS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {workingRows.map((row) => (
+                        <tr
+                          key={row.id}
+                          className={`border-t border-slate-100 align-top transition hover:bg-slate-50 ${
+                            selectedPropertyId === row.id ? "bg-slate-50" : ""
+                          }`}
+                        >
+                          <td className="px-4 py-4">
+                            <button
+                              onClick={() => {
+                                setSelectedPropertyId(row.id);
+                                setDrawerRow(row);
+                              }}
+                              className="text-left"
+                            >
+                              <div className="max-w-[240px] break-words text-base font-medium text-blue-700 hover:underline">
+                                {row.name}
+                              </div>
+                            </button>
+                            <div className="mt-2 text-sm text-slate-500">
+                              {row.market} • {row.turnStatus}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              {row.rentSourceLabel} • ${row.dailyRentValue}/day
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
+                            <div className="mt-2 text-sm text-slate-500">
+                              Score {row.aiPriorityScore}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <div className="font-medium text-slate-900">
+                              {row.currentStage}
+                            </div>
+                            <div className="mt-1 text-sm text-slate-500">
+                              SLA {row.stageSla}d
+                            </div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              {getLastTouchedLabel(row)}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <div className="text-sm font-medium text-slate-900">
+                              {row.aiRecommendation?.title || row.nextAction}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-500">
+                              {row.aiRecommendation?.reason || row.priority.whyNow}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <input
+                              value={row.turnOwner || ""}
+                              onChange={(e) =>
+                                handleOwnerChange(row.id, e.target.value)
+                              }
+                              className="w-[160px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            />
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <Pill tone={row.overdue ? "red" : "slate"}>
+                              {row.daysInStage || 0}d
+                            </Pill>
+                            <div className="mt-2 text-sm">
+                              {row.overdue ? (
+                                <span className="font-medium text-red-600">
+                                  {getDaysOverSla(row)}d over SLA
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">Within SLA</span>
+                              )}
+                            </div>
+                            <div className="mt-1 text-xs text-slate-400">
+                              ECD {formatShortDate(row.projectedCompletion)}
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <select
+                              value={row.blocker}
+                              onChange={(e) =>
+                                handleBlockerChange(row.id, e.target.value, row)
+                              }
+                              className="w-[200px] rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                            >
+                              {BLOCKER_OPTIONS.map((option) => (
+                                <option key={option} value={option}>
+                                  {option}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <div className="flex w-[230px] gap-2">
+                              <input
+                                value={draftNotes[row.id] || ""}
+                                onChange={(e) =>
+                                  setDraftNotes((prev) => ({
+                                    ...prev,
+                                    [row.id]: e.target.value,
+                                  }))
+                                }
+                                placeholder="Add note"
+                                className="flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                              />
+                              <button
+                                onClick={() => handleInlineNoteSave(row.id, row)}
+                                className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Save
+                              </button>
+                            </div>
+                            {row.operationalNotes?.length ? (
+                              <div className="mt-2 text-xs text-slate-500">
+                                Latest:{" "}
+                                {
+                                  row.operationalNotes[
+                                    row.operationalNotes.length - 1
+                                  ]
+                                }
+                              </div>
+                            ) : null}
+                          </td>
+
+                          <td className="px-4 py-4">
+                            <div className="flex w-[110px] flex-col gap-2">
+                              <button
+                                onClick={() => handleApplyTopAction(row)}
+                                className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+                              >
+                                Apply
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setSelectedPropertyId(row.id);
+                                  setDrawerRow(row);
+                                }}
+                                className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                              >
+                                Open
+                              </button>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-4 whitespace-nowrap">
+                            <a
+                              href={row.systemLink}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-sm font-medium text-blue-700 hover:underline"
+                            >
+                              Open →
+                            </a>
+                          </td>
+                        </tr>
+                      ))}
+
+                      {!workingRows.length ? (
+                        <tr>
+                          <td
+                            colSpan={10}
+                            className="px-4 py-10 text-center text-sm text-slate-500"
+                          >
+                            No turns match the current filters.
+                          </td>
+                        </tr>
+                      ) : null}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </Card>
+
+            <Card>
+              <div className="text-xl font-semibold text-slate-900">
+                Action Learning
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                Which interventions are actually creating recovery.
+              </div>
+
+              {actionLearningSummary.length ? (
+                <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+                  {actionLearningSummary.map((item) => (
                     <div
-                      key={row.id}
-                      className="flex items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white p-4"
+                      key={item.actionLabel}
+                      className="rounded-2xl border border-slate-200 bg-white p-4"
                     >
-                      <div>
-                        <div className="font-semibold text-slate-900">{row.name}</div>
-                        <div className="mt-1 text-sm text-slate-500">
-                          {row.market} • {row.currentStage}
-                        </div>
-                        <div className="mt-2 text-sm text-slate-700">{row.priority.whyNow}</div>
+                      <div className="text-sm font-medium text-slate-900">
+                        {item.actionLabel}
                       </div>
-
-                      <div className="text-right">
-                        <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
-                        <div className="mt-2 text-sm font-medium text-slate-900">
-                          +{row.impact.daysRecovered}d
-                        </div>
-                        <div className="text-xs text-slate-500">
-                          ${row.impact.revenueRecovered.toLocaleString()}
-                        </div>
+                      <div className="mt-3 text-2xl font-semibold text-slate-900">
+                        ${item.totalRevenueProtected.toLocaleString()}
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {item.totalDaysSaved}d recovered across {item.uses} uses
+                      </div>
+                      <div className="mt-2 text-xs text-slate-400">
+                        Avg {item.avgDaysSaved}d • $
+                        {item.avgRevenueProtected.toLocaleString()}
                       </div>
                     </div>
                   ))}
                 </div>
-              </Card>
-            </div>
+              ) : (
+                <div className="mt-4 text-sm text-slate-500">
+                  No action outcomes logged yet.
+                </div>
+              )}
+            </Card>
+          </div>
+        </div>
 
-            <div className="xl:col-span-5">
-              <Card>
-                <div className="text-2xl font-semibold text-slate-900">Action Outcome Learning</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Which interventions are producing measurable recovery.
+        <div className="xl:col-span-3 min-w-0">
+          <div className="flex flex-col gap-6">
+            <Card>
+              <div className="text-xl font-semibold text-slate-900">
+                Queue Summary
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                Fast read on friction in the current filtered queue.
+              </div>
+
+              <div className="mt-4 space-y-3">
+                <div className="rounded-2xl border border-red-200 bg-red-50 p-4">
+                  <div className="text-xs uppercase tracking-wide text-red-700">
+                    Problem Turns
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {
+                      workingRows.filter(
+                        (row) => row.overdue || row.turnStatus === "Blocked"
+                      ).length
+                    }
+                  </div>
+                  <div className="mt-1 text-xs text-red-700">
+                    Over SLA or blocked
+                  </div>
                 </div>
 
-                {actionLearningSummary.length ? (
-                  <div className="mt-4 space-y-3">
-                    {actionLearningSummary.map((item) => (
-                      <div
-                        key={item.actionLabel}
-                        className="rounded-2xl border border-slate-200 bg-white p-4"
-                      >
-                        <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
-                        <div className="mt-2 text-2xl font-semibold text-slate-900">
-                          ${item.totalRevenueProtected.toLocaleString()}
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <div className="text-xs uppercase tracking-wide text-amber-700">
+                    Stale Turns
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {queueSummary.stale}
+                  </div>
+                  <div className="mt-1 text-xs text-amber-700">
+                    No recent movement
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <div className="text-xs uppercase tracking-wide text-blue-700">
+                    Failed Rent Ready
+                  </div>
+                  <div className="mt-2 text-2xl font-semibold text-slate-900">
+                    {queueSummary.failedRentReady}
+                  </div>
+                  <div className="mt-1 text-xs text-blue-700">
+                    Rework pressure
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <Card>
+              <div className="text-xl font-semibold text-slate-900">
+                Team Load
+              </div>
+              <div className="mt-1 text-sm text-slate-500">
+                Active turns and high-risk concentration by operator.
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {operatorSummary.map((item) => (
+                  <div
+                    key={item.owner}
+                    className="rounded-2xl border border-slate-200 p-4"
+                  >
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium text-slate-900">
+                          {item.owner}
                         </div>
-                        <div className="mt-1 text-xs text-slate-500">
-                          {item.totalDaysSaved}d recovered across {item.uses} uses
-                        </div>
-                        <div className="mt-2 text-xs text-slate-400">
-                          Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
+                        <div className="mt-1 text-sm text-slate-500">
+                          {item.activeTurns} active turns
                         </div>
                       </div>
-                    ))}
+                      <Pill tone={item.highRisk > 0 ? "red" : "green"}>
+                        {item.highRisk} high risk
+                      </Pill>
+                    </div>
                   </div>
-                ) : (
-                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                    No outcome learning logged yet.
-                  </div>
-                )}
-              </Card>
-            </div>
+                ))}
+              </div>
+            </Card>
           </div>
-        </>
-      )}
+        </div>
+      </div>
 
       <TurnDetailDrawer
         row={drawerRow}
