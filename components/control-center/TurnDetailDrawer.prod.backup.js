@@ -17,16 +17,16 @@ function getVendorSignal(row) {
     (workOrder) => !["Completed", "Closed"].includes(workOrder.status)
   );
 
-  const missingVendor =
-    !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned";
+  const missingVendor = !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned";
 
-  const vendorRisk = missingVendor
-    ? "high"
-    : delayedWorkOrders.length > 0
-    ? "high"
-    : openWorkOrders.length >= 2
-    ? "medium"
-    : "low";
+  const vendorRisk =
+    missingVendor
+      ? "high"
+      : delayedWorkOrders.length > 0
+      ? "high"
+      : openWorkOrders.length >= 2
+      ? "medium"
+      : "low";
 
   return {
     vendorName,
@@ -34,13 +34,14 @@ function getVendorSignal(row) {
     delayedWorkOrders,
     openWorkOrders,
     vendorRisk,
-    recommendation: missingVendor
-      ? "Assign a vendor to unlock execution"
-      : vendorRisk === "high"
-      ? `Current vendor (${vendorName}) is creating delay risk`
-      : vendorRisk === "medium"
-      ? `Monitor ${vendorName} closely`
-      : `${vendorName} looks stable`,
+    recommendation:
+      missingVendor
+        ? "Assign a vendor to unlock execution"
+        : vendorRisk === "high"
+        ? `Current vendor (${vendorName}) is creating delay risk`
+        : vendorRisk === "medium"
+        ? `Monitor ${vendorName} closely`
+        : `${vendorName} looks stable`,
   };
 }
 
@@ -68,36 +69,33 @@ function getSimulatorOptions(row) {
       enabled: (row.daysInStage || 0) > (row.stageSla || 0),
       days:
         (row.daysInStage || 0) > (row.stageSla || 0)
-          ? Math.min(
-              2,
-              Math.max(1, (row.daysInStage || 0) - (row.stageSla || 0))
-            )
+          ? Math.min(2, Math.max(1, (row.daysInStage || 0) - (row.stageSla || 0)))
           : 0,
       category: "vendor",
     },
     {
-      id: "switch_vendor",
-      label: vendorSignal.missingVendor
-        ? "Assign best-fit vendor"
-        : "Switch vendor",
+  id: "switch_vendor",
+  label: vendorSignal.missingVendor
+    ? "Assign best-fit vendor"
+    : "Switch vendor",
       enabled: vendorSignal.missingVendor || vendorSignal.vendorRisk !== "low",
-      days: vendorSignal.missingVendor
-        ? 2
-        : vendorSignal.vendorRisk === "high"
-        ? 2
-        : vendorSignal.vendorRisk === "medium"
-        ? 1
-        : 0,
+      days:
+        vendorSignal.missingVendor
+          ? 2
+          : vendorSignal.vendorRisk === "high"
+          ? 2
+          : vendorSignal.vendorRisk === "medium"
+          ? 1
+          : 0,
       category: "vendor",
     },
     {
       id: "expedite_vendor",
       label: vendorSignal.missingVendor
         ? "Escalate vendor assignment"
-        : "Expedite current vendor",
+         : "Expedite current vendor",
       enabled: vendorSignal.vendorRisk === "high" || vendorSignal.missingVendor,
-      days:
-        vendorSignal.vendorRisk === "high" || vendorSignal.missingVendor ? 1 : 0,
+      days: vendorSignal.vendorRisk === "high" || vendorSignal.missingVendor ? 1 : 0,
       category: "vendor",
     },
     {
@@ -243,12 +241,6 @@ function getSyncTone(status) {
   return "green";
 }
 
-function getUrgencyTone(urgency) {
-  if (urgency === "High") return "red";
-  if (urgency === "Medium") return "amber";
-  return "slate";
-}
-
 export default function TurnDetailDrawer({
   row,
   onClose,
@@ -259,72 +251,72 @@ export default function TurnDetailDrawer({
 }) {
   const [selectedOptions, setSelectedOptions] = useState([]);
 
-  const recommendedOptions = useMemo(() => {
-    if (!row) return [];
-    return getRecommendedOptions(row);
-  }, [row]);
+const recommendedOptions = useMemo(() => {
+  if (!row) return [];
+  return getRecommendedOptions(row);
+}, [row]);
 
-  useEffect(() => {
-    if (!row) {
-      setSelectedOptions([]);
-      return;
-    }
+useEffect(() => {
+  if (!row) {
+    setSelectedOptions([]);
+    return;
+  }
 
-    setSelectedOptions(recommendedOptions);
-  }, [row?.id, recommendedOptions]);
+  setSelectedOptions(recommendedOptions);
+}, [row?.id, recommendedOptions]);
 
-  const simulation = useMemo(() => {
-    if (!row) {
-      return {
-        daysRecovered: 0,
-        simulatedCompletion: null,
-        revenueProtected: 0,
-      };
-    }
+// --- CORE COMPUTATION ---
 
-    return buildSimulation(row, selectedOptions);
-  }, [row, selectedOptions]);
+const simulation = useMemo(() => {
+  if (!row) {
+    return {
+      daysRecovered: 0,
+      simulatedCompletion: null,
+      revenueProtected: 0,
+    };
+  }
 
-  const simulatorOptions = useMemo(() => {
-    if (!row) return [];
-    return getSimulatorOptions(row);
-  }, [row]);
+  return buildSimulation(row, selectedOptions);
+}, [row, selectedOptions]);
 
-  const isRecommendedPlan =
-    selectedOptions.length === recommendedOptions.length &&
-    selectedOptions.every((opt) => recommendedOptions.includes(opt));
+// --- OPTION SETS ---
 
-  const timelineRows = useMemo(() => {
-    if (!row) return [];
-    return getTimelineRows(row);
-  }, [row]);
+const simulatorOptions = useMemo(() => {
+  if (!row) return [];
+  return getSimulatorOptions(row);
+}, [row]);
 
-  const workflowHistory = useMemo(() => {
-    if (!row) return [];
-    return getWorkflowHistory(row);
-  }, [row]);
+// --- DERIVED STATE ---
 
-  const recentNotes = useMemo(() => {
-    if (!row) return [];
-    return Array.isArray(row.operationalNotes)
-      ? [...row.operationalNotes].slice(-5).reverse()
-      : [];
-  }, [row]);
+const isRecommendedPlan =
+  selectedOptions.length === recommendedOptions.length &&
+  selectedOptions.every((opt) => recommendedOptions.includes(opt));
 
-  const vendorSignal = useMemo(() => {
-    if (!row) return null;
-    return getVendorSignal(row);
-  }, [row]);
+// --- SUPPORTING DATA ---
 
-  const aiRecommendation = row?.aiRecommendation || null;
-  const aiRiskDrivers = Array.isArray(row?.aiRiskDrivers) ? row.aiRiskDrivers : [];
-  const aiConfidence = aiRecommendation?.confidence || 0;
-  const aiImpactDays = aiRecommendation?.impactDays ?? row?.impact?.daysRecovered ?? 0;
-  const aiImpactRevenue =
-    aiRecommendation?.impactRevenue ?? row?.impact?.revenueRecovered ?? 0;
-  const aiUrgency = aiRecommendation?.urgency || "Review";
+const timelineRows = useMemo(() => {
+  if (!row) return [];
+  return getTimelineRows(row);
+}, [row]);
 
+const workflowHistory = useMemo(() => {
+  if (!row) return [];
+  return getWorkflowHistory(row);
+}, [row]);
+
+const recentNotes = useMemo(() => {
+  if (!row) return [];
+  return Array.isArray(row.operationalNotes)
+    ? [...row.operationalNotes].slice(-5).reverse()
+    : [];
+}, [row]);
+
+const vendorSignal = useMemo(() => {
   if (!row) return null;
+  return getVendorSignal(row);
+}, [row]);
+
+if (!row) return null;
 
   function toggleOption(optionId) {
     setSelectedOptions((prev) =>
@@ -334,7 +326,7 @@ export default function TurnDetailDrawer({
     );
   }
 
-  function applySimulatedPlan() {
+    function applySimulatedPlan() {
     if (!selectedOptions.length || simulation.daysRecovered <= 0) return;
 
     onApplySimulatedPlan({
@@ -363,69 +355,13 @@ export default function TurnDetailDrawer({
         </div>
 
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Pill tone={row.priority?.tone || "slate"}>
-            {row.priority?.label || "Review"}
-          </Pill>
+          <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
           <Pill tone="slate">{row.currentStage}</Pill>
           <Pill tone={row.turnStatus === "Blocked" ? "red" : "green"}>
             {row.turnStatus}
           </Pill>
           <Pill tone="blue">Risk {row.risk}</Pill>
         </div>
-
-        <Card className="mt-6 border-blue-200">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium text-slate-900">AI Recommendation</div>
-              <div className="mt-1 text-xs text-slate-500">
-                Modeled intervention based on blockage, stage friction, vendor signal, and recoverable value
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Pill tone="blue">AI</Pill>
-              <Pill tone={getUrgencyTone(aiUrgency)}>{aiUrgency}</Pill>
-            </div>
-          </div>
-
-          <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-base font-semibold text-slate-900">
-              {aiRecommendation?.title || "Review turn"}
-            </div>
-            <div className="mt-2 text-sm text-slate-600">
-              {aiRecommendation?.reason || row.priority?.whyNow || "No recommendation reason available."}
-            </div>
-
-            <div className="mt-4 flex flex-wrap gap-2">
-              <Pill tone="slate">{aiConfidence}% confidence</Pill>
-              <Pill tone="green">+{aiImpactDays}d</Pill>
-              <Pill tone="green">${Number(aiImpactRevenue || 0).toLocaleString()}</Pill>
-            </div>
-
-            {aiRiskDrivers.length ? (
-              <div className="mt-4">
-                <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-                  Risk drivers
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {aiRiskDrivers.map((driver) => (
-                    <Pill key={driver} tone="amber">
-                      {driver}
-                    </Pill>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-
-            <div className="mt-4">
-              <button
-                onClick={() => onApplyAction(row)}
-                className="rounded-md bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-800"
-              >
-                Apply recommendation
-              </button>
-            </div>
-          </div>
-        </Card>
 
         <Card className="mt-6">
           <div className="flex items-start justify-between gap-4">
@@ -477,9 +413,7 @@ export default function TurnDetailDrawer({
         <div className="mt-6 grid gap-4 md:grid-cols-2">
           <Card>
             <div className="text-xs uppercase tracking-wide text-slate-500">Why Now</div>
-            <div className="mt-2 text-sm leading-6 text-slate-700">
-              {row.priority?.whyNow || "No current urgency signal"}
-            </div>
+            <div className="mt-2 text-sm leading-6 text-slate-700">{row.priority.whyNow}</div>
           </Card>
 
           <Card>
@@ -487,10 +421,10 @@ export default function TurnDetailDrawer({
               Recovery Signal
             </div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">
-              +{row.impact?.daysRecovered || 0}d
+              +{row.impact.daysRecovered}d
             </div>
             <div className="mt-1 text-sm text-slate-500">
-              ${Number(row.impact?.revenueRecovered || 0).toLocaleString()} protectable
+              ${row.impact.revenueRecovered.toLocaleString()} protectable
             </div>
           </Card>
         </div>
@@ -509,16 +443,12 @@ export default function TurnDetailDrawer({
           <div className="mt-4 grid gap-4 md:grid-cols-2">
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Next Action</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.nextAction}
-              </div>
+              <div className="mt-1 text-sm font-medium text-slate-900">{row.nextAction}</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Blocker</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.blocker}
-              </div>
+              <div className="mt-1 text-sm font-medium text-slate-900">{row.blocker}</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
@@ -584,11 +514,9 @@ export default function TurnDetailDrawer({
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Daily Rent</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
-                ${row.impact?.dailyRentValue || 0}
+                ${row.impact.dailyRentValue}
               </div>
-              <div className="mt-1 text-xs text-slate-400">
-                {row.rentSourceLabel}
-              </div>
+              <div className="mt-1 text-xs text-slate-400">{row.rentSourceLabel}</div>
             </div>
           </div>
         </Card>
@@ -606,9 +534,7 @@ export default function TurnDetailDrawer({
                 {row.workOrderCount || 0}
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                {row.workOrderCount > 0
-                  ? "Detected from source system"
-                  : "No linked work orders"}
+                {row.workOrderCount > 0 ? "Detected from source system" : "No linked work orders"}
               </div>
             </div>
 
@@ -618,9 +544,7 @@ export default function TurnDetailDrawer({
                 {row.approvalCount || 0}
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                {row.approvalCount > 0
-                  ? "Approval trail present"
-                  : "No approval records linked"}
+                {row.approvalCount > 0 ? "Approval trail present" : "No approval records linked"}
               </div>
             </div>
 
@@ -630,9 +554,7 @@ export default function TurnDetailDrawer({
                 {row.attachmentCount || 0}
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                {row.attachmentCount > 0
-                  ? "Attachments detected"
-                  : "No linked attachments"}
+                {row.attachmentCount > 0 ? "Attachments detected" : "No linked attachments"}
               </div>
             </div>
           </div>
@@ -645,16 +567,12 @@ export default function TurnDetailDrawer({
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-medium text-slate-900">
-                      {workOrder.title}
-                    </div>
+                    <div className="text-sm font-medium text-slate-900">{workOrder.title}</div>
                     <div className="mt-1 text-xs text-slate-500">
                       {workOrder.trade} • {workOrder.vendor}
                     </div>
                   </div>
-                  <Pill tone={workOrder.statusTone || "slate"}>
-                    {workOrder.status}
-                  </Pill>
+                  <Pill tone={workOrder.statusTone || "slate"}>{workOrder.status}</Pill>
                 </div>
               </div>
             ))}
@@ -681,13 +599,9 @@ export default function TurnDetailDrawer({
               >
                 <div className="flex items-start justify-between gap-4">
                   <div>
-                    <div className="text-sm font-medium text-slate-900">
-                      {item.label}
-                    </div>
+                    <div className="text-sm font-medium text-slate-900">{item.label}</div>
                     {item.subtext ? (
-                      <div className="mt-1 text-xs text-slate-500">
-                        {item.subtext}
-                      </div>
+                      <div className="mt-1 text-xs text-slate-500">{item.subtext}</div>
                     ) : null}
                   </div>
                   <Pill tone={item.tone}>{item.value}</Pill>
@@ -751,9 +665,7 @@ export default function TurnDetailDrawer({
         <Card className="mt-6">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <div className="text-sm font-medium text-slate-900">
-                Vendor Intelligence
-              </div>
+              <div className="text-sm font-medium text-slate-900">Vendor Intelligence</div>
               <div className="mt-1 text-xs text-slate-500">
                 Dispatch and execution signal based on linked work orders and vendor posture
               </div>
@@ -814,19 +726,19 @@ export default function TurnDetailDrawer({
             <Pill tone="blue">Scenario</Pill>
           </div>
 
-          <div className="mt-4 flex flex-wrap items-center gap-2">
-            <Pill tone="green">AI-selected plan</Pill>
-            <button
-              onClick={() => setSelectedOptions(recommendedOptions)}
-              className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
-            >
-              Reapply recommendation
-            </button>
-          </div>
+                   <div className="mt-4 flex flex-wrap items-center gap-2">
+  <Pill tone="green">AI-selected plan</Pill>
+  <button
+    onClick={() => setSelectedOptions(recommendedOptions)}
+    className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+  >
+    Reapply recommendation
+  </button>
+</div>
 
-          <div className="mt-2 text-xs text-slate-500">
-            Recommended plan selected based on blocker state, stage friction, vendor risk, and recoverable revenue.
-          </div>
+<div className="mt-2 text-xs text-slate-500">
+  Recommended plan selected based on blocker state, stage friction, vendor risk, and recoverable revenue.
+</div>
 
           <div className="mt-4 space-y-3">
             {simulatorOptions.map((option) => (
@@ -839,23 +751,23 @@ export default function TurnDetailDrawer({
                 }`}
               >
                 <div className="flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    checked={selectedOptions.includes(option.id)}
-                    disabled={!option.enabled}
-                    onChange={() => toggleOption(option.id)}
-                  />
+  <input
+    type="checkbox"
+    checked={selectedOptions.includes(option.id)}
+    disabled={!option.enabled}
+    onChange={() => toggleOption(option.id)}
+  />
 
-                  <div className="flex items-center gap-2">
-                    <span>{option.label}</span>
+  <div className="flex items-center gap-2">
+    <span>{option.label}</span>
 
-                    {option.category ? (
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
-                        {option.category === "vendor" ? "Vendor" : "Workflow"}
-                      </span>
-                    ) : null}
-                  </div>
-                </div>
+    {option.category && (
+      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+        {option.category === "vendor" ? "Vendor" : "Workflow"}
+      </span>
+    )}
+  </div>
+</div>
 
                 <div className="text-xs font-medium">
                   {option.enabled ? `+${option.days}d` : "N/A"}
@@ -867,9 +779,7 @@ export default function TurnDetailDrawer({
           <div className="mt-5 grid grid-cols-2 gap-4 text-sm">
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Current ECD</div>
-              <div className="mt-1 font-medium">
-                {formatShortDate(row.projectedCompletion)}
-              </div>
+              <div className="mt-1 font-medium">{formatShortDate(row.projectedCompletion)}</div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">

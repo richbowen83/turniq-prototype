@@ -6,16 +6,6 @@ import Pill from "../shared/Pill";
 import { getStageTone } from "../../utils/tone";
 import TurnDetailDrawer from "./TurnDetailDrawer";
 import {
-  getAiRecommendation,
-  getAiPriorityScore,
-  getAiRiskDrivers,
-} from "../../utils/turnAi";
-import {
-  buildPatchForResolve,
-  buildPatchForMarkReady,
-  buildPatchForApplyRecommendation,
-} from "../../utils/turnActions";
-import {
   formatShortDate,
   getDailyRentValue,
   getRentSourceLabel,
@@ -119,11 +109,11 @@ function getStageSla(stage) {
 }
 
 function getPrimaryBlocker(row) {
-  const blockers = Array.isArray(row.blockers) ? row.blockers : [];
+  const blockers = row.blockers || [];
   const live = blockers.filter(
     (b) => b && b !== "No active blockers" && b !== "No major blockers"
   );
-  return row.blocker || live[0] || "None";
+  return live[0] || "None";
 }
 
 function getDaysOverSla(row) {
@@ -364,24 +354,10 @@ function buildEnrichedRows(rows) {
       ...buildSourceSystemMetadata(row),
     };
 
-    const priority = buildPriority(base);
-    const impact = buildImpact(base);
-
-    const enriched = {
-      ...base,
-      priority,
-      impact,
-    };
-
-    const aiRecommendation = getAiRecommendation(enriched);
-    const aiPriorityScore = getAiPriorityScore({ ...enriched, aiRecommendation });
-    const aiRiskDrivers = getAiRiskDrivers({ ...enriched, aiRecommendation });
-
     return {
-      ...enriched,
-      aiRecommendation,
-      aiPriorityScore,
-      aiRiskDrivers,
+      ...base,
+      priority: buildPriority(base),
+      impact: buildImpact(base),
     };
   });
 }
@@ -444,11 +420,7 @@ function sortRows(rows, sortBy) {
   const sorted = [...rows];
 
   if (sortBy === "Priority") {
-    sorted.sort(
-      (a, b) =>
-        (b.aiPriorityScore || b.priority.score) -
-        (a.aiPriorityScore || a.priority.score)
-    );
+    sorted.sort((a, b) => b.priority.score - a.priority.score);
   } else if (sortBy === "Risk") {
     sorted.sort((a, b) => (b.risk || 0) - (a.risk || 0));
   } else if (sortBy === "Open Days") {
@@ -706,11 +678,7 @@ export default function ControlCenterTab({
           row.priority.score >= 18 ||
           row.impact.daysRecovered > 0
       )
-      .sort(
-        (a, b) =>
-          (b.aiPriorityScore || b.priority.score) -
-          (a.aiPriorityScore || a.priority.score)
-      )
+      .sort((a, b) => b.priority.score - a.priority.score)
       .slice(0, 5)
       .map((row) => ({
         ...row,
@@ -781,15 +749,6 @@ export default function ControlCenterTab({
 
     return new Date(Math.max(...valid)).toISOString();
   }, [actionLearningLog, enrichedRows, localLastUpdated]);
-
-  const isExecView = viewMode === "exec";
-
-  const execReadout = useMemo(() => {
-    const blocked = enrichedRows.filter((row) => row.turnStatus === "Blocked").length;
-    const failed = enrichedRows.filter((row) => row.currentStage === "Failed Rent Ready").length;
-    const critical = enrichedRows.filter((row) => row.priority.label === "Critical").length;
-    return { blocked, failed, critical };
-  }, [enrichedRows]);
 
   useEffect(() => {
     try {
@@ -915,6 +874,10 @@ export default function ControlCenterTab({
     });
   }
 
+  function handleFollowUpChange(id, value) {
+    patchRow(id, { followUpDate: value });
+  }
+
   function handleInlineNoteSave(id, row) {
     const note = (draftNotes[id] || "").trim();
     if (!note) return;
@@ -931,7 +894,21 @@ export default function ControlCenterTab({
     const row = enrichedRows.find((r) => r.id === id);
     if (!row) return;
 
-    const patch = buildPatchForResolve(row);
+    const targetDays = Math.min(1, row.stageSla);
+    const daysSaved = Math.max(0, (row.daysInStage || 0) - targetDays);
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+    const patch = {
+      turnStatus: "Monitoring",
+      blockers: ["No active blockers"],
+      blocker: "None",
+      nextAction: "Prepare for dispatch",
+      daysInStage: targetDays,
+      projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: appendCompletedStep(row, "remove_blocker"),
+    };
+
     patchRow(id, patch);
     recordActionOutcome(row, patch, "Resolve issue");
   }
@@ -940,91 +917,228 @@ export default function ControlCenterTab({
     const row = enrichedRows.find((r) => r.id === id);
     if (!row) return;
 
-    const patch = buildPatchForMarkReady(row);
+    const daysSaved = row.daysInStage || 0;
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+    const patch = {
+      turnStatus: "Ready",
+      nextAction: "Ready for execution",
+      daysInStage: 0,
+      projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: [
+        ...(row.workflowCompletedSteps || []),
+        "certify",
+        "ready_execution",
+        "hold_ecd",
+      ],
+    };
+
     patchRow(id, patch);
     recordActionOutcome(row, patch, "Mark ready");
   }
 
-  function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
-    const daysSaved = simulation.daysRecovered;
-    if (daysSaved <= 0) return;
+  function applySystemView(view) {
+    const config = view.getFilters(enrichedRows);
 
-    const existingSteps = Array.isArray(row.workflowCompletedSteps)
-      ? row.workflowCompletedSteps
-      : [];
+    setQueueFilter(config.queueFilter || "All Open Turns");
+    setSortBy(config.sortBy || "Priority");
+    setActiveSystemView(view.id);
+    setActiveSavedViewId(null);
 
-    const nextSteps = [...new Set([...existingSteps, ...selectedOptions])];
-
-    const patch = {
-      daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
-      projectedCompletion: shiftDate(row.projectedCompletion, -daysSaved),
-      workflowCompletedSteps: nextSteps,
-    };
-
-    if (selectedOptions.includes("clear_blocker")) {
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
+    if (config.customFilter) {
+      setCustomRowFilter(() => config.customFilter);
+    } else {
+      setCustomRowFilter(null);
     }
 
-    if (selectedOptions.includes("accelerate_approval")) {
-      patch.currentStage = "Dispatch";
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
-      patch.nextAction = "Confirm vendor schedule";
-    }
-
-    if (selectedOptions.includes("recover_failed_ready")) {
-      patch.currentStage = "Rent Ready Open";
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
-      patch.nextAction = "Re-inspect and confirm ready state";
-    }
-
-    if (selectedOptions.includes("resequence_vendors")) {
-      patch.nextAction = "Re-sequenced vendor plan";
-    }
-
-    if (selectedOptions.includes("switch_vendor")) {
-      patch.vendor =
-        !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
-          ? "Best-Fit Vendor"
-          : `${row.vendor} (replacement queued)`;
-      patch.nextAction = "Confirm replacement vendor schedule";
-    }
-
-    if (selectedOptions.includes("expedite_vendor")) {
-      patch.nextAction = "Expedite vendor execution";
-    }
-
-    patchRow(row.id, patch);
-    recordActionOutcome(row, patch, "Apply simulated plan");
+    touchUpdated();
   }
+
+function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
+  const daysSaved = simulation.daysRecovered;
+
+  if (daysSaved <= 0) return;
+
+  const existingSteps = Array.isArray(row.workflowCompletedSteps)
+    ? row.workflowCompletedSteps
+    : [];
+
+  const nextSteps = [...new Set([...existingSteps, ...selectedOptions])];
+
+  const patch = {
+    daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
+    projectedCompletion: shiftDate(row.projectedCompletion, -daysSaved),
+    workflowCompletedSteps: nextSteps,
+  };
+
+  if (selectedOptions.includes("clear_blocker")) {
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+  }
+
+  if (selectedOptions.includes("accelerate_approval")) {
+    patch.currentStage = "Dispatch";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Confirm vendor schedule";
+  }
+
+  if (selectedOptions.includes("recover_failed_ready")) {
+    patch.currentStage = "Rent Ready Open";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Re-inspect and confirm ready state";
+  }
+
+  if (selectedOptions.includes("resequence_vendors")) {
+    patch.nextAction = "Re-sequenced vendor plan";
+  }
+
+  if (selectedOptions.includes("switch_vendor")) {
+    patch.vendor =
+      !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
+        ? "Best-Fit Vendor"
+        : `${row.vendor} (replacement queued)`;
+    patch.nextAction = "Confirm replacement vendor schedule";
+  }
+
+  if (selectedOptions.includes("expedite_vendor")) {
+    patch.nextAction = "Expedite vendor execution";
+  }
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Apply simulated plan");
+}
 
   function handleApplyTopAction(row) {
-    const patch = buildPatchForApplyRecommendation(row, row.aiRecommendation);
-    if (!patch) return;
+    if (row.turnStatus === "Blocked") {
+      handleResolve(row.id);
+      return;
+    }
+
+    if (row.currentStage === "Failed Rent Ready") {
+      const daysSaved = Math.max(0, (row.daysInStage || 0) - 1);
+      const nextProjectedCompletion =
+        daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+      const patch = {
+        currentStage: "Rent Ready Open",
+        daysInStage: 1,
+        turnStatus: "Monitoring",
+        nextAction: "Re-inspect and confirm ready state",
+        blockers: ["No active blockers"],
+        blocker: "None",
+        projectedCompletion: nextProjectedCompletion,
+        workflowCompletedSteps: [
+          ...(row.workflowCompletedSteps || []),
+          "rework",
+          "inspect",
+        ],
+      };
+
+      patchRow(row.id, patch);
+      recordActionOutcome(row, patch, "Recover failed rent ready");
+      return;
+    }
+
+    if (row.currentStage === "Owner Approval") {
+      const daysSaved = row.daysInStage || 0;
+      const nextProjectedCompletion =
+        daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+      const patch = {
+        currentStage: "Dispatch",
+        daysInStage: 0,
+        nextAction: "Confirm vendor schedule",
+        turnStatus: "Monitoring",
+        blockers: ["No active blockers"],
+        blocker: "None",
+        projectedCompletion: nextProjectedCompletion,
+        workflowCompletedSteps: [
+          ...(row.workflowCompletedSteps || []),
+          "escalate_approval",
+          "confirm_scope",
+          "dispatch_vendor",
+        ],
+      };
+
+      patchRow(row.id, patch);
+      recordActionOutcome(row, patch, "Advance owner approval");
+      return;
+    }
+
+    const targetDays = Math.max(0, row.stageSla - 1);
+    if ((row.daysInStage || 0) <= targetDays) return;
+
+    const daysSaved = Math.max(0, (row.daysInStage || 0) - targetDays);
+    const nextProjectedCompletion =
+      daysSaved > 0 ? shiftDate(row.projectedCompletion, -daysSaved) : row.projectedCompletion;
+
+    const patch = {
+      daysInStage: targetDays,
+      turnStatus: "Monitoring",
+      nextAction: "Prepare for dispatch",
+      projectedCompletion: nextProjectedCompletion,
+      workflowCompletedSteps: [
+        ...(row.workflowCompletedSteps || []),
+        "advance_action",
+        "resequence_vendors",
+        "resume_execution",
+      ],
+    };
 
     patchRow(row.id, patch);
-    recordActionOutcome(
-      row,
-      patch,
-      row.aiRecommendation?.title || "Apply top action"
-    );
+    recordActionOutcome(row, patch, "Apply top action");
   }
+
+function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
+  const daysSaved = simulation.daysRecovered;
+
+  if (daysSaved <= 0) return;
+
+  const nextProjectedCompletion = shiftDate(
+    row.projectedCompletion,
+    -daysSaved
+  );
+
+  const patch = {
+    daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
+    projectedCompletion: nextProjectedCompletion,
+    turnStatus: "Monitoring",
+    nextAction: "Execution adjusted via simulation",
+    workflowCompletedSteps: [
+      ...(row.workflowCompletedSteps || []),
+      ...selectedOptions,
+    ],
+  };
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Apply simulated plan");
+}
 
   function handleWorkflowStep(row, step) {
     if (!step) return;
 
-    if (
-      step.action === "resolve" ||
-      step.action === "resolve_rework" ||
-      step.action === "reinspect" ||
-      step.action === "advance_approval" ||
-      step.action === "progress"
-    ) {
+    if (step.action === "resolve") {
+      handleResolve(row.id);
+      return;
+    }
+
+    if (step.action === "resolve_rework" || step.action === "reinspect") {
+      handleApplyTopAction(row);
+      return;
+    }
+
+    if (step.action === "advance_approval") {
+      handleApplyTopAction(row);
+      return;
+    }
+
+    if (step.action === "progress") {
       handleApplyTopAction(row);
       return;
     }
@@ -1096,23 +1210,6 @@ export default function ControlCenterTab({
     if (activeSavedViewId === id) setActiveSavedViewId(null);
   }
 
-  function applySystemView(view) {
-    const config = view.getFilters(enrichedRows);
-
-    setQueueFilter(config.queueFilter || "All Open Turns");
-    setSortBy(config.sortBy || "Priority");
-    setActiveSystemView(view.id);
-    setActiveSavedViewId(null);
-
-    if (config.customFilter) {
-      setCustomRowFilter(() => config.customFilter);
-    } else {
-      setCustomRowFilter(null);
-    }
-
-    touchUpdated();
-  }
-
   function resetQueueViewFull() {
     resetQueueView();
     setActiveSystemView(null);
@@ -1120,6 +1217,15 @@ export default function ControlCenterTab({
     setCustomRowFilter(null);
     touchUpdated();
   }
+
+  const isExecView = viewMode === "exec";
+
+  const execReadout = useMemo(() => {
+    const blocked = enrichedRows.filter((row) => row.turnStatus === "Blocked").length;
+    const failed = enrichedRows.filter((row) => row.currentStage === "Failed Rent Ready").length;
+    const critical = enrichedRows.filter((row) => row.priority.label === "Critical").length;
+    return { blocked, failed, critical };
+  }, [enrichedRows]);
 
   return (
     <div className="space-y-6">
@@ -1180,78 +1286,6 @@ export default function ControlCenterTab({
 
       {!isExecView ? (
         <>
-          <Card>
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <div className="text-xl font-semibold text-slate-900">AI Recommended Actions</div>
-                <div className="mt-1 text-sm text-slate-500">
-                  Highest-leverage actions based on delay risk, blocked state, and recoverable value.
-                </div>
-              </div>
-              <Pill tone="blue">AI</Pill>
-            </div>
-
-            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {topActions.slice(0, 3).map((row) => (
-                <div
-                  key={row.id}
-                  className="rounded-2xl border border-slate-200 bg-white p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <div className="font-medium text-slate-900">{row.name}</div>
-                      <div className="mt-1 text-xs text-slate-500">
-                        {row.market} • {row.currentStage}
-                      </div>
-                    </div>
-
-                    <Pill tone={row.aiRecommendation?.urgency === "High" ? "red" : "amber"}>
-                      {row.aiRecommendation?.urgency || "Review"}
-                    </Pill>
-                  </div>
-
-                  <div className="mt-3 text-sm font-medium text-slate-900">
-                    {row.aiRecommendation?.title || "Review turn"}
-                  </div>
-
-                  <div className="mt-1 text-xs text-slate-500">
-                    {row.aiRecommendation?.reason || row.priority.whyNow}
-                  </div>
-
-                  {row.aiRiskDrivers?.length ? (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {row.aiRiskDrivers.map((driver) => (
-                        <span
-                          key={driver}
-                          className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-                        >
-                          {driver}
-                        </span>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                    <span>{row.aiRecommendation?.confidence || 0}% confidence</span>
-                    <span>•</span>
-                    <span>+{row.aiRecommendation?.impactDays || 0}d</span>
-                    <span>•</span>
-                    <span>${row.aiRecommendation?.impactRevenue || 0}</span>
-                  </div>
-
-                  <div className="mt-4">
-                    <button
-                      onClick={() => handleApplyTopAction(row)}
-                      className="rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
-                    >
-                      Apply recommendation
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </Card>
-
           <Card>
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
@@ -1622,12 +1656,11 @@ export default function ControlCenterTab({
                     </div>
 
                     <div className="mt-5 overflow-x-auto rounded-2xl border border-slate-200">
-                      <table className="min-w-[1900px] w-full text-sm">
+                      <table className="min-w-[1700px] w-full text-sm">
                         <thead className="sticky top-0 z-10 bg-slate-50 text-left text-slate-500">
                           <tr>
                             <th className="w-[340px] px-4 py-3 font-medium">Turn</th>
-                            <th className="w-[160px] px-4 py-3 font-medium">Priority</th>
-                            <th className="w-[240px] px-4 py-3 font-medium">AI Recommendation</th>
+                            <th className="w-[150px] px-4 py-3 font-medium">Priority</th>
                             <th className="w-[240px] px-4 py-3 font-medium">Stage</th>
                             <th className="w-[280px] px-4 py-3 font-medium">Step</th>
                             <th className="w-[180px] px-4 py-3 font-medium">Owner</th>
@@ -1679,29 +1712,10 @@ export default function ControlCenterTab({
                                   </div>
                                 </td>
 
-                                <td className="w-[160px] px-4 py-4">
+                                <td className="w-[150px] px-4 py-4">
                                   <Pill tone={row.priority.tone}>{row.priority.label}</Pill>
                                   <div className="mt-2 text-sm text-slate-500">
-                                    AI score {row.aiPriorityScore}
-                                  </div>
-                                </td>
-
-                                <td className="w-[240px] px-4 py-4">
-                                  <div className="text-sm font-medium text-slate-900">
-                                    {row.aiRecommendation?.title || "Review turn"}
-                                  </div>
-                                  <div className="mt-1 text-xs text-slate-500">
-                                    {row.aiRecommendation?.reason || row.priority.whyNow}
-                                  </div>
-                                  <div className="mt-2 flex flex-wrap gap-1">
-                                    {(row.aiRiskDrivers || []).slice(0, 2).map((driver) => (
-                                      <span
-                                        key={driver}
-                                        className="rounded-full bg-slate-100 px-2 py-1 text-[10px] text-slate-600"
-                                      >
-                                        {driver}
-                                      </span>
-                                    ))}
+                                    Score {row.priority.score}
                                   </div>
                                 </td>
 
@@ -1829,7 +1843,7 @@ export default function ControlCenterTab({
 
                           {!workingRows.length ? (
                             <tr>
-                              <td colSpan={11} className="px-4 py-10 text-center text-sm text-slate-500">
+                              <td colSpan={10} className="px-4 py-10 text-center text-sm text-slate-500">
                                 No turns match the current filters.
                               </td>
                             </tr>
@@ -2083,13 +2097,13 @@ export default function ControlCenterTab({
       )}
 
       <TurnDetailDrawer
-        row={drawerRow}
-        onClose={() => setDrawerRow(null)}
-        onResolve={handleResolve}
-        onMarkReady={handleFlagReady}
-        onApplyAction={handleApplyTopAction}
-        onApplySimulatedPlan={handleApplySimulatedPlan}
-      />
+  row={drawerRow}
+  onClose={() => setDrawerRow(null)}
+  onResolve={handleResolve}
+  onMarkReady={handleFlagReady}
+  onApplyAction={handleApplyTopAction}
+  onApplySimulatedPlan={handleApplySimulatedPlan}
+/>
     </div>
   );
 }
