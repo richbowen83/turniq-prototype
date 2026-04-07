@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Card from "../shared/Card";
+import Pill from "../shared/Pill";
 import TurnDetailDrawer from "../control-center/TurnDetailDrawer";
 import {
   getDailyRentValue,
@@ -9,17 +11,6 @@ import {
 } from "../../utils/economics";
 import PipelineFilters from "./PipelineFilters";
 import PipelineTable from "./PipelineTable";
-
-const NEXT_ACTION_OPTIONS = [
-  "Prepare for dispatch",
-  "Resolve blocker",
-  "Recover failed rent ready",
-  "Chase owner approval",
-  "Confirm appliance ETA",
-  "Confirm vendor schedule",
-  "Pre-assign vendor",
-  "Ready for execution",
-];
 
 function getMoveOutDate(row) {
   return row.moveOutDate || row.leaseEnd || null;
@@ -78,81 +69,6 @@ function suggestVendor(row) {
   return "Preferred Vendor";
 }
 
-function getPriority(row, blocker, upcoming) {
-  if (row.priority?.label && row.priority?.tone) return row.priority;
-
-  const reasons = [];
-
-  if (row.currentStage === "Failed Rent Ready") reasons.push("Failed rent ready");
-  if (row.turnStatus === "Blocked") reasons.push("Blocked");
-  if ((row.risk || 0) >= 75) reasons.push("High risk");
-  if (upcoming) reasons.push("Upcoming");
-  if (blocker && blocker !== "None") reasons.push(blocker);
-
-  if (row.currentStage === "Failed Rent Ready" || row.turnStatus === "Blocked") {
-    return {
-      label: "Critical",
-      tone: "red",
-      score: row.risk || 80,
-      whyNow: reasons.join(" + ") || "Immediate intervention required",
-    };
-  }
-
-  if ((row.risk || 0) >= 75) {
-    return {
-      label: "High",
-      tone: "amber",
-      score: row.risk || 75,
-      whyNow: reasons.join(" + ") || "High risk turn",
-    };
-  }
-
-  return {
-    label: "Low",
-    tone: "green",
-    score: row.risk || 0,
-    whyNow: reasons.join(" + ") || "Routine monitoring",
-  };
-}
-
-function getNextAction(row, blocker, upcoming) {
-  if (row.nextAction) return row.nextAction;
-
-  const blockerText = String(blocker || "").toLowerCase();
-
-  if (upcoming && (!row.vendor || row.vendor === "TBD")) return "Pre-assign vendor";
-  if (row.turnStatus === "Blocked") return "Resolve blocker";
-  if (row.currentStage === "Failed Rent Ready") return "Recover failed rent ready";
-  if (row.currentStage === "Owner Approval") return "Chase owner approval";
-  if (blockerText.includes("appliance")) return "Confirm appliance ETA";
-  if (blockerText.includes("vendor")) return "Confirm vendor schedule";
-  if (blockerText.includes("access")) return "Resolve blocker";
-
-  return "Prepare for dispatch";
-}
-
-function getUtilityIssueStatus(row, blocker) {
-  if (row.utilityIssueStatus) return row.utilityIssueStatus;
-  return String(blocker || "").toLowerCase().includes("utility") ? "Issue" : "Clear";
-}
-
-function getRriStatus(row) {
-  if (row.rriStatus) return row.rriStatus;
-  if (row.currentStage === "Failed Rent Ready") return "Failed";
-  if (row.currentStage === "Pending RRI") return "Pending";
-  if (row.currentStage === "Rent Ready Open") return "Open";
-  if (row.turnStatus === "Ready") return "Passed";
-  return "N/A";
-}
-
-function getAccessStatus(row, upcoming, blocker) {
-  if (row.accessStatus) return row.accessStatus;
-  const blockerText = String(blocker || "").toLowerCase();
-  if (blockerText.includes("access") || blockerText.includes("lock")) return "Issue";
-  if (upcoming) return "Needs setup";
-  return "Ready";
-}
-
 function enrichPipelineRow(row) {
   const blocker = getPrimaryBlocker(row);
   const moveOutDate = getMoveOutDate(row);
@@ -160,47 +76,58 @@ function enrichPipelineRow(row) {
   const stageSla = getStageSla(row.currentStage);
   const daysInStage = row.daysInStage || 0;
   const overdue = stageSla > 0 && daysInStage > stageSla;
-  const priority = getPriority(row, blocker, upcoming);
 
   return {
     ...row,
     blocker,
     moveOutDate,
     upcoming,
-    dispatchDate:
-      row.dispatchDate ||
-      (row.currentStage === "Dispatch" ? row.projectedCompletion : null),
-    upcomingMoveOut: upcoming ? "Yes" : "No",
     stageSla,
     overdue,
     daysToMoveOut: getDaysUntil(moveOutDate),
     daysToEcd: getDaysUntil(row.projectedCompletion),
-    slaDelta: (row.daysInStage || 0) - stageSla,
     dailyRentValue: getDailyRentValue(row),
     rentSourceLabel: getRentSourceLabel(row),
-    entityName: row.entityName || row.ownerEntity || "—",
-    approvedAmount: row.approvedAmount ?? row.projectedCost ?? 0,
-    estimatedAmount: row.estimatedAmount ?? row.projectedCost ?? 0,
-    pmsLink:
-      row.pmsLink ||
-      row.systemLink ||
-      `https://pms.example/turn/${encodeURIComponent(row.id)}`,
-    priority,
-    nextAction: getNextAction(row, blocker, upcoming),
-    nextActionOptions: NEXT_ACTION_OPTIONS,
     assignedVendor: row.vendor && row.vendor !== "TBD" ? row.vendor : "",
     suggestedVendor: suggestVendor(row),
-    utilityIssueStatus: getUtilityIssueStatus(row, blocker),
-    rriStatus: getRriStatus(row),
-    accessStatus: getAccessStatus(row, upcoming, blocker),
-    impact: row.impact || {
-      daysRecovered: overdue ? Math.min(3, daysInStage - stageSla) : 0,
-      revenueRecovered: overdue
-        ? Math.min(3, daysInStage - stageSla) * getDailyRentValue(row)
-        : 0,
-      dailyRentValue: getDailyRentValue(row),
-    },
+    nextAction:
+      row.nextAction ||
+      (upcoming && (!row.vendor || row.vendor === "TBD")
+        ? "Pre-assign vendor"
+        : row.turnStatus === "Blocked"
+        ? "Resolve blocker"
+        : row.currentStage === "Owner Approval"
+        ? "Chase owner approval"
+        : row.currentStage === "Failed Rent Ready"
+        ? "Recover failed rent ready"
+        : "Prepare for dispatch"),
   };
+}
+
+function PlanningRiskCard({ label, value, subtext, tone = "slate" }) {
+  const toneClasses = {
+    slate: "border-slate-200 bg-white",
+    blue: "border-blue-200 bg-blue-50",
+    amber: "border-amber-200 bg-amber-50",
+    red: "border-red-200 bg-red-50",
+    green: "border-emerald-200 bg-emerald-50",
+  };
+
+  return (
+    <div
+      className={`rounded-2xl border p-4 ${
+        toneClasses[tone] || toneClasses.slate
+      }`}
+    >
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
+      {subtext ? (
+        <div className="mt-1 text-sm text-slate-500">{subtext}</div>
+      ) : null}
+    </div>
+  );
 }
 
 export default function PipelineTab({
@@ -228,6 +155,38 @@ export default function PipelineTab({
     [pipelineRows, drawerRowId]
   );
 
+  const planningRisks = useMemo(() => {
+    const upcomingUnassigned = upcomingRows.filter(
+      (row) => !row.vendor || row.vendor === "TBD"
+    ).length;
+
+    const blockedUpcoming = upcomingRows.filter(
+      (row) => row.turnStatus === "Blocked"
+    ).length;
+
+    const approvalUpcoming = upcomingRows.filter(
+      (row) => row.currentStage === "Owner Approval"
+    ).length;
+
+    const dueSoonUpcoming = upcomingRows.filter(
+      (row) => row.daysToMoveOut != null && row.daysToMoveOut <= 7
+    ).length;
+
+    const upcomingCoverage = upcomingRows.length
+      ? Math.round(
+          ((upcomingRows.length - upcomingUnassigned) / upcomingRows.length) * 100
+        )
+      : 100;
+
+    return {
+      upcomingUnassigned,
+      blockedUpcoming,
+      approvalUpcoming,
+      dueSoonUpcoming,
+      upcomingCoverage,
+    };
+  }, [upcomingRows]);
+
   function patchRow(id, patch) {
     updateProperty?.(id, patch);
   }
@@ -235,14 +194,6 @@ export default function PipelineTab({
   function openRow(row) {
     setSelectedPropertyId(row.id);
     setDrawerRowId(row.id);
-  }
-
-  function handleVendorChange(id, vendor) {
-    patchRow(id, { vendor: vendor?.trim() ? vendor.trim() : "TBD" });
-  }
-
-  function handleNextActionChange(id, nextAction) {
-    patchRow(id, { nextAction });
   }
 
   function handlePreAssignVendor(row) {
@@ -354,39 +305,78 @@ export default function PipelineTab({
     <div className="space-y-6">
       <PipelineFilters
         upcomingCount={upcomingRows.length}
-        upcomingUnassignedCount={
-          upcomingRows.filter((row) => !row.vendor || row.vendor === "TBD").length
-        }
-        blockedUpcomingCount={
-          upcomingRows.filter((row) => row.turnStatus === "Blocked").length
-        }
+        upcomingUnassignedCount={planningRisks.upcomingUnassigned}
+        blockedUpcomingCount={planningRisks.blockedUpcoming}
         activeCount={activeRows.length}
-        selectedHint="Click any blue address to open the full turn drawer and act from there."
       />
+
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-2xl font-semibold text-slate-900">
+              Upcoming Planning Risks
+            </div>
+            <div className="mt-1 text-sm text-slate-500">
+              A compact planning readout for what needs attention before turns
+              enter full execution.
+            </div>
+          </div>
+
+          <Pill tone="blue">Planning</Pill>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <PlanningRiskCard
+            label="Upcoming Unassigned"
+            value={planningRisks.upcomingUnassigned}
+            subtext="Needs vendor assignment"
+            tone={
+              planningRisks.upcomingUnassigned > 0 ? "amber" : "green"
+            }
+          />
+          <PlanningRiskCard
+            label="Blocked Upcoming"
+            value={planningRisks.blockedUpcoming}
+            subtext="Blocked before execution"
+            tone={planningRisks.blockedUpcoming > 0 ? "red" : "green"}
+          />
+          <PlanningRiskCard
+            label="Approval Upcoming"
+            value={planningRisks.approvalUpcoming}
+            subtext="Owner action still pending"
+            tone={planningRisks.approvalUpcoming > 0 ? "blue" : "green"}
+          />
+          <PlanningRiskCard
+            label="Move-Out ≤ 7 Days"
+            value={planningRisks.dueSoonUpcoming}
+            subtext={`${planningRisks.upcomingCoverage}% upcoming coverage`}
+            tone={
+              planningRisks.dueSoonUpcoming > 0 &&
+              planningRisks.upcomingCoverage < 100
+                ? "amber"
+                : "slate"
+            }
+          />
+        </div>
+      </Card>
 
       <PipelineTable
         title="Upcoming Turns"
-        subtitle="Planning lane: turns with a Move Out Date inside the next 21 days, not Ready, and not Failed Rent Ready."
+        subtitle="Planning lane: turns inside the next 21 days to move-out."
         rows={upcomingRows}
         selectedPropertyId={selectedPropertyId}
         openRow={openRow}
         onPreAssignVendor={handlePreAssignVendor}
-        onVendorChange={handleVendorChange}
-        onNextActionChange={handleNextActionChange}
-        updateProperty={updateProperty}
         moveOutOfUpcoming={moveOutOfUpcoming}
         variant="upcoming"
       />
 
       <PipelineTable
         title="Active Turns"
-        subtitle="Execution lane: all remaining in-flight turns outside the upcoming planning window."
+        subtitle="Execution lane: in-flight turns outside the upcoming planning window."
         rows={activeRows}
         selectedPropertyId={selectedPropertyId}
         openRow={openRow}
-        onVendorChange={handleVendorChange}
-        onNextActionChange={handleNextActionChange}
-        updateProperty={updateProperty}
         moveToUpcoming={moveToUpcoming}
         variant="active"
       />

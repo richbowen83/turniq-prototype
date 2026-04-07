@@ -249,6 +249,63 @@ function getUrgencyTone(urgency) {
   return "slate";
 }
 
+function getReadinessTone(value) {
+  const text = String(value || "").toLowerCase();
+
+  if (
+    text.includes("issue") ||
+    text.includes("failed") ||
+    text.includes("blocked") ||
+    text.includes("delay")
+  ) {
+    return "red";
+  }
+
+  if (
+    text.includes("needs") ||
+    text.includes("pending") ||
+    text.includes("notice") ||
+    text.includes("setup")
+  ) {
+    return "amber";
+  }
+
+  if (
+    text.includes("clear") ||
+    text.includes("ready") ||
+    text.includes("passed") ||
+    text.includes("vacant")
+  ) {
+    return "green";
+  }
+
+  return "slate";
+}
+
+function getOccupancyStatus(row) {
+  if (!row) return "Unknown";
+
+  return (
+    row.currentOccupancyStatus ||
+    row.occupancyStatus ||
+    row.occupancy ||
+    row.currentOccupancy ||
+    "Unknown"
+  );
+}
+
+function getMaterialsStatus(row) {
+  if (!row) return "Unknown";
+  if (row.materialsStatus) return row.materialsStatus;
+  if (row.applianceStatus) return row.applianceStatus;
+
+  const blockerText = String(row.blocker || "").toLowerCase();
+  if (blockerText.includes("appliance")) return "Delayed";
+  if (blockerText.includes("material")) return "Issue";
+
+  return "Clear";
+}
+
 export default function TurnDetailDrawer({
   row,
   onClose,
@@ -325,6 +382,12 @@ export default function TurnDetailDrawer({
   const aiUrgency = aiRecommendation?.urgency || "Review";
 
   if (!row) return null;
+
+  const occupancyStatus = getOccupancyStatus(row);
+  const utilityStatus = row.utilityIssueStatus || "Unknown";
+  const accessStatus = row.accessStatus || "Unknown";
+  const rriStatus = row.rriStatus || "N/A";
+  const materialsStatus = getMaterialsStatus(row);
 
   function toggleOption(optionId) {
     setSelectedOptions((prev) =>
@@ -532,6 +595,60 @@ export default function TurnDetailDrawer({
               <div className="text-xs text-slate-500">Projected Completion</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
                 {formatShortDate(row.projectedCompletion)}
+              </div>
+            </div>
+          </div>
+        </Card>
+
+        <Card className="mt-6">
+          <div className="text-sm font-medium text-slate-900">Operational Readiness</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Readiness checks and execution dependencies surfaced here instead of the pipeline table
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Current Occupancy Status (Today)</div>
+              <div className="mt-2">
+                <Pill tone={getReadinessTone(occupancyStatus)}>{occupancyStatus}</Pill>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Utility Issue</div>
+              <div className="mt-2">
+                <Pill tone={getReadinessTone(utilityStatus)}>{utilityStatus}</Pill>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Access Status</div>
+              <div className="mt-2">
+                <Pill tone={getReadinessTone(accessStatus)}>{accessStatus}</Pill>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">RRI Status</div>
+              <div className="mt-2">
+                <Pill tone={getReadinessTone(rriStatus)}>{rriStatus}</Pill>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Materials / Appliance Status</div>
+              <div className="mt-2">
+                <Pill tone={getReadinessTone(materialsStatus)}>{materialsStatus}</Pill>
+              </div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Primary Blocker</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.blocker || "None"}
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                {row.nextAction || "No action set"}
               </div>
             </div>
           </div>
