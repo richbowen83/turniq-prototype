@@ -6,6 +6,7 @@ import AppHeader from "../components/layout/AppHeader";
 import GlobalKpiStrip from "../components/layout/GlobalKpiStrip";
 import TabNav from "../components/layout/TabNav";
 import ControlCenterTab from "../components/control-center/ControlCenterTab";
+import OverviewTab from "../components/overview/OverviewTab";
 import PipelineTab from "../components/pipeline/PipelineTab";
 import AnalyticsTab from "../components/analytics/AnalyticsTab";
 import ForecastTab from "../components/forecast/ForecastTab";
@@ -206,6 +207,7 @@ const INITIAL_ACTIVITY = {
 const INITIAL_ACTION_HISTORY = [];
 
 const TABS = [
+  "Overview",
   "Control Center",
   "Pipeline",
   "Forecast",
@@ -258,7 +260,7 @@ function getStageFlow(properties) {
 }
 
 export default function Page() {
-  const [activeTab, setActiveTab] = useState("Control Center");
+  const [activeTab, setActiveTab] = useState("Overview");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
   const [selectedPropertyId, setSelectedPropertyId] = useState("p1");
   const [forecastUndoStack, setForecastUndoStack] = useState([]);
@@ -749,9 +751,9 @@ export default function Page() {
             markets={markets}
           />
 
-          <div className="mt-1 text-sm text-slate-500">
-            TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
-          </div>
+         <div className="mt-1 text-sm text-slate-500">
+  TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
+</div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
@@ -777,6 +779,12 @@ export default function Page() {
                   </button>
                 ))}
               </div>
+
+<div className="mt-1 text-xs text-slate-500">
+  {audienceMode === "operator"
+    ? "Execution performance across stages"
+    : "Portfolio outcomes and operating efficiency"}
+</div>
             </div>
 
             {lastImportTimestamp ? (
@@ -840,7 +848,8 @@ export default function Page() {
       </div>
 
       <div className="mx-auto max-w-7xl px-6 py-4">
-        {activeTab === "Control Center" && (
+        {activeTab === "Overview" && <OverviewTab />}
+{activeTab === "Control Center" && (
           <ControlCenterTab
             mode={audienceMode}
             rows={queueRows}

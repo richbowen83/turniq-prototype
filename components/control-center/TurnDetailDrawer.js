@@ -414,11 +414,14 @@ export default function TurnDetailDrawer({
       <div className="w-[720px] overflow-y-auto bg-white p-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
-            <div className="mt-1 text-sm text-slate-500">
-              {row.market} • {row.portfolioName || "Portfolio not set"}
-            </div>
-          </div>
+  <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
+  <div className="mt-1 text-sm text-slate-500">
+    {row.market} • {row.portfolioName || "Portfolio not set"}
+  </div>
+  <div className="mt-1 text-xs text-slate-500">
+    Turn detail: context, readiness, and recovery options
+  </div>
+</div>
 
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             ✕
