@@ -287,19 +287,25 @@ export default function PipelineTab({
   }
 
   function handleApplySimulatedPlan({ row, simulation }) {
-    if (!simulation || simulation.daysRecovered <= 0) return;
+  if (!simulation || simulation.daysRecovered <= 0) return;
 
-    const nextDaysInStage = Math.max(
-      0,
-      (row.daysInStage || 0) - simulation.daysRecovered
-    );
+  const nextDaysInStage = Math.max(
+    0,
+    (row.daysInStage || 0) - simulation.daysRecovered
+  );
 
-    patchRow(row.id, {
-      daysInStage: nextDaysInStage,
-      projectedCompletion: simulation.simulatedCompletion,
-      nextAction: "Execution adjusted via simulation",
-    });
+  const patch = {
+    daysInStage: nextDaysInStage,
+    projectedCompletion: simulation.simulatedCompletion,
+    nextAction: row.nextAction || "Execution adjusted via simulation",
+  };
+
+  if (row.vendor) {
+    patch.vendor = row.vendor;
   }
+
+  patchRow(row.id, patch);
+}
 
   return (
     <div className="space-y-6">

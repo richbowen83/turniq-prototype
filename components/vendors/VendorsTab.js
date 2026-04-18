@@ -7,7 +7,10 @@ import ProgressBar from "../shared/ProgressBar";
 
 const VENDOR_PROFILE = {
   FloorCo: {
-    score: 92,
+    quality: 92,
+    speed: 88,
+    reliability: 91,
+    cost: 74,
     onTimeRate: 94,
     qualityRate: 91,
     avgBidVariance: 6,
@@ -17,9 +20,15 @@ const VENDOR_PROFILE = {
     strengths: ["Flooring quality", "Fast dispatch", "Low rework"],
     concerns: ["Weekend availability limited"],
     contracts: "Preferred",
+    recommendationCount: 7,
+    selectedCount: 5,
+    trades: ["Flooring", "Paint", "General", "Flooring + Paint"],
   },
   "ABC Paint": {
-    score: 88,
+    quality: 90,
+    speed: 89,
+    reliability: 88,
+    cost: 81,
     onTimeRate: 89,
     qualityRate: 90,
     avgBidVariance: 4,
@@ -29,9 +38,15 @@ const VENDOR_PROFILE = {
     strengths: ["Paint turnaround", "Low cost rank", "Strong SLA compliance"],
     concerns: ["Appliance coordination dependency"],
     contracts: "Preferred",
+    recommendationCount: 6,
+    selectedCount: 4,
+    trades: ["Paint", "Patch", "Paint + Patch", "General"],
   },
   Sparkle: {
-    score: 91,
+    quality: 87,
+    speed: 95,
+    reliability: 93,
+    cost: 85,
     onTimeRate: 96,
     qualityRate: 87,
     avgBidVariance: 3,
@@ -41,9 +56,15 @@ const VENDOR_PROFILE = {
     strengths: ["Fast cleans", "Flexible capacity", "Low cancellation rate"],
     concerns: ["Limited heavy-turn capability"],
     contracts: "Approved",
+    recommendationCount: 8,
+    selectedCount: 7,
+    trades: ["Deep Clean", "Cleaning", "General"],
   },
   CoolAir: {
-    score: 79,
+    quality: 84,
+    speed: 76,
+    reliability: 82,
+    cost: 70,
     onTimeRate: 82,
     qualityRate: 84,
     avgBidVariance: 8,
@@ -53,9 +74,15 @@ const VENDOR_PROFILE = {
     strengths: ["HVAC specialty", "Complex turn coverage"],
     concerns: ["Approval lag impact", "Higher cost variability"],
     contracts: "Approved",
+    recommendationCount: 3,
+    selectedCount: 2,
+    trades: ["HVAC", "General", "Heavy Turn Review"],
   },
   "Prime Paint": {
-    score: 83,
+    quality: 86,
+    speed: 84,
+    reliability: 85,
+    cost: 75,
     onTimeRate: 85,
     qualityRate: 86,
     avgBidVariance: 7,
@@ -65,13 +92,97 @@ const VENDOR_PROFILE = {
     strengths: ["Trade coordination", "Paint + flooring overlap"],
     concerns: ["Moderate rework rate"],
     contracts: "Approved",
+    recommendationCount: 4,
+    selectedCount: 3,
+    trades: ["Paint", "Flooring", "Paint + Flooring", "General"],
+  },
+  "Desert Turn Co": {
+    quality: 89,
+    speed: 87,
+    reliability: 88,
+    cost: 73,
+    onTimeRate: 91,
+    qualityRate: 89,
+    avgBidVariance: 5,
+    avgCycleDays: 4.1,
+    capacityUtilization: 69,
+    preferredMarkets: ["Phoenix"],
+    strengths: ["Balanced scorecard", "Strong heavy-turn coverage", "Good turnaround"],
+    concerns: ["Smaller historical sample"],
+    contracts: "Approved",
+    recommendationCount: 5,
+    selectedCount: 3,
+    trades: ["General", "Paint", "Flooring", "Heavy Turn Review"],
+  },
+  "Lone Star Repairs": {
+    quality: 88,
+    speed: 86,
+    reliability: 87,
+    cost: 76,
+    onTimeRate: 90,
+    qualityRate: 88,
+    avgBidVariance: 5,
+    avgCycleDays: 4.2,
+    capacityUtilization: 72,
+    preferredMarkets: ["Dallas"],
+    strengths: ["Balanced Dallas coverage", "Good trade overlap handling"],
+    concerns: ["Less premium finish quality than top peer"],
+    contracts: "Approved",
+    recommendationCount: 4,
+    selectedCount: 2,
+    trades: ["General", "Flooring + Paint", "Paint", "Flooring"],
+  },
+  "Peach State Services": {
+    quality: 85,
+    speed: 83,
+    reliability: 84,
+    cost: 80,
+    onTimeRate: 87,
+    qualityRate: 85,
+    avgBidVariance: 4,
+    avgCycleDays: 4.0,
+    capacityUtilization: 68,
+    preferredMarkets: ["Atlanta"],
+    strengths: ["Consistent paint work", "Low variance", "Useful overflow capacity"],
+    concerns: ["Lower speed than top Atlanta option"],
+    contracts: "Approved",
+    recommendationCount: 3,
+    selectedCount: 2,
+    trades: ["General", "Paint + Patch", "Paint"],
+  },
+  "Music City Maintenance": {
+    quality: 84,
+    speed: 82,
+    reliability: 85,
+    cost: 79,
+    onTimeRate: 86,
+    qualityRate: 84,
+    avgBidVariance: 5,
+    avgCycleDays: 4.3,
+    capacityUtilization: 66,
+    preferredMarkets: ["Nashville"],
+    strengths: ["Flexible Nashville coverage", "Good cleaning + cosmetic mix"],
+    concerns: ["Lower premium trade specialization"],
+    contracts: "Approved",
+    recommendationCount: 3,
+    selectedCount: 2,
+    trades: ["General", "Deep Clean", "Paint"],
   },
 };
 
+function getOverallScore(profile) {
+  return Math.round(
+    profile.quality * 0.35 +
+      profile.speed * 0.3 +
+      profile.reliability * 0.2 +
+      profile.cost * 0.15
+  );
+}
+
 function getToneFromScore(score) {
   if (score >= 90) return "emerald";
-  if (score >= 80) return "blue";
-  if (score >= 70) return "amber";
+  if (score >= 82) return "blue";
+  if (score >= 72) return "amber";
   return "red";
 }
 
@@ -85,6 +196,22 @@ function getCapacityLabel(utilization) {
   if (utilization >= 85) return "Capacity Risk";
   if (utilization >= 70) return "Watch";
   return "Healthy";
+}
+
+function getActionLabel(row) {
+  if (row.jobs === 0) return "Available";
+  if (row.capacityUtilization >= 85) return "Restrict";
+  if (row.overall >= 90 && row.onTimeRate >= 92) return "Expand";
+  if (row.overall >= 82) return "Monitor";
+  return "Limit";
+}
+
+function getActionTone(action) {
+  if (action === "Expand") return "emerald";
+  if (action === "Available") return "blue";
+  if (action === "Monitor") return "amber";
+  if (action === "Restrict" || action === "Limit") return "red";
+  return "slate";
 }
 
 function getVendorStatus(row) {
@@ -130,82 +257,90 @@ function buildVendorRows(properties) {
     }
   });
 
-  return Object.values(grouped)
-    .map((row) => {
-      const profile = VENDOR_PROFILE[row.vendor] || {
-        score: 80,
-        onTimeRate: 85,
-        qualityRate: 85,
-        avgBidVariance: 6,
-        avgCycleDays: 4.5,
-        capacityUtilization: 70,
-        preferredMarkets: [],
-        strengths: ["General coverage"],
-        concerns: ["Needs more performance history"],
-        contracts: "Approved",
+  return Object.entries(VENDOR_PROFILE)
+    .map(([vendor, profile]) => {
+      const groupedRow = grouped[vendor] || {
+        vendor,
+        jobs: 0,
+        markets: new Set(profile.preferredMarkets || []),
+        totalRisk: 0,
+        highRiskJobs: 0,
+        blockedJobs: 0,
+        ecdThisWeek: 0,
       };
 
+      const overall = getOverallScore(profile);
+
       const merged = {
-        vendor: row.vendor,
-        jobs: row.jobs,
-        markets: Array.from(row.markets),
-        avgRisk: Math.round(row.totalRisk / row.jobs),
-        highRiskJobs: row.highRiskJobs,
-        blockedJobs: row.blockedJobs,
-        ecdThisWeek: row.ecdThisWeek,
+        vendor,
+        jobs: groupedRow.jobs,
+        markets:
+          groupedRow.jobs > 0
+            ? Array.from(groupedRow.markets)
+            : profile.preferredMarkets || [],
+        avgRisk:
+          groupedRow.jobs > 0
+            ? Math.round(groupedRow.totalRisk / groupedRow.jobs)
+            : null,
+        highRiskJobs: groupedRow.highRiskJobs,
+        blockedJobs: groupedRow.blockedJobs,
+        ecdThisWeek: groupedRow.ecdThisWeek,
+        overall,
         ...profile,
       };
 
       return {
         ...merged,
         status: getVendorStatus(merged),
+        actionLabel: getActionLabel(merged),
       };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      if (b.jobs !== a.jobs) return b.jobs - a.jobs;
+      return b.overall - a.overall;
+    });
 }
 
-function buildVendorInsights(rows) {
-  const insights = [];
+function buildBestVendorByMarket(rows) {
+  const bestByMarket = {};
 
   rows.forEach((row) => {
-    if (row.capacityUtilization >= 85) {
-      insights.push({
-        vendor: row.vendor,
-        tone: "red",
-        title: "Capacity pressure",
-        text: `${row.vendor} is running at ${row.capacityUtilization}% utilization and may struggle to absorb more work without ECD risk.`,
-      });
-    }
-
-    if (row.highRiskJobs >= 1) {
-      insights.push({
-        vendor: row.vendor,
-        tone: "amber",
-        title: "Risk concentration",
-        text: `${row.vendor} currently has ${row.highRiskJobs} high-risk turn${row.highRiskJobs > 1 ? "s" : ""} in flight.`,
-      });
-    }
-
-    if (row.score >= 90 && row.onTimeRate >= 94) {
-      insights.push({
-        vendor: row.vendor,
-        tone: "emerald",
-        title: "Expansion candidate",
-        text: `${row.vendor} is outperforming peers on scorecard and on-time delivery. Consider expanding share in ${row.markets.join(", ")}.`,
-      });
-    }
+    row.markets.forEach((market) => {
+      if (!bestByMarket[market] || row.overall > bestByMarket[market].overall) {
+        bestByMarket[market] = row;
+      }
+    });
   });
 
-  return insights.slice(0, 6);
+  return Object.entries(bestByMarket)
+    .map(([market, row]) => ({
+      market,
+      vendor: row.vendor,
+      overall: row.overall,
+      actionLabel: row.actionLabel,
+    }))
+    .sort((a, b) => b.overall - a.overall);
+}
+
+function displayJobs(value) {
+  return value > 0 ? value : <span className="text-slate-400">0</span>;
+}
+
+function displayRisk(value) {
+  return value != null ? value : <span className="text-slate-400">—</span>;
+}
+
+function displayCount(value) {
+  return value ? value : <span className="text-slate-400">0</span>;
 }
 
 export default function VendorsTab({ properties }) {
   const vendorRows = useMemo(() => buildVendorRows(properties), [properties]);
-  const insights = useMemo(() => buildVendorInsights(vendorRows), [vendorRows]);
+  const bestByMarket = useMemo(() => buildBestVendorByMarket(vendorRows), [vendorRows]);
 
   const [selectedVendor, setSelectedVendor] = useState(vendorRows[0]?.vendor || "");
   const [vendorFilter, setVendorFilter] = useState("All Vendors");
-  const [sortBy, setSortBy] = useState("Score");
+  const [sortBy, setSortBy] = useState("Overall");
 
   const filteredVendorRows = useMemo(() => {
     let rows = [...vendorRows];
@@ -219,18 +354,23 @@ export default function VendorsTab({ properties }) {
     if (vendorFilter === "High Risk Exposure") {
       rows = rows.filter((row) => row.highRiskJobs > 0);
     }
-    if (vendorFilter === "Covered Markets") {
-      rows = rows.filter((row) => row.markets.length > 0);
+    if (vendorFilter === "Expand Candidates") {
+      rows = rows.filter((row) => row.actionLabel === "Expand");
+    }
+    if (vendorFilter === "Bench Vendors") {
+      rows = rows.filter((row) => row.jobs === 0);
     }
 
-    if (sortBy === "Score") {
-      rows.sort((a, b) => b.score - a.score);
+    if (sortBy === "Overall") {
+      rows.sort((a, b) => b.overall - a.overall);
     } else if (sortBy === "Capacity") {
       rows.sort((a, b) => b.capacityUtilization - a.capacityUtilization);
     } else if (sortBy === "On-Time") {
       rows.sort((a, b) => b.onTimeRate - a.onTimeRate);
     } else if (sortBy === "Risk") {
-      rows.sort((a, b) => b.avgRisk - a.avgRisk);
+      rows.sort((a, b) => (b.avgRisk ?? -1) - (a.avgRisk ?? -1));
+    } else if (sortBy === "Recommendation Count") {
+      rows.sort((a, b) => b.recommendationCount - a.recommendationCount);
     }
 
     return rows;
@@ -238,7 +378,6 @@ export default function VendorsTab({ properties }) {
 
   useEffect(() => {
     if (!filteredVendorRows.length) return;
-
     const stillVisible = filteredVendorRows.find((row) => row.vendor === selectedVendor);
     if (!stillVisible) {
       setSelectedVendor(filteredVendorRows[0].vendor);
@@ -254,93 +393,80 @@ export default function VendorsTab({ properties }) {
   const summary = useMemo(() => {
     const activeVendors = vendorRows.length;
     const avgScore = activeVendors
-      ? Math.round(vendorRows.reduce((sum, row) => sum + row.score, 0) / activeVendors)
+      ? Math.round(vendorRows.reduce((sum, row) => sum + row.overall, 0) / activeVendors)
       : 0;
     const avgOnTime = activeVendors
       ? Math.round(vendorRows.reduce((sum, row) => sum + row.onTimeRate, 0) / activeVendors)
       : 0;
     const atRiskCapacity = vendorRows.filter((row) => row.capacityUtilization >= 85).length;
-    const coveredMarkets = new Set(vendorRows.flatMap((row) => row.markets)).size;
-    const preferredVendors = vendorRows.filter((row) => row.status === "Preferred").length;
+    const benchVendors = vendorRows.filter((row) => row.jobs === 0).length;
+    const expandCandidates = vendorRows.filter((row) => row.actionLabel === "Expand").length;
 
     return {
       activeVendors,
       avgScore,
       avgOnTime,
       atRiskCapacity,
-      coveredMarkets,
-      preferredVendors,
+      benchVendors,
+      expandCandidates,
     };
   }, [vendorRows]);
 
   if (!selectedVendorRow) {
-    return (
-      <div className="text-sm text-slate-500">
-        No vendor data available for this market selection.
-      </div>
-    );
+    return <div className="text-sm text-slate-500">No vendor data available.</div>;
   }
+
+  const topCapacityRows = filteredVendorRows.slice(0, 4);
+  const topMarketRows = bestByMarket.slice(0, 4);
 
   return (
     <div className="space-y-6">
       <div>
         <div className="text-3xl font-semibold text-slate-900">Vendors</div>
         <div className="mt-1 text-sm text-slate-500">
-          Enterprise vendor scorecards, capacity monitoring, and market-level sourcing insights.
+          Allocation, scorecards, capacity monitoring, and sourcing decisions across the vendor network.
         </div>
       </div>
 
-      {/* SUMMARY KPI CARDS */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
         <button onClick={() => setVendorFilter("All Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
             <div className="text-xs uppercase tracking-wide text-slate-500">Active Vendors</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {summary.activeVendors}
-            </div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.activeVendors}</div>
           </Card>
         </button>
 
-        <button onClick={() => setVendorFilter("Preferred Vendors")} className="text-left">
+        <button onClick={() => setVendorFilter("All Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Avg Scorecard</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {summary.avgScore}
-            </div>
-            <div className="mt-2 text-sm text-slate-500">click to review preferred vendors</div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Avg Vendor Score</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgScore}</div>
           </Card>
         </button>
 
         <button onClick={() => setVendorFilter("All Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
             <div className="text-xs uppercase tracking-wide text-slate-500">Avg On-Time %</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {summary.avgOnTime}%
-            </div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.avgOnTime}%</div>
           </Card>
         </button>
 
         <button onClick={() => setVendorFilter("Capacity Risk Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
             <div className="text-xs uppercase tracking-wide text-slate-500">Capacity Risk Vendors</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {summary.atRiskCapacity}
-            </div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.atRiskCapacity}</div>
             <div className="mt-2 text-sm text-slate-500">click to filter risk vendors</div>
           </Card>
         </button>
 
-        <button onClick={() => setVendorFilter("Covered Markets")} className="text-left">
+        <button onClick={() => setVendorFilter("Bench Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Covered Markets</div>
-            <div className="mt-2 text-3xl font-semibold text-slate-900">
-              {summary.coveredMarkets}
-            </div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Bench Vendors</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.benchVendors}</div>
+            <div className="mt-2 text-sm text-slate-500">available capacity not yet in flight</div>
           </Card>
         </button>
       </div>
 
-      {/* CONTROLS */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="text-sm font-medium text-slate-700">Filter:</div>
         <div className="rounded-xl bg-slate-100 px-3 py-2 text-sm">{vendorFilter}</div>
@@ -359,38 +485,45 @@ export default function VendorsTab({ properties }) {
             onChange={(e) => setSortBy(e.target.value)}
             className="rounded-xl border border-slate-200 px-3 py-2 text-sm"
           >
-            <option>Score</option>
+            <option>Overall</option>
             <option>Capacity</option>
             <option>On-Time</option>
             <option>Risk</option>
+            <option>Recommendation Count</option>
           </select>
         </div>
       </div>
 
-      {/* ROW 1 */}
       <div className="grid gap-6 xl:grid-cols-12">
-        {/* SCORECARD TABLE */}
-        <div className="xl:col-span-8">
+        <div className="xl:col-span-7">
           <Card className="h-full">
-            <div className="mb-4">
-              <div className="text-xl font-semibold text-slate-900">Vendor Scorecard</div>
-              <div className="mt-1 text-sm text-slate-500">
-                Compare performance, risk, timing, and capacity by vendor.
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">Vendor Allocation Scorecard</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Compare vendor performance, recommendation frequency, and allocation action.
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Pill tone="slate">{filteredVendorRows.length} vendors</Pill>
+                <Pill tone="blue">{summary.expandCandidates} expand</Pill>
               </div>
             </div>
 
-            <div className="overflow-x-auto">
+            <div className="max-h-[540px] overflow-auto">
               <table className="min-w-full text-sm">
-                <thead>
+                <thead className="sticky top-0 z-10 bg-white">
                   <tr className="border-b border-slate-100 text-left text-slate-500">
                     <th className="px-3 py-2 font-medium">Vendor</th>
                     <th className="px-3 py-2 font-medium">Markets</th>
                     <th className="px-3 py-2 font-medium">Jobs</th>
-                    <th className="px-3 py-2 font-medium">Score</th>
+                    <th className="px-3 py-2 font-medium">Overall</th>
                     <th className="px-3 py-2 font-medium">On-Time</th>
-                    <th className="px-3 py-2 font-medium">Avg Risk</th>
+                    <th className="px-3 py-2 font-medium">Risk</th>
+                    <th className="px-3 py-2 font-medium">Recommended</th>
                     <th className="px-3 py-2 font-medium">Capacity</th>
                     <th className="px-3 py-2 font-medium">Action</th>
+                    <th className="px-3 py-2 font-medium">Open</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -406,13 +539,14 @@ export default function VendorsTab({ properties }) {
                       >
                         <td className="px-3 py-3 font-medium text-slate-900">{row.vendor}</td>
                         <td className="px-3 py-3 text-slate-600">{row.markets.join(", ")}</td>
-                        <td className="px-3 py-3">{row.jobs}</td>
+                        <td className="px-3 py-3">{displayJobs(row.jobs)}</td>
                         <td className="px-3 py-3">
-                          <Pill tone={getToneFromScore(row.score)}>{row.score}</Pill>
+                          <Pill tone={getToneFromScore(row.overall)}>{row.overall}</Pill>
                         </td>
                         <td className="px-3 py-3">{row.onTimeRate}%</td>
-                        <td className="px-3 py-3">{row.avgRisk}</td>
-                        <td className="min-w-[170px] px-3 py-3">
+                        <td className="px-3 py-3">{displayRisk(row.avgRisk)}</td>
+                        <td className="px-3 py-3">{displayCount(row.recommendationCount)}</td>
+                        <td className="min-w-[200px] px-3 py-3">
                           <div className="space-y-2">
                             <ProgressBar
                               value={row.capacityUtilization}
@@ -422,6 +556,9 @@ export default function VendorsTab({ properties }) {
                               {row.capacityUtilization}% • {getCapacityLabel(row.capacityUtilization)}
                             </div>
                           </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <Pill tone={getActionTone(row.actionLabel)}>{row.actionLabel}</Pill>
                         </td>
                         <td className="px-3 py-3">
                           <button
@@ -444,162 +581,204 @@ export default function VendorsTab({ properties }) {
           </Card>
         </div>
 
-        {/* VENDOR DETAIL */}
-        <div className="space-y-6 xl:col-span-4">
-          <Card>
-            <div className="text-xl font-semibold text-slate-900">{selectedVendorRow.vendor}</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Detailed performance and operating profile
+        <div className="xl:col-span-5">
+          <Card className="h-full">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xl font-semibold text-slate-900">{selectedVendorRow.vendor}</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Detailed performance, allocation signal, and sourcing profile
+                </div>
+              </div>
+              <Pill tone={getActionTone(selectedVendorRow.actionLabel)}>
+                {selectedVendorRow.actionLabel}
+              </Pill>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <Pill tone={getToneFromScore(selectedVendorRow.score)}>
-                Score {selectedVendorRow.score}
+              <Pill tone={getToneFromScore(selectedVendorRow.overall)}>
+                Score {selectedVendorRow.overall}
               </Pill>
               <Pill tone={getVendorStatusTone(selectedVendorRow.status)}>
                 {selectedVendorRow.status}
               </Pill>
-              <Pill tone={getCapacityTone(selectedVendorRow.capacityUtilization)}>
-                {getCapacityLabel(selectedVendorRow.capacityUtilization)}
+              <Pill tone="slate">
+                {selectedVendorRow.jobs > 0 ? `${selectedVendorRow.jobs} active` : "Bench vendor"}
               </Pill>
             </div>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border border-slate-200 p-3">
                 <div className="text-xs uppercase tracking-wide text-slate-500">On-Time Rate</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">
-                  {selectedVendorRow.onTimeRate}%
-                </div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedVendorRow.onTimeRate}%</div>
               </div>
 
               <div className="rounded-xl border border-slate-200 p-3">
                 <div className="text-xs uppercase tracking-wide text-slate-500">Quality Rate</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">
-                  {selectedVendorRow.qualityRate}%
-                </div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedVendorRow.qualityRate}%</div>
               </div>
 
               <div className="rounded-xl border border-slate-200 p-3">
                 <div className="text-xs uppercase tracking-wide text-slate-500">Avg Cycle Days</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">
-                  {selectedVendorRow.avgCycleDays}
-                </div>
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedVendorRow.avgCycleDays}</div>
               </div>
 
               <div className="rounded-xl border border-slate-200 p-3">
                 <div className="text-xs uppercase tracking-wide text-slate-500">Bid Variance</div>
-                <div className="mt-1 text-2xl font-semibold text-slate-900">
-                  {selectedVendorRow.avgBidVariance}%
+                <div className="mt-1 text-2xl font-semibold text-slate-900">{selectedVendorRow.avgBidVariance}%</div>
+              </div>
+            </div>
+
+            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">Preferred Markets</div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedVendorRow.preferredMarkets.map((market) => (
+                    <Pill key={market} tone="blue">
+                      {market}
+                    </Pill>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">Primary Trades</div>
+                <div className="flex flex-wrap gap-2">
+                  {selectedVendorRow.trades.map((trade) => (
+                    <Pill key={trade} tone="slate">
+                      {trade}
+                    </Pill>
+                  ))}
                 </div>
               </div>
             </div>
 
-            <div className="mt-5">
-              <div className="mb-2 text-sm font-semibold text-slate-900">Preferred Markets</div>
-              <div className="flex flex-wrap gap-2">
-                {selectedVendorRow.preferredMarkets.map((market) => (
-                  <Pill key={market} tone="blue">
-                    {market}
-                  </Pill>
-                ))}
+            <div className="mt-5 grid gap-5 lg:grid-cols-2">
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">Strengths</div>
+                <div className="space-y-2">
+                  {selectedVendorRow.strengths.map((item) => (
+                    <div
+                      key={item}
+                      className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
+                    >
+                      {item}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="mb-2 text-sm font-semibold text-slate-900">Concerns</div>
+                <div className="space-y-2">
+                  {selectedVendorRow.concerns.map((item) => (
+                    <div
+                      key={item}
+                      className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
+                    >
+                      {item}
+                    </div>
+                  ))}
+                </div>
               </div>
             </div>
 
-            <div className="mt-5">
-              <div className="mb-2 text-sm font-semibold text-slate-900">Strengths</div>
-              <div className="space-y-2">
-                {selectedVendorRow.strengths.map((item) => (
-                  <div
-                    key={item}
-                    className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700"
-                  >
-                    {item}
-                  </div>
-                ))}
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Recommendation Fit</div>
+                <div className="mt-2 text-sm text-slate-700">
+                  Recommended {selectedVendorRow.recommendationCount} times and selected {selectedVendorRow.selectedCount} times.
+                </div>
               </div>
-            </div>
 
-            <div className="mt-5">
-              <div className="mb-2 text-sm font-semibold text-slate-900">Concerns</div>
-              <div className="space-y-2">
-                {selectedVendorRow.concerns.map((item) => (
-                  <div
-                    key={item}
-                    className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800"
-                  >
-                    {item}
-                  </div>
-                ))}
+              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div className="text-xs uppercase tracking-wide text-slate-500">Suggested Move</div>
+                <div className="mt-2 text-sm text-slate-700">
+                  {selectedVendorRow.actionLabel === "Expand"
+                    ? `Increase share in ${selectedVendorRow.markets.join(", ")}.`
+                    : selectedVendorRow.actionLabel === "Restrict"
+                    ? "Pause new assignments until capacity clears."
+                    : selectedVendorRow.actionLabel === "Available"
+                    ? "Hold as bench capacity for overflow."
+                    : "Keep under active watch before changing allocation."}
+                </div>
               </div>
             </div>
           </Card>
         </div>
       </div>
 
-      {/* ROW 2 */}
-      <div className="grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Vendor Capacity Outlook</div>
-            <div className="mt-1 text-sm text-slate-500">
-              Forecasted upcoming workload and concentration risk by vendor.
+      <div className="grid gap-6 xl:grid-cols-2">
+        <Card className="h-full">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-xl font-semibold text-slate-900">Vendor Capacity Outlook</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Upcoming workload and concentration risk by vendor.
+              </div>
             </div>
+            <Pill tone="slate">Top {topCapacityRows.length}</Pill>
+          </div>
 
-            <div className="mt-4 space-y-4">
-              {filteredVendorRows.map((row) => (
-                <div key={row.vendor} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-slate-900">{row.vendor}</div>
-                      <div className="mt-1 text-sm text-slate-500">
-                        {row.jobs} active turn{row.jobs > 1 ? "s" : ""} • {row.ecdThisWeek} due this week
-                      </div>
+          <div className="mt-4 space-y-4">
+            {topCapacityRows.map((row) => (
+              <div key={row.vendor} className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="font-semibold text-slate-900">{row.vendor}</div>
+                    <div className="mt-1 text-sm text-slate-500">
+                      {row.jobs > 0
+                        ? `${row.jobs} active turn${row.jobs > 1 ? "s" : ""} • ${row.ecdThisWeek} due this week`
+                        : "No active jobs • available capacity"}
                     </div>
-                    <Pill tone={getCapacityTone(row.capacityUtilization)}>
-                      {getCapacityLabel(row.capacityUtilization)}
-                    </Pill>
                   </div>
+                  <Pill tone={getCapacityTone(row.capacityUtilization)}>
+                    {getCapacityLabel(row.capacityUtilization)}
+                  </Pill>
+                </div>
 
-                  <div className="mt-3">
-                    <ProgressBar
-                      value={row.capacityUtilization}
-                      tone={getCapacityTone(row.capacityUtilization)}
-                    />
+                <div className="mt-3">
+                  <ProgressBar
+                    value={row.capacityUtilization}
+                    tone={getCapacityTone(row.capacityUtilization)}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+
+        <Card className="h-full">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="text-lg font-semibold text-slate-900">Best Vendor by Market</div>
+              <div className="mt-1 text-sm text-slate-500">
+                Current top-ranked vendor in each market based on weighted performance.
+              </div>
+            </div>
+            <Pill tone="slate">Top {topMarketRows.length}</Pill>
+          </div>
+
+          <div className="mt-4 space-y-4">
+            {topMarketRows.map((item) => (
+              <div
+                key={item.market}
+                className="rounded-2xl border border-slate-200 bg-white p-4"
+              >
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium text-slate-900">{item.market}</div>
+                    <div className="mt-1 text-sm text-slate-500">{item.vendor}</div>
+                  </div>
+                  <div className="flex flex-col items-end gap-2">
+                    <Pill tone={getToneFromScore(item.overall)}>Score {item.overall}</Pill>
+                    <Pill tone={getActionTone(item.actionLabel)}>{item.actionLabel}</Pill>
                   </div>
                 </div>
-              ))}
-            </div>
-          </Card>
-        </div>
-
-        <div className="xl:col-span-6">
-          <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">TurnIQ Vendor Insights</div>
-            <div className="mt-1 text-sm text-slate-500">
-              AI-generated operating guidance based on vendor mix, risk, and load.
-            </div>
-
-            <div className="mt-4 space-y-3">
-              {insights.map((insight, idx) => (
-                <div
-                  key={`${insight.vendor}-${idx}`}
-                  className={`rounded-2xl border p-4 ${
-                    insight.tone === "red"
-                      ? "border-red-200 bg-red-50"
-                      : insight.tone === "amber"
-                      ? "border-amber-200 bg-amber-50"
-                      : "border-emerald-200 bg-emerald-50"
-                  }`}
-                >
-                  <div className="text-sm font-semibold text-slate-900">
-                    {insight.vendor} • {insight.title}
-                  </div>
-                  <div className="mt-2 text-sm text-slate-700">{insight.text}</div>
-                </div>
-              ))}
-            </div>
-          </Card>
-        </div>
+              </div>
+            ))}
+          </div>
+        </Card>
       </div>
     </div>
   );

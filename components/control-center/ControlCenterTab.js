@@ -1189,62 +1189,67 @@ export default function ControlCenterTab({
   }
 
   function handleApplySimulatedPlan({ row, selectedOptions, simulation }) {
-    const daysSaved = simulation.daysRecovered;
-    if (daysSaved <= 0) return;
+  const daysSaved = simulation.daysRecovered;
+  if (daysSaved <= 0) return;
 
-    const existingSteps = Array.isArray(row.workflowCompletedSteps)
-      ? row.workflowCompletedSteps
-      : [];
+  const existingSteps = Array.isArray(row.workflowCompletedSteps)
+    ? row.workflowCompletedSteps
+    : [];
 
-    const nextSteps = [...new Set([...existingSteps, ...selectedOptions])];
+  const nextSteps = [...new Set([...existingSteps, ...selectedOptions])];
 
-    const patch = {
-      daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
-      projectedCompletion: shiftDate(row.projectedCompletion, -daysSaved),
-      workflowCompletedSteps: nextSteps,
-    };
+  const patch = {
+    daysInStage: Math.max(0, (row.daysInStage || 0) - daysSaved),
+    projectedCompletion: shiftDate(row.projectedCompletion, -daysSaved),
+    workflowCompletedSteps: nextSteps,
+  };
 
-    if (selectedOptions.includes("clear_blocker")) {
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
-    }
-
-    if (selectedOptions.includes("accelerate_approval")) {
-      patch.currentStage = "Dispatch";
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
-      patch.nextAction = "Confirm vendor schedule";
-    }
-
-    if (selectedOptions.includes("recover_failed_ready")) {
-      patch.currentStage = "Rent Ready Open";
-      patch.turnStatus = "Monitoring";
-      patch.blockers = ["No active blockers"];
-      patch.blocker = "None";
-      patch.nextAction = "Re-inspect and confirm ready state";
-    }
-
-    if (selectedOptions.includes("resequence_vendors")) {
-      patch.nextAction = "Re-sequenced vendor plan";
-    }
-
-    if (selectedOptions.includes("switch_vendor")) {
-      patch.vendor =
-        !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
-          ? "Best-Fit Vendor"
-          : `${row.vendor} (replacement queued)`;
-      patch.nextAction = "Confirm replacement vendor schedule";
-    }
-
-    if (selectedOptions.includes("expedite_vendor")) {
-      patch.nextAction = "Expedite vendor execution";
-    }
-
-    patchRow(row.id, patch);
-    recordActionOutcome(row, patch, "Apply simulated plan");
+  if (row.vendor) {
+    patch.vendor = row.vendor;
   }
+
+  if (row.nextAction) {
+    patch.nextAction = row.nextAction;
+  }
+
+  if (selectedOptions.includes("clear_blocker")) {
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+  }
+
+  if (selectedOptions.includes("accelerate_approval")) {
+    patch.currentStage = "Dispatch";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Confirm vendor schedule";
+  }
+
+  if (selectedOptions.includes("recover_failed_ready")) {
+    patch.currentStage = "Rent Ready Open";
+    patch.turnStatus = "Monitoring";
+    patch.blockers = ["No active blockers"];
+    patch.blocker = "None";
+    patch.nextAction = "Re-inspect and confirm ready state";
+  }
+
+  if (selectedOptions.includes("resequence_vendors")) {
+    patch.nextAction = "Re-sequenced vendor plan";
+  }
+
+  if (selectedOptions.includes("switch_vendor") && row.vendor) {
+    patch.vendor = row.vendor;
+    patch.nextAction = row.nextAction || "Confirm recommended vendor schedule";
+  }
+
+  if (selectedOptions.includes("expedite_vendor")) {
+    patch.nextAction = "Expedite vendor execution";
+  }
+
+  patchRow(row.id, patch);
+  recordActionOutcome(row, patch, "Apply simulated plan");
+}
 
   function handleApplyTopAction(row) {
     const patch = buildPatchForApplyRecommendation(row, row.aiRecommendation);

@@ -1,104 +1,257 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Card from "../shared/Card";
 import {
+  buildSuggestedMappings,
+  FIELD_TO_TAB_MAPPING,
+  getHeadersFromRows,
+  getMappingCompleteness,
+  importRowsToTurnIQWithMapping,
   parseCsvText,
-  validateImportRows,
-  importRowsToTurnIQ,
   REQUIRED_IMPORT_FIELDS,
+  TURNIQ_TARGET_FIELDS,
+  validateRowsWithMapping,
 } from "../../lib/turniqImport";
 
-const TURNIQ_TEST_HEADERS = [
-  "id",
-  "name",
-  "market",
-  "currentStage",
-  "turnStatus",
-  "readiness",
-  "risk",
-  "projectedCompletion",
-  "projectedCost",
-  "vendor",
-  "turnOwner",
-  "daysInStage",
-  "blockers",
+function downloadCsv(filename, rows) {
+  if (!rows?.length) return;
+
+  const headers = Object.keys(rows[0]);
+  const csv = [
+    headers.join(","),
+    ...rows.map((row) =>
+      headers
+        .map((header) => `"${String(row[header] ?? "").replace(/"/g, '""')}"`)
+        .join(",")
+    ),
+  ].join("\n");
+
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(link.href);
+}
+
+const SAMPLE_PMS_EXPORT = [
+  {
+    "Request Id": "REQ-1001",
+    "Unit Id": "UNIT-4001",
+    "Full Address": "123 Main St, Dallas, TX",
+    Market: "Dallas",
+    "Owner Names": "Owner 1",
+    "Legal Entity Name": "Entity 1",
+    "Turn Status": "OPEN",
+    "Turn Stage": "SCOPE_REVIEW",
+    Assignee: "Ashley",
+    Vendors: "FloorCo",
+    "Current Estimated Rent Ready Date": "2026-05-10",
+    "Initial Estimated Rent Ready Date": "2026-05-08",
+    "Move Out Date": "2026-05-03",
+    "Days Open": "8",
+    "Current Days in Stage": "3",
+    "Estimate Cost": "3200",
+    "Approved Cost": "3100",
+    Notes: "Paint and flooring. Appliance ETA pending.",
+  },
+  {
+    "Request Id": "REQ-1002",
+    "Unit Id": "UNIT-4002",
+    "Full Address": "456 Oak Ave, Phoenix, AZ",
+    Market: "Phoenix",
+    "Owner Names": "Owner 2",
+    "Legal Entity Name": "Entity 2",
+    "Turn Status": "ON HOLD",
+    "Turn Stage": "OWNER_APPROVAL",
+    Assignee: "Megan",
+    Vendors: "CoolAir",
+    "Current Estimated Rent Ready Date": "2026-05-12",
+    "Initial Estimated Rent Ready Date": "2026-05-09",
+    "Move Out Date": "2026-05-01",
+    "Days Open": "12",
+    "Current Days in Stage": "5",
+    "Estimate Cost": "5400",
+    "Approved Cost": "0",
+    Notes: "HVAC issue. Waiting on approval.",
+  },
+  {
+    "Request Id": "REQ-1003",
+    "Unit Id": "UNIT-4003",
+    "Full Address": "321 Peach Ln, Atlanta, GA",
+    Market: "Atlanta",
+    "Owner Names": "Owner 3",
+    "Legal Entity Name": "Entity 3",
+    "Turn Status": "OPEN",
+    "Turn Stage": "PENDING_RRI",
+    Assignee: "Mike",
+    Vendors: "ABC Paint",
+    "Current Estimated Rent Ready Date": "2026-05-06",
+    "Initial Estimated Rent Ready Date": "2026-05-05",
+    "Move Out Date": "2026-05-02",
+    "Days Open": "4",
+    "Current Days in Stage": "2",
+    "Estimate Cost": "2200",
+    "Approved Cost": "2200",
+    Notes: "Paint completed. Pending final RRI.",
+  },
 ];
 
-function detectSchema(rows) {
-  if (!rows?.length) return "unknown";
+const SAMPLE_OPERATOR_EXPORT_BASIC = [
+  {
+    id: "OP-2001",
+    name: "789 Desert Ave, Phoenix, AZ",
+    market: "Phoenix",
+    currentStage: "Owner Approval",
+    turnStatus: "Blocked",
+    projectedCompletion: "2026-05-08",
+    projectedCost: "6200",
+    vendor: "CoolAir",
+    turnOwner: "Sarah",
+    daysInStage: "6",
+    blockers: "HVAC delay",
+    leaseEnd: "2026-05-02",
+  },
+  {
+    id: "OP-2002",
+    name: "321 Peach Ln, Atlanta, GA",
+    market: "Atlanta",
+    currentStage: "Rent Ready Open",
+    turnStatus: "Ready",
+    projectedCompletion: "2026-05-06",
+    projectedCost: "2800",
+    vendor: "ABC Paint",
+    turnOwner: "Mike",
+    daysInStage: "2",
+    blockers: "",
+    leaseEnd: "2026-05-03",
+  },
+];
 
-  const headers = Object.keys(rows[0] || {});
-  const lowerHeaders = headers.map((h) => h.trim().toLowerCase());
+const SAMPLE_OPERATOR_EXPORT_ADVANCED = [
+  {
+    property_id: "TURN-3001",
+    property_address: "1450 Cedar Park Dr, Dallas, TX",
+    market_name: "Dallas",
+    stage_name: "Scope Review",
+    status_name: "Open",
+    assigned_to: "Ashley",
+    assigned_vendor: "FloorCo",
+    ecd: "2026-05-11",
+    initial_ecd: "2026-05-08",
+    move_out: "2026-05-04",
+    days_open: "7",
+    stage_age_days: "4",
+    estimated_cost: "4100",
+    approved_cost: "3800",
+    notes_text: "Flooring and paint. Appliance ETA pending.",
+    lockbox_state: "Assigned",
+    rri_state: "",
+    moi_state: "Complete",
+    wo_estimate_count: "2",
+    wo_approved_count: "1",
+    latest_approval_requested_at: "2026-05-06",
+    latest_approval_response_at: "",
+    access_days_since: "5",
+    city_name: "Dallas",
+    state_code: "TX",
+    region_name: "Central",
+  },
+  {
+    property_id: "TURN-3002",
+    property_address: "612 Music Row Ave, Nashville, TN",
+    market_name: "Nashville",
+    stage_name: "Dispatch",
+    status_name: "Open",
+    assigned_to: "Justin",
+    assigned_vendor: "Music City Maintenance",
+    ecd: "2026-05-13",
+    initial_ecd: "2026-05-10",
+    move_out: "2026-05-05",
+    days_open: "6",
+    stage_age_days: "3",
+    estimated_cost: "1900",
+    approved_cost: "1900",
+    notes_text: "Cleaning and patch. Vendor scheduled.",
+    lockbox_state: "Assigned",
+    rri_state: "",
+    moi_state: "Complete",
+    wo_estimate_count: "1",
+    wo_approved_count: "1",
+    latest_approval_requested_at: "",
+    latest_approval_response_at: "",
+    access_days_since: "2",
+    city_name: "Nashville",
+    state_code: "TN",
+    region_name: "Central",
+  },
+  {
+    property_id: "TURN-3003",
+    property_address: "88 Camelback Rd, Phoenix, AZ",
+    market_name: "Phoenix",
+    stage_name: "Owner Approval",
+    status_name: "On Hold",
+    assigned_to: "Megan",
+    assigned_vendor: "Prime Paint",
+    ecd: "2026-05-14",
+    initial_ecd: "2026-05-10",
+    move_out: "2026-05-02",
+    days_open: "10",
+    stage_age_days: "5",
+    estimated_cost: "5600",
+    approved_cost: "0",
+    notes_text: "Approval pending. Trade coordination risk.",
+    lockbox_state: "Missing",
+    rri_state: "",
+    moi_state: "Complete",
+    wo_estimate_count: "3",
+    wo_approved_count: "1",
+    latest_approval_requested_at: "2026-05-07",
+    latest_approval_response_at: "",
+    access_days_since: "9",
+    city_name: "Phoenix",
+    state_code: "AZ",
+    region_name: "West",
+  },
+];
 
-  const looksLikeTurnIQTest = TURNIQ_TEST_HEADERS.every((field) =>
-    lowerHeaders.includes(field.toLowerCase())
+const COMPUTED_FIELDS = [
+  "Readiness score",
+  "Risk score",
+  "Delay drivers",
+  "Forecast confidence",
+  "Alerts",
+  "Insights",
+];
+
+function renderTargetFieldLabel(field) {
+  return (
+    <div className="flex items-center gap-2">
+      <span>{field.label}</span>
+      {field.required ? (
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
+          Required
+        </span>
+      ) : (
+        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-400">
+          Optional
+        </span>
+      )}
+    </div>
   );
-
-  if (looksLikeTurnIQTest) return "turniq-demo";
-
-  const looksLikePmsExport = REQUIRED_IMPORT_FIELDS.every((field) =>
-    headers.includes(field)
-  );
-
-  if (looksLikePmsExport) return "pms-export";
-
-  return "unknown";
 }
 
-function adaptTurnIQDemoRows(rows) {
-  return rows.map((row, index) => ({
-    "Request Id": row.id || `demo-${index + 1}`,
-    "Unit Id": row.id || `unit-${index + 1}`,
-    "Full Address": row.name || `Imported Property ${index + 1}`,
-    Market: row.market || "Unknown",
-    Region: "",
-    "Owner Names": "Imported Owner",
-    "Owner Type": "",
-    "Legal Entity Name": "Imported Entity",
-    "Turn Status": row.turnStatus || "Monitoring",
-    "Turn Stage": row.currentStage || "Scope Review",
-    Stage: row.currentStage || "Scope Review",
-    Assignee: row.turnOwner || "Unassigned",
-    Vendors: row.vendor || "TBD",
-    "Move Out Date": row.projectedCompletion || "",
-    "Turn Start Date": "",
-    "Current Estimated Rent Ready Date": row.projectedCompletion || "",
-    "Initial Estimated Rent Ready Date": row.projectedCompletion || "",
-    "Days Open": row.daysInStage || 0,
-    "Current Days in Stage": row.daysInStage || 0,
-    "Turn Type": "",
-    Notes: row.blockers || "",
-    "Estimate Cost": row.projectedCost || 0,
-    "Approved Cost": row.projectedCost || 0,
-    Risk: row.risk || 0,
-    Readiness: row.readiness || 0,
-    "Rri Inspection Result": "",
-    "Moi Status": "",
-    "Rri Status": "",
-    "Lockbox Status": "",
-    Link: "",
-    City: "",
-    State: "",
-    "Is for Sale": "false",
-    "Property Management Company": "Darwin Homes",
-  }));
+function getFieldStatusTone(required, mapped) {
+  if (required && !mapped) return "text-red-700";
+  if (mapped) return "text-emerald-700";
+  return "text-slate-400";
 }
 
-function prepareRowsForImport(parsedRows) {
-  const schema = detectSchema(parsedRows);
-
-  if (schema === "turniq-demo") {
-    return {
-      schema,
-      adaptedRows: adaptTurnIQDemoRows(parsedRows),
-    };
-  }
-
-  return {
-    schema,
-    adaptedRows: parsedRows,
-  };
+function getFieldStatusLabel(required, mapped) {
+  if (required && !mapped) return "Required";
+  if (mapped) return "Mapped";
+  return "Ignored";
 }
 
 export default function ImportPanel({
@@ -111,17 +264,16 @@ export default function ImportPanel({
   importMode,
   setImportMode,
   lastImportCount,
-  lastUploadedCount,
   lastSkippedCount,
   lastImportTimestamp,
 }) {
   const [fileName, setFileName] = useState("");
   const [rawRows, setRawRows] = useState([]);
-  const [preparedRows, setPreparedRows] = useState([]);
+  const [headers, setHeaders] = useState([]);
+  const [mapping, setMapping] = useState({});
   const [validation, setValidation] = useState(null);
   const [previewRows, setPreviewRows] = useState([]);
   const [error, setError] = useState("");
-  const [detectedSchema, setDetectedSchema] = useState("");
   const [showImportSuccess, setShowImportSuccess] = useState(false);
 
   useEffect(() => {
@@ -139,6 +291,28 @@ export default function ImportPanel({
     return () => clearTimeout(timer);
   }, [hasImportedData, lastImportCount, lastImportTimestamp]);
 
+  const mappingCompleteness = useMemo(
+    () => getMappingCompleteness(mapping),
+    [mapping]
+  );
+
+  const mappedCount = useMemo(
+    () => Object.values(mapping).filter(Boolean).length,
+    [mapping]
+  );
+
+  function refreshValidation(rows, nextMapping) {
+    const nextValidation = validateRowsWithMapping(rows, nextMapping);
+    setValidation(nextValidation);
+
+    if (nextValidation.isValid) {
+      const nextPreview = importRowsToTurnIQWithMapping(rows, nextMapping).slice(0, 5);
+      setPreviewRows(nextPreview);
+    } else {
+      setPreviewRows([]);
+    }
+  }
+
   function handleFileChange(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -155,105 +329,114 @@ export default function ImportPanel({
         if (!parsedRows.length) {
           setError("The CSV appears to be empty.");
           setRawRows([]);
-          setPreparedRows([]);
+          setHeaders([]);
+          setMapping({});
           setValidation(null);
           setPreviewRows([]);
-          setDetectedSchema("");
           return;
         }
 
-        const { schema, adaptedRows } = prepareRowsForImport(parsedRows);
-        const nextValidation = validateImportRows(adaptedRows);
-        const importedPreview = nextValidation.isValid
-          ? importRowsToTurnIQ(adaptedRows).slice(0, 5)
-          : [];
+        const detectedHeaders = getHeadersFromRows(parsedRows);
+        const suggestedMapping = buildSuggestedMappings(detectedHeaders);
 
         setRawRows(parsedRows);
-        setPreparedRows(adaptedRows);
-        setValidation(nextValidation);
-        setPreviewRows(importedPreview);
-        setDetectedSchema(schema);
-
-        if (schema === "unknown") {
-          setError(
-            "CSV schema not recognized. Use either the TurnIQ demo CSV format or the PMS export format."
-          );
-        }
+        setHeaders(detectedHeaders);
+        setMapping(suggestedMapping);
+        refreshValidation(parsedRows, suggestedMapping);
       } catch {
         setError("Unable to parse CSV file.");
         setRawRows([]);
-        setPreparedRows([]);
+        setHeaders([]);
+        setMapping({});
         setValidation(null);
         setPreviewRows([]);
-        setDetectedSchema("");
       }
     };
 
     reader.readAsText(file);
   }
 
+  function handleMappingChange(fieldKey, headerName) {
+    const nextMapping = {
+      ...mapping,
+      [fieldKey]: headerName,
+    };
+
+    setMapping(nextMapping);
+    refreshValidation(rawRows, nextMapping);
+  }
+
   function handleImport() {
-    if (!validation?.isValid || !preparedRows.length) return;
-    const importedTurns = importRowsToTurnIQ(preparedRows);
+    if (!validation?.isValid || !rawRows.length) return;
+    const importedTurns = importRowsToTurnIQWithMapping(rawRows, mapping);
     onImport(importedTurns);
   }
 
   function handleClear() {
     setFileName("");
     setRawRows([]);
-    setPreparedRows([]);
+    setHeaders([]);
+    setMapping({});
     setValidation(null);
     setPreviewRows([]);
     setError("");
-    setDetectedSchema("");
     onClearSuccess?.();
   }
 
-  function getSchemaLabel() {
-    if (detectedSchema === "turniq-demo") return "TurnIQ demo schema detected";
-    if (detectedSchema === "pms-export") return "PMS export schema detected";
-    if (detectedSchema === "unknown" && rawRows.length) return "Unknown schema";
-    return "CSV import v1";
-  }
-
   return (
-    <Card>
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div>
-          <div className="text-3xl font-semibold text-slate-900">Import</div>
-          <div className="mt-1 text-sm text-slate-500">
-            Upload and normalize portfolio data into TurnIQ.
-          </div>
-        </div>
-
-        <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-          {getSchemaLabel()}
+    <div className="space-y-6">
+      <div>
+        <div className="text-3xl font-semibold text-slate-900">Import</div>
+        <div className="mt-1 text-sm text-slate-500">
+          Connect a PMS export or operator-maintained CSV into TurnIQ. TurnIQ normalizes the file,
+          computes operating signals, and pushes one shared dataset across the workspace.
         </div>
       </div>
 
-      <div className="mt-5 grid gap-6 xl:grid-cols-12">
-        <div className="xl:col-span-4">
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-            <div className="text-sm font-semibold text-slate-900">Upload</div>
-            <div className="mt-2 text-sm text-slate-500">Required file format: CSV</div>
+      <Card className="border-blue-200 bg-gradient-to-br from-blue-50 via-white to-slate-50">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-lg font-semibold text-slate-900">What this powers</div>
+            <div className="mt-1 text-sm text-slate-600">
+              One import feeds the full operating surface.
+            </div>
+          </div>
+
+          <div className="rounded-xl bg-white px-3 py-2 text-xs text-slate-600 shadow-sm">
+            Shared dataset across tabs
+          </div>
+        </div>
+
+        <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5 text-sm">
+          {["Control Center", "Pipeline", "Forecast", "Vendors", "Analytics"].map((item) => (
+            <div
+              key={item}
+              className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-slate-700"
+            >
+              {item}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid gap-6 xl:grid-cols-12">
+        <div className="xl:col-span-4 space-y-6">
+          <Card>
+            <div className="text-sm font-semibold text-slate-900">Upload CSV</div>
+            <div className="mt-2 text-sm text-slate-500">
+              Use either a PMS export or an operator file. TurnIQ will map, normalize, and compute
+              the missing operating signals after import.
+            </div>
 
             <input
-              id="turniq-import-file"
               type="file"
               accept=".csv"
               onChange={handleFileChange}
-              className="hidden"
+              className="mt-4 block w-full text-sm text-slate-600"
             />
 
-            <label
-              htmlFor="turniq-import-file"
-              className="mt-4 inline-flex cursor-pointer rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-            >
-              Choose CSV
-            </label>
-
             {fileName ? (
-              <div className="mt-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700">
+              <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
                 {fileName}
               </div>
             ) : null}
@@ -290,19 +473,17 @@ export default function ImportPanel({
               </div>
 
               <div className="mt-3 rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-                <span className="font-medium text-slate-700">Replace</span> overwrites the
-                current imported dataset.{" "}
-                <span className="font-medium text-slate-700">Append</span> adds new rows and
-                skips duplicate turn IDs.
+                Replace overwrites the imported dataset. Append adds new rows and skips duplicate
+                turn IDs.
               </div>
             </div>
 
             <div className="mt-4 flex flex-wrap gap-2">
               <button
                 onClick={handleImport}
-                disabled={!validation?.isValid || !preparedRows.length}
+                disabled={!validation?.isValid || !rawRows.length}
                 className={`rounded-xl px-4 py-2 text-sm ${
-                  validation?.isValid && preparedRows.length
+                  validation?.isValid && rawRows.length
                     ? "bg-slate-900 text-white hover:bg-slate-800"
                     : "cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400"
                 }`}
@@ -319,8 +500,7 @@ export default function ImportPanel({
             </div>
 
             <div className="mt-3 text-xs text-slate-500">
-              Reset file clears the current upload preview. Revert to demo dataset removes
-              imported data and restores the sample dataset.
+              Operators should not supply readiness or risk. TurnIQ computes both after import.
             </div>
 
             <div
@@ -369,41 +549,119 @@ export default function ImportPanel({
                 {error}
               </div>
             ) : null}
-          </div>
+          </Card>
+
+          <Card>
+            <div className="mt-2 text-sm text-slate-500">
+  Test one clean PMS export, one simple operator file, and one advanced operator file with non-standard headers.
+</div>
+
+            <div className="mt-3 space-y-2">
+              <button
+                onClick={() => downloadCsv("turniq_pms_export_example.csv", SAMPLE_PMS_EXPORT)}
+                className="w-full rounded-xl border px-3 py-2 text-left text-sm hover:bg-slate-50"
+              >
+                Download PMS export example
+              </button>
+
+              <button
+                onClick={() =>
+                  downloadCsv(
+                    "turniq_operator_export_basic_example.csv",
+                    SAMPLE_OPERATOR_EXPORT_BASIC
+                  )
+                }
+                className="w-full rounded-xl border px-3 py-2 text-left text-sm hover:bg-slate-50"
+              >
+                Download operator basic example
+              </button>
+
+              <button
+                onClick={() =>
+                  downloadCsv(
+                    "turniq_operator_export_advanced_example.csv",
+                    SAMPLE_OPERATOR_EXPORT_ADVANCED
+                  )
+                }
+                className="w-full rounded-xl border px-3 py-2 text-left text-sm hover:bg-slate-50"
+              >
+                Download operator advanced example
+              </button>
+            </div>
+          </Card>
+
+          <Card>
+            <div className="text-sm font-semibold text-slate-900">Computed by TurnIQ</div>
+            <div className="mt-3 space-y-2 text-sm text-slate-600">
+              {COMPUTED_FIELDS.map((item) => (
+                <div key={item} className="rounded-xl bg-slate-50 px-3 py-2">
+                  {item}
+                </div>
+              ))}
+            </div>
+          </Card>
+
+          <Card>
+            <div className="text-sm font-semibold text-slate-900">Minimum required mapped fields</div>
+            <div className="mt-3 space-y-1 text-sm">
+              {REQUIRED_IMPORT_FIELDS.map((field) => (
+                <div key={field} className="rounded-lg bg-slate-50 px-3 py-2">
+                  {field}
+                </div>
+              ))}
+            </div>
+          </Card>
         </div>
 
-        <div className="xl:col-span-4">
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-sm font-semibold text-slate-900">Validation</div>
+        <div className="xl:col-span-8 space-y-6">
+          <Card>
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-sm font-semibold text-slate-900">Validation</div>
+                <div className="mt-1 text-sm text-slate-500">
+                  Mapping-aware validation against TurnIQ’s normalized schema.
+                </div>
+              </div>
+
+              {validation ? (
+                <div
+                  className={`rounded-xl px-3 py-2 text-xs ${
+                    validation.isValid
+                      ? "bg-emerald-50 text-emerald-700"
+                      : "bg-red-50 text-red-700"
+                  }`}
+                >
+                  {validation.isValid ? "Ready to import" : "Action required"}
+                </div>
+              ) : null}
+            </div>
 
             {!validation ? (
               <div className="mt-3 text-sm text-slate-500">
-                Upload a CSV to validate required fields and preview warnings.
+                Upload a CSV to detect headers, suggest mappings, and validate rows.
               </div>
             ) : (
-              <div className="mt-3 space-y-3">
-                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm">
+              <div className="mt-4 grid gap-3 md:grid-cols-3 text-sm">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                   Rows detected:{" "}
                   <span className="font-medium text-slate-900">{rawRows.length}</span>
                 </div>
 
-                <div
-                  className={`rounded-xl border px-3 py-2 text-sm ${
-                    validation.isValid
-                      ? "border-emerald-200 bg-emerald-50 text-emerald-700"
-                      : "border-red-200 bg-red-50 text-red-700"
-                  }`}
-                >
-                  {validation.isValid
-                    ? "Required fields validated"
-                    : "Missing required fields"}
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  Uploaded columns:{" "}
+                  <span className="font-medium text-slate-900">{headers.length}</span>
                 </div>
 
-                {!validation.isValid ? (
-                  <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-                    <div className="font-medium">Missing fields</div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  Fields mapped:{" "}
+                  <span className="font-medium text-slate-900">{mappedCount}</span>
+                </div>
+
+                {!mappingCompleteness.isValid ? (
+                  <div className="md:col-span-3 rounded-xl border border-red-200 bg-red-50 p-3 text-red-700">
+                    <div className="font-medium">Missing required mappings</div>
                     <ul className="mt-2 space-y-1">
-                      {validation.missingRequiredFields.map((field) => (
+                      {mappingCompleteness.missingRequired.map((field) => (
                         <li key={field}>• {field}</li>
                       ))}
                     </ul>
@@ -411,7 +669,7 @@ export default function ImportPanel({
                 ) : null}
 
                 {validation.warnings?.length ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+                  <div className="md:col-span-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-800">
                     <div className="font-medium">Warnings</div>
                     <ul className="mt-2 space-y-1">
                       {validation.warnings.map((warning) => (
@@ -422,58 +680,120 @@ export default function ImportPanel({
                 ) : null}
               </div>
             )}
-          </div>
-        </div>
+          </Card>
 
-        <div className="xl:col-span-4">
-          <div className="rounded-2xl border border-slate-200 p-4">
-            <div className="text-sm font-semibold text-slate-900">Required columns</div>
-            <div className="mt-3 max-h-[320px] overflow-y-auto space-y-1 text-sm text-slate-600">
-              {REQUIRED_IMPORT_FIELDS.map((field) => (
-                <div key={field} className="rounded-lg bg-slate-50 px-3 py-2">
-                  {field}
+          <Card>
+            <div className="text-sm font-semibold text-slate-900">Column mapping</div>
+            <div className="mt-1 text-sm text-slate-500">
+              Review TurnIQ’s suggested mapping. Required fields must be mapped before import.
+            </div>
+
+            {!headers.length ? (
+              <div className="mt-3 text-sm text-slate-500">
+                Upload a file to configure mappings.
+              </div>
+            ) : (
+              <div className="mt-4 overflow-x-auto rounded-2xl border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">TurnIQ field</th>
+                      <th className="px-3 py-2 font-medium">Map from uploaded column</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {TURNIQ_TARGET_FIELDS.map((field) => {
+                      const mapped = Boolean(mapping[field.key]);
+
+                      return (
+                        <tr key={field.key} className="border-t border-slate-100">
+                          <td className="px-3 py-3">{renderTargetFieldLabel(field)}</td>
+                          <td className="px-3 py-3">
+                            <select
+                              value={mapping[field.key] || ""}
+                              onChange={(e) =>
+                                handleMappingChange(field.key, e.target.value)
+                              }
+                              className="w-full rounded-xl border border-slate-200 px-3 py-2 text-sm"
+                            >
+                              <option value="">Ignore / not mapped</option>
+                              {headers.map((header) => (
+                                <option key={header} value={header}>
+                                  {header}
+                                </option>
+                              ))}
+                            </select>
+                          </td>
+                          <td className={`px-3 py-3 ${getFieldStatusTone(field.required, mapped)}`}>
+                            {getFieldStatusLabel(field.required, mapped)}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </Card>
+
+          <Card>
+            <div className="text-sm font-semibold text-slate-900">Field → tab mapping</div>
+            <div className="mt-1 text-sm text-slate-500">
+              This shows where imported data is consumed in the workspace.
+            </div>
+
+            <div className="mt-4 grid gap-2 text-sm md:grid-cols-2">
+              {FIELD_TO_TAB_MAPPING.map((item) => (
+                <div key={item.field} className="rounded-xl bg-slate-50 px-3 py-2">
+                  <span className="font-medium text-slate-900">{item.field}</span>
+                  <span className="text-slate-500"> → {item.tabs.join(" / ")}</span>
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
+
+          {previewRows.length ? (
+            <Card>
+              <div className="text-sm font-semibold text-slate-900">Normalized preview</div>
+              <div className="mt-1 text-sm text-slate-500">
+                This is how uploaded rows look after TurnIQ maps the file, standardizes stages and statuses, and computes risk, readiness, delay drivers, and forecast signals.
+              </div>
+
+              <div className="mt-3 overflow-x-auto rounded-2xl border border-slate-200">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-slate-50 text-left text-slate-500">
+                    <tr>
+                      <th className="px-3 py-2 font-medium">Property</th>
+                      <th className="px-3 py-2 font-medium">Market</th>
+                      <th className="px-3 py-2 font-medium">Stage</th>
+                      <th className="px-3 py-2 font-medium">Status</th>
+                      <th className="px-3 py-2 font-medium">Vendor</th>
+                      <th className="px-3 py-2 font-medium">ECD</th>
+                      <th className="px-3 py-2 font-medium">Risk</th>
+                      <th className="px-3 py-2 font-medium">Readiness</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {previewRows.map((row) => (
+                      <tr key={row.id} className="border-t border-slate-100">
+                        <td className="px-3 py-3">{row.name}</td>
+                        <td className="px-3 py-3">{row.market}</td>
+                        <td className="px-3 py-3">{row.currentStage}</td>
+                        <td className="px-3 py-3">{row.turnStatus}</td>
+                        <td className="px-3 py-3">{row.vendor}</td>
+                        <td className="px-3 py-3">{row.projectedCompletion}</td>
+                        <td className="px-3 py-3">{row.risk}</td>
+                        <td className="px-3 py-3">{row.readiness}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          ) : null}
         </div>
       </div>
-
-      {previewRows.length ? (
-        <div className="mt-6">
-          <div className="mb-3 text-sm font-semibold text-slate-900">Preview</div>
-          <div className="overflow-x-auto rounded-2xl border border-slate-200">
-            <table className="min-w-full text-sm">
-              <thead className="bg-slate-50 text-left text-slate-500">
-                <tr>
-                  <th className="px-3 py-2 font-medium">Property</th>
-                  <th className="px-3 py-2 font-medium">Market</th>
-                  <th className="px-3 py-2 font-medium">Stage</th>
-                  <th className="px-3 py-2 font-medium">Status</th>
-                  <th className="px-3 py-2 font-medium">Vendor</th>
-                  <th className="px-3 py-2 font-medium">ECD</th>
-                  <th className="px-3 py-2 font-medium">Risk</th>
-                  <th className="px-3 py-2 font-medium">Readiness</th>
-                </tr>
-              </thead>
-              <tbody>
-                {previewRows.map((row) => (
-                  <tr key={row.id} className="border-t border-slate-100">
-                    <td className="px-3 py-3">{row.name}</td>
-                    <td className="px-3 py-3">{row.market}</td>
-                    <td className="px-3 py-3">{row.currentStage}</td>
-                    <td className="px-3 py-3">{row.turnStatus}</td>
-                    <td className="px-3 py-3">{row.vendor}</td>
-                    <td className="px-3 py-3">{row.projectedCompletion}</td>
-                    <td className="px-3 py-3">{row.risk}</td>
-                    <td className="px-3 py-3">{row.readiness}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      ) : null}
-    </Card>
+    </div>
   );
 }

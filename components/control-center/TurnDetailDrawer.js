@@ -5,6 +5,90 @@ import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import { formatShortDate, shiftDate } from "../../utils/economics";
 
+const VENDOR_SCORECARD = {
+  FloorCo: {
+    markets: ["Dallas"],
+    trades: ["Flooring", "Paint", "General", "Flooring + Paint"],
+    quality: 92,
+    speed: 88,
+    reliability: 91,
+    cost: 74,
+  },
+  "ABC Paint": {
+    markets: ["Atlanta"],
+    trades: ["Paint", "Patch", "Paint + Patch", "General"],
+    quality: 90,
+    speed: 89,
+    reliability: 88,
+    cost: 81,
+  },
+  Sparkle: {
+    markets: ["Dallas", "Nashville"],
+    trades: ["Deep Clean", "Cleaning", "General"],
+    quality: 87,
+    speed: 95,
+    reliability: 93,
+    cost: 85,
+  },
+  CoolAir: {
+    markets: ["Phoenix"],
+    trades: ["HVAC", "General", "Heavy Turn Review"],
+    quality: 84,
+    speed: 76,
+    reliability: 82,
+    cost: 70,
+  },
+  "Prime Paint": {
+    markets: ["Phoenix"],
+    trades: ["Paint", "Flooring", "Paint + Flooring", "General"],
+    quality: 86,
+    speed: 84,
+    reliability: 85,
+    cost: 75,
+  },
+  "Desert Turn Co": {
+    markets: ["Phoenix"],
+    trades: ["General", "Paint", "Flooring", "Heavy Turn Review"],
+    quality: 89,
+    speed: 87,
+    reliability: 88,
+    cost: 73,
+  },
+  "Lone Star Repairs": {
+    markets: ["Dallas"],
+    trades: ["General", "Flooring + Paint", "Paint", "Flooring"],
+    quality: 88,
+    speed: 86,
+    reliability: 87,
+    cost: 76,
+  },
+  "Peach State Services": {
+    markets: ["Atlanta"],
+    trades: ["General", "Paint + Patch", "Paint"],
+    quality: 85,
+    speed: 83,
+    reliability: 84,
+    cost: 80,
+  },
+  "Music City Maintenance": {
+    markets: ["Nashville"],
+    trades: ["General", "Deep Clean", "Paint"],
+    quality: 84,
+    speed: 82,
+    reliability: 85,
+    cost: 79,
+  },
+};
+
+function getVendorOverall(score) {
+  return Math.round(
+    score.quality * 0.35 +
+      score.speed * 0.3 +
+      score.reliability * 0.2 +
+      score.cost * 0.15
+  );
+}
+
 function getVendorSignal(row) {
   const vendorName = row.vendor || "Unassigned";
   const workOrders = Array.isArray(row.workOrders) ? row.workOrders : [];
@@ -44,7 +128,66 @@ function getVendorSignal(row) {
   };
 }
 
-function getSimulatorOptions(row) {
+function matchesTrade(vendorTrades, scope) {
+  if (!scope) return vendorTrades.includes("General");
+  return (
+    vendorTrades.includes(scope) ||
+    vendorTrades.includes("General") ||
+    vendorTrades.some((trade) =>
+      String(scope).toLowerCase().includes(String(trade).toLowerCase())
+    )
+  );
+}
+
+function getRecommendedVendor(row) {
+  const candidates = Object.entries(VENDOR_SCORECARD)
+    .map(([vendor, score]) => ({
+      vendor,
+      ...score,
+      overall: getVendorOverall(score),
+    }))
+    .filter(
+      (candidate) =>
+        candidate.markets.includes(row.market) &&
+        matchesTrade(candidate.trades, row.scope)
+    )
+    .sort((a, b) => b.overall - a.overall);
+
+  if (!candidates.length) return null;
+
+  const best = candidates[0];
+  const currentVendorScore = row.vendor ? VENDOR_SCORECARD[row.vendor] : null;
+  const currentOverall = currentVendorScore
+    ? getVendorOverall(currentVendorScore)
+    : null;
+
+  const scoreDelta =
+    currentOverall != null ? best.overall - currentOverall : best.overall;
+
+  const reason =
+    !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
+      ? `Best available fit for ${row.market} with stronger speed and quality for this scope.`
+      : scoreDelta > 0
+      ? `${best.vendor} scores ${scoreDelta} points above ${row.vendor} for this market/scope combination.`
+      : `${best.vendor} is the strongest available option for this turn.`;
+
+  return {
+    ...best,
+    currentOverall,
+    scoreDelta,
+    reason,
+    estimatedDaysSaved:
+      !row.vendor || row.vendor === "TBD" || row.vendor === "Unassigned"
+        ? 2
+        : scoreDelta >= 8
+        ? 2
+        : scoreDelta >= 3
+        ? 1
+        : 0,
+  };
+}
+
+function getSimulatorOptions(row, recommendedVendor) {
   const vendorSignal = getVendorSignal(row);
 
   return [
@@ -77,17 +220,17 @@ function getSimulatorOptions(row) {
     },
     {
       id: "switch_vendor",
-      label: vendorSignal.missingVendor
+      label: recommendedVendor
+        ? `Switch to ${recommendedVendor.vendor}`
+        : vendorSignal.missingVendor
         ? "Assign best-fit vendor"
         : "Switch vendor",
-      enabled: vendorSignal.missingVendor || vendorSignal.vendorRisk !== "low",
-      days: vendorSignal.missingVendor
-        ? 2
-        : vendorSignal.vendorRisk === "high"
-        ? 2
-        : vendorSignal.vendorRisk === "medium"
-        ? 1
-        : 0,
+      enabled:
+        Boolean(recommendedVendor) &&
+        (vendorSignal.missingVendor ||
+          vendorSignal.vendorRisk !== "low" ||
+          recommendedVendor.vendor !== row.vendor),
+      days: recommendedVendor?.estimatedDaysSaved || 0,
       category: "vendor",
     },
     {
@@ -110,9 +253,7 @@ function getSimulatorOptions(row) {
   ];
 }
 
-function buildSimulation(row, selectedOptions) {
-  const simulatorOptions = getSimulatorOptions(row);
-
+function buildSimulation(row, selectedOptions, simulatorOptions) {
   const rawDaysRecovered = simulatorOptions
     .filter((option) => selectedOptions.includes(option.id) && option.enabled)
     .reduce((sum, option) => sum + option.days, 0);
@@ -139,8 +280,8 @@ function buildSimulation(row, selectedOptions) {
   };
 }
 
-function getRecommendedOptions(row) {
-  const options = getSimulatorOptions(row).filter((option) => option.enabled);
+function getRecommendedOptions(row, simulatorOptions) {
+  const options = simulatorOptions.filter((option) => option.enabled);
 
   const ranked = [...options].sort((a, b) => {
     const categoryWeight = (category) => (category === "vendor" ? 1 : 0);
@@ -154,93 +295,11 @@ function getRecommendedOptions(row) {
   for (const option of ranked) {
     if (selected.includes(option.id)) continue;
     if (totalDays >= maxDays) break;
-
     selected.push(option.id);
     totalDays += option.days || 0;
   }
 
   return selected;
-}
-
-function getTimelineRows(row) {
-  const items = [
-    {
-      id: "projected_completion",
-      label: "Projected completion",
-      value: formatShortDate(row.projectedCompletion),
-      tone: "slate",
-    },
-    {
-      id: "current_stage",
-      label: "Current stage",
-      value: row.currentStage,
-      tone: "slate",
-    },
-    {
-      id: "days_in_stage",
-      label: "Days in stage",
-      value: `${row.daysInStage || 0}d`,
-      tone: (row.daysInStage || 0) > (row.stageSla || 0) ? "red" : "green",
-    },
-    {
-      id: "sla",
-      label: "Stage SLA",
-      value: `${row.stageSla || 0}d`,
-      tone: "slate",
-    },
-  ];
-
-  if (row.lastAction?.timestamp) {
-    items.unshift({
-      id: "last_action",
-      label: row.lastAction.label || "Last action",
-      value: formatShortDate(row.lastAction.timestamp),
-      tone: row.lastAction.daysRecovered > 0 ? "green" : "slate",
-      subtext:
-        row.lastAction.daysRecovered > 0
-          ? `${row.lastAction.daysRecovered}d saved • $${(
-              row.lastAction.revenueProtected || 0
-            ).toLocaleString()} protected`
-          : "Tracked activity",
-    });
-  }
-
-  return items;
-}
-
-function getWorkflowHistory(row) {
-  const completed = Array.isArray(row.workflowCompletedSteps)
-    ? row.workflowCompletedSteps
-    : [];
-
-  const labels = {
-    rework: "Cleared rework items",
-    inspect: "Re-inspected home",
-    certify: "Confirmed rent ready",
-    escalate_approval: "Escalated owner approval",
-    confirm_scope: "Confirmed scope signoff",
-    dispatch_vendor: "Dispatched vendor",
-    identify_owner: "Identified blocker owner",
-    remove_blocker: "Removed blocker",
-    resume_execution: "Resumed execution",
-    confirm_eta: "Confirmed appliance ETA",
-    resequence_vendors: "Re-sequenced vendors",
-    hold_ecd: "Held ECD",
-    confirm_owner: "Confirmed owner",
-    advance_action: "Advanced next action",
-    ready_execution: "Ready for execution",
-  };
-
-  return completed.map((id) => ({
-    id,
-    label: labels[id] || id,
-  }));
-}
-
-function getSyncTone(status) {
-  if (status === "Delayed") return "amber";
-  if (status === "Disconnected") return "red";
-  return "green";
 }
 
 function getUrgencyTone(urgency) {
@@ -251,7 +310,6 @@ function getUrgencyTone(urgency) {
 
 function getReadinessTone(value) {
   const text = String(value || "").toLowerCase();
-
   if (
     text.includes("issue") ||
     text.includes("failed") ||
@@ -260,7 +318,6 @@ function getReadinessTone(value) {
   ) {
     return "red";
   }
-
   if (
     text.includes("needs") ||
     text.includes("pending") ||
@@ -269,7 +326,6 @@ function getReadinessTone(value) {
   ) {
     return "amber";
   }
-
   if (
     text.includes("clear") ||
     text.includes("ready") ||
@@ -278,13 +334,10 @@ function getReadinessTone(value) {
   ) {
     return "green";
   }
-
   return "slate";
 }
 
 function getOccupancyStatus(row) {
-  if (!row) return "Unknown";
-
   return (
     row.currentOccupancyStatus ||
     row.occupancyStatus ||
@@ -295,7 +348,6 @@ function getOccupancyStatus(row) {
 }
 
 function getMaterialsStatus(row) {
-  if (!row) return "Unknown";
   if (row.materialsStatus) return row.materialsStatus;
   if (row.applianceStatus) return row.applianceStatus;
 
@@ -316,17 +368,26 @@ export default function TurnDetailDrawer({
 }) {
   const [selectedOptions, setSelectedOptions] = useState([]);
 
+  const recommendedVendor = useMemo(() => {
+    if (!row) return null;
+    return getRecommendedVendor(row);
+  }, [row]);
+
+  const simulatorOptions = useMemo(() => {
+    if (!row) return [];
+    return getSimulatorOptions(row, recommendedVendor);
+  }, [row, recommendedVendor]);
+
   const recommendedOptions = useMemo(() => {
     if (!row) return [];
-    return getRecommendedOptions(row);
-  }, [row]);
+    return getRecommendedOptions(row, simulatorOptions);
+  }, [row, simulatorOptions]);
 
   useEffect(() => {
     if (!row) {
       setSelectedOptions([]);
       return;
     }
-
     setSelectedOptions(recommendedOptions);
   }, [row?.id, recommendedOptions]);
 
@@ -338,28 +399,8 @@ export default function TurnDetailDrawer({
         revenueProtected: 0,
       };
     }
-
-    return buildSimulation(row, selectedOptions);
-  }, [row, selectedOptions]);
-
-  const simulatorOptions = useMemo(() => {
-    if (!row) return [];
-    return getSimulatorOptions(row);
-  }, [row]);
-
-  const isRecommendedPlan =
-    selectedOptions.length === recommendedOptions.length &&
-    selectedOptions.every((opt) => recommendedOptions.includes(opt));
-
-  const timelineRows = useMemo(() => {
-    if (!row) return [];
-    return getTimelineRows(row);
-  }, [row]);
-
-  const workflowHistory = useMemo(() => {
-    if (!row) return [];
-    return getWorkflowHistory(row);
-  }, [row]);
+    return buildSimulation(row, selectedOptions, simulatorOptions);
+  }, [row, selectedOptions, simulatorOptions]);
 
   const recentNotes = useMemo(() => {
     if (!row) return [];
@@ -373,21 +414,25 @@ export default function TurnDetailDrawer({
     return getVendorSignal(row);
   }, [row]);
 
-  const aiRecommendation = row?.aiRecommendation || null;
-  const aiRiskDrivers = Array.isArray(row?.aiRiskDrivers) ? row.aiRiskDrivers : [];
-  const aiConfidence = aiRecommendation?.confidence || 0;
-  const aiImpactDays = aiRecommendation?.impactDays ?? row?.impact?.daysRecovered ?? 0;
-  const aiImpactRevenue =
-    aiRecommendation?.impactRevenue ?? row?.impact?.revenueRecovered ?? 0;
-  const aiUrgency = aiRecommendation?.urgency || "Review";
-
   if (!row) return null;
+
+  const aiRecommendation = row.aiRecommendation || null;
+  const aiRiskDrivers = Array.isArray(row.aiRiskDrivers) ? row.aiRiskDrivers : [];
+  const aiConfidence = aiRecommendation?.confidence || 0;
+  const aiImpactDays = aiRecommendation?.impactDays ?? row.impact?.daysRecovered ?? 0;
+  const aiImpactRevenue =
+    aiRecommendation?.impactRevenue ?? row.impact?.revenueRecovered ?? 0;
+  const aiUrgency = aiRecommendation?.urgency || "Review";
 
   const occupancyStatus = getOccupancyStatus(row);
   const utilityStatus = row.utilityIssueStatus || "Unknown";
   const accessStatus = row.accessStatus || "Unknown";
   const rriStatus = row.rriStatus || "N/A";
   const materialsStatus = getMaterialsStatus(row);
+
+  const isRecommendedPlan =
+    selectedOptions.length === recommendedOptions.length &&
+    selectedOptions.every((opt) => recommendedOptions.includes(opt));
 
   function toggleOption(optionId) {
     setSelectedOptions((prev) =>
@@ -400,28 +445,52 @@ export default function TurnDetailDrawer({
   function applySimulatedPlan() {
     if (!selectedOptions.length || simulation.daysRecovered <= 0) return;
 
+    const patch = {};
+
+    if (selectedOptions.includes("switch_vendor") && recommendedVendor) {
+      patch.vendor = recommendedVendor.vendor;
+      patch.nextAction = "Confirm recommended vendor schedule";
+    }
+
     onApplySimulatedPlan({
-      row,
+      row: { ...row, ...patch },
       selectedOptions,
       simulation,
+    });
+  }
+
+  function applyRecommendedVendorNow() {
+    if (!recommendedVendor) return;
+    onApplySimulatedPlan({
+      row: { ...row, vendor: recommendedVendor.vendor, nextAction: "Confirm recommended vendor schedule" },
+      selectedOptions: ["switch_vendor"],
+      simulation: {
+        daysRecovered: recommendedVendor.estimatedDaysSaved || 0,
+        simulatedCompletion:
+          recommendedVendor.estimatedDaysSaved > 0
+            ? shiftDate(row.projectedCompletion, -(recommendedVendor.estimatedDaysSaved || 0))
+            : row.projectedCompletion,
+        revenueProtected: Math.round(
+          (recommendedVendor.estimatedDaysSaved || 0) * (row.impact?.dailyRentValue || 0)
+        ),
+      },
     });
   }
 
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/30" onClick={onClose} />
-
       <div className="w-[720px] overflow-y-auto bg-white p-6 shadow-xl">
         <div className="flex items-start justify-between gap-4">
           <div>
-  <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
-  <div className="mt-1 text-sm text-slate-500">
-    {row.market} • {row.portfolioName || "Portfolio not set"}
-  </div>
-  <div className="mt-1 text-xs text-slate-500">
-    Turn detail: context, readiness, and recovery options
-  </div>
-</div>
+            <div className="text-2xl font-semibold text-slate-900">{row.name}</div>
+            <div className="mt-1 text-sm text-slate-500">
+              {row.market} • {row.portfolioName || "Portfolio not set"}
+            </div>
+            <div className="mt-1 text-xs text-slate-500">
+              Turn detail: context, readiness, and recovery options
+            </div>
+          </div>
 
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
             ✕
@@ -439,6 +508,7 @@ export default function TurnDetailDrawer({
           <Pill tone="blue">Risk {row.risk}</Pill>
         </div>
 
+        {/* DECIDE */}
         <Card className="mt-6 border-blue-200">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -468,17 +538,12 @@ export default function TurnDetailDrawer({
             </div>
 
             {aiRiskDrivers.length ? (
-              <div className="mt-4">
-                <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">
-                  Risk drivers
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {aiRiskDrivers.map((driver) => (
-                    <Pill key={driver} tone="amber">
-                      {driver}
-                    </Pill>
-                  ))}
-                </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {aiRiskDrivers.map((driver) => (
+                  <Pill key={driver} tone="amber">
+                    {driver}
+                  </Pill>
+                ))}
               </div>
             ) : null}
 
@@ -493,54 +558,62 @@ export default function TurnDetailDrawer({
           </div>
         </Card>
 
-        <Card className="mt-6">
+        <Card className="mt-4 border-emerald-200 bg-emerald-50">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-sm font-medium text-slate-900">
-                System of Record Sync
+                Recommended Vendor
               </div>
               <div className="mt-1 text-xs text-slate-500">
-                PMS-agnostic sync posture and source-system coverage
+                Best fit for this market and scope based on quality, speed, reliability, and cost
               </div>
             </div>
-            <Pill tone={getSyncTone(row.syncStatus)}>{row.syncStatus}</Pill>
+            <Pill tone="green">Auto recommendation</Pill>
           </div>
 
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Source System</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.sourceSystemName}
+          {recommendedVendor ? (
+            <div className="mt-4 rounded-2xl border border-emerald-200 bg-white p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <div className="text-base font-semibold text-slate-900">
+                    {recommendedVendor.vendor}
+                  </div>
+                  <div className="mt-1 text-sm text-slate-600">
+                    {recommendedVendor.reason}
+                  </div>
+                </div>
+                <Pill tone="green">Score {recommendedVendor.overall}</Pill>
               </div>
-            </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Last Synced</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.lastSyncedAt ? formatShortDate(row.lastSyncedAt) : "—"}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Pill tone="green">Quality {recommendedVendor.quality}</Pill>
+                <Pill tone="green">Speed {recommendedVendor.speed}</Pill>
+                <Pill tone="slate">Reliability {recommendedVendor.reliability}</Pill>
+                <Pill tone="amber">Cost {recommendedVendor.cost}</Pill>
               </div>
-              <div className="mt-1 text-xs text-slate-400">
-                {row.lastSyncedLabel || "No sync metadata"}
-              </div>
-            </div>
 
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Field Coverage</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.fieldCoverageLabel}
+              <div className="mt-4 flex flex-wrap gap-2">
+                <button
+                  onClick={applyRecommendedVendorNow}
+                  className="rounded-md bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-700"
+                >
+                  Switch to recommended vendor
+                </button>
+                {row.vendor ? (
+                  <div className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                    Current vendor: {row.vendor}
+                  </div>
+                ) : null}
               </div>
             </div>
-
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Record ID</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.externalRecordId || row.id}
-              </div>
+          ) : (
+            <div className="mt-4 rounded-2xl border border-slate-200 bg-white p-4 text-sm text-slate-500">
+              No strong recommendation available for this market / scope yet.
             </div>
-          </div>
+          )}
         </Card>
 
-        <div className="mt-6 grid gap-4 md:grid-cols-2">
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
           <Card>
             <div className="text-xs uppercase tracking-wide text-slate-500">Why Now</div>
             <div className="mt-2 text-sm leading-6 text-slate-700">
@@ -561,6 +634,7 @@ export default function TurnDetailDrawer({
           </Card>
         </div>
 
+        {/* EXECUTE */}
         <Card className="mt-6">
           <div className="flex items-start justify-between gap-4">
             <div>
@@ -603,15 +677,15 @@ export default function TurnDetailDrawer({
           </div>
         </Card>
 
-        <Card className="mt-6">
+        <Card className="mt-4">
           <div className="text-sm font-medium text-slate-900">Operational Readiness</div>
           <div className="mt-1 text-xs text-slate-500">
-            Readiness checks and execution dependencies surfaced here instead of the pipeline table
+            Readiness checks and execution dependencies
           </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Current Occupancy Status (Today)</div>
+              <div className="text-xs text-slate-500">Current Occupancy Status</div>
               <div className="mt-2">
                 <Pill tone={getReadinessTone(occupancyStatus)}>{occupancyStatus}</Pill>
               </div>
@@ -646,31 +720,17 @@ export default function TurnDetailDrawer({
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Primary Blocker</div>
-              <div className="mt-1 text-sm font-medium text-slate-900">
-                {row.blocker || "None"}
-              </div>
-              <div className="mt-1 text-xs text-slate-400">
-                {row.nextAction || "No action set"}
-              </div>
-            </div>
-          </div>
-        </Card>
-
-        <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Key Dates & Financials</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Useful source-of-record fields surfaced for operating review
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-            <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Move-Out Date</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
                 {row.moveOutDate ? formatShortDate(row.moveOutDate) : "—"}
               </div>
             </div>
+          </div>
+        </Card>
 
+        <Card className="mt-4">
+          <div className="text-sm font-medium text-slate-900">Key Dates & Financials</div>
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Initial ECD</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
@@ -706,145 +766,11 @@ export default function TurnDetailDrawer({
               <div className="mt-1 text-sm font-medium text-slate-900">
                 ${row.impact?.dailyRentValue || 0}
               </div>
-              <div className="mt-1 text-xs text-slate-400">
-                {row.rentSourceLabel}
-              </div>
             </div>
           </div>
         </Card>
 
-        <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Operational Coverage</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Linked source-system objects and detected record coverage
-          </div>
-
-          <div className="mt-4 grid gap-4 md:grid-cols-3">
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Work Orders</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {row.workOrderCount || 0}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {row.workOrderCount > 0
-                  ? "Detected from source system"
-                  : "No linked work orders"}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Approvals</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {row.approvalCount || 0}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {row.approvalCount > 0
-                  ? "Approval trail present"
-                  : "No approval records linked"}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 p-4">
-              <div className="text-xs text-slate-500">Attachments</div>
-              <div className="mt-2 text-2xl font-semibold text-slate-900">
-                {row.attachmentCount || 0}
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                {row.attachmentCount > 0
-                  ? "Attachments detected"
-                  : "No linked attachments"}
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {(row.workOrders || []).slice(0, 3).map((workOrder) => (
-              <div
-                key={workOrder.id}
-                className="rounded-2xl border border-slate-200 bg-white p-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">
-                      {workOrder.title}
-                    </div>
-                    <div className="mt-1 text-xs text-slate-500">
-                      {workOrder.trade} • {workOrder.vendor}
-                    </div>
-                  </div>
-                  <Pill tone={workOrder.statusTone || "slate"}>
-                    {workOrder.status}
-                  </Pill>
-                </div>
-              </div>
-            ))}
-
-            {!row.workOrders?.length ? (
-              <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-                No detailed linked work orders surfaced yet.
-              </div>
-            ) : null}
-          </div>
-        </Card>
-
-        <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Timeline & Stage Health</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Operational timing, milestones, and SLA position
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {timelineRows.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-2xl border border-slate-200 bg-white p-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-medium text-slate-900">
-                      {item.label}
-                    </div>
-                    {item.subtext ? (
-                      <div className="mt-1 text-xs text-slate-500">
-                        {item.subtext}
-                      </div>
-                    ) : null}
-                  </div>
-                  <Pill tone={item.tone}>{item.value}</Pill>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-
-        <Card className="mt-6">
-          <div className="text-sm font-medium text-slate-900">Workflow History</div>
-          <div className="mt-1 text-xs text-slate-500">
-            Completed execution steps and observed progress
-          </div>
-
-          {workflowHistory.length ? (
-            <div className="mt-4 space-y-3">
-              {workflowHistory.map((item, index) => (
-                <div
-                  key={`${item.id}-${index}`}
-                  className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-4"
-                >
-                  <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-emerald-600 text-xs text-white">
-                    ✓
-                  </span>
-                  <div className="text-sm text-slate-700">{item.label}</div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">
-              No workflow milestones completed yet.
-            </div>
-          )}
-        </Card>
-
-        <Card className="mt-6">
+        <Card className="mt-4">
           <div className="text-sm font-medium text-slate-900">Recent Notes</div>
           <div className="mt-1 text-xs text-slate-500">
             Latest execution notes attached to this turn
@@ -868,31 +794,11 @@ export default function TurnDetailDrawer({
           )}
         </Card>
 
-        <Card className="mt-6">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="text-sm font-medium text-slate-900">
-                Vendor Intelligence
-              </div>
-              <div className="mt-1 text-xs text-slate-500">
-                Dispatch and execution signal based on linked work orders and vendor posture
-              </div>
-            </div>
-            <Pill
-              tone={
-                vendorSignal?.vendorRisk === "high"
-                  ? "red"
-                  : vendorSignal?.vendorRisk === "medium"
-                  ? "amber"
-                  : "green"
-              }
-            >
-              {vendorSignal?.vendorRisk === "high"
-                ? "High vendor risk"
-                : vendorSignal?.vendorRisk === "medium"
-                ? "Medium vendor risk"
-                : "Stable vendor signal"}
-            </Pill>
+        {/* INSPECT */}
+        <Card className="mt-4">
+          <div className="text-sm font-medium text-slate-900">Vendor Intelligence</div>
+          <div className="mt-1 text-xs text-slate-500">
+            Dispatch and execution signal based on linked work orders and vendor posture
           </div>
 
           <div className="mt-4 grid gap-4 md:grid-cols-3">
@@ -923,7 +829,7 @@ export default function TurnDetailDrawer({
           </div>
         </Card>
 
-        <Card className="mt-6">
+        <Card className="mt-4">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="text-sm font-medium text-slate-900">Delay Simulator</div>
@@ -944,10 +850,6 @@ export default function TurnDetailDrawer({
             </button>
           </div>
 
-          <div className="mt-2 text-xs text-slate-500">
-            Recommended plan selected based on blocker state, stage friction, vendor risk, and recoverable revenue.
-          </div>
-
           <div className="mt-4 space-y-3">
             {simulatorOptions.map((option) => (
               <label
@@ -965,10 +867,8 @@ export default function TurnDetailDrawer({
                     disabled={!option.enabled}
                     onChange={() => toggleOption(option.id)}
                   />
-
                   <div className="flex items-center gap-2">
                     <span>{option.label}</span>
-
                     {option.category ? (
                       <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] uppercase tracking-wide text-slate-500">
                         {option.category === "vendor" ? "Vendor" : "Workflow"}
@@ -976,7 +876,6 @@ export default function TurnDetailDrawer({
                     ) : null}
                   </div>
                 </div>
-
                 <div className="text-xs font-medium">
                   {option.enabled ? `+${option.days}d` : "N/A"}
                 </div>

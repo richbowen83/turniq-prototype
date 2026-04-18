@@ -4,32 +4,77 @@ import { useMemo, useState } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import ProgressBar from "../shared/ProgressBar";
+import { getRevenueProtected } from "../../utils/economics";
 
 const HORIZONS = ["Current", "Next 7 Days", "Next 14 Days", "All Active"];
 const TODAY = new Date("2026-05-07");
 
-function getToneFromRisk(risk) {
+function average(values) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function getStageSla(stage) {
+  if (stage === "Pre-Leasing") return 2;
+  if (stage === "Pre-Move Out Inspection") return 2;
+  if (stage === "Move Out Inspection") return 2;
+  if (stage === "Scope Review") return 3;
+  if (stage === "Owner Approval") return 3;
+  if (stage === "Dispatch") return 2;
+  if (stage === "Pending RRI") return 2;
+  if (stage === "Rent Ready Open") return 1;
+  if (stage === "Failed Rent Ready") return 3;
+  return 3;
+}
+
+function getRiskTone(risk) {
   if (risk >= 75) return "red";
   if (risk >= 60) return "amber";
-  return "emerald";
+  return "green";
+}
+
+function getCapacityTone(capacity) {
+  if (capacity >= 80) return "red";
+  if (capacity >= 65) return "amber";
+  return "green";
+}
+
+function getDeltaTone(delta, goodWhenHigher = false) {
+  if (delta === 0) return "slate";
+  if (goodWhenHigher) {
+    return delta > 0 ? "green" : "red";
+  }
+  return delta > 0 ? "red" : "green";
+}
+
+function getDeltaArrow(delta, goodWhenHigher = false) {
+  const tone = getDeltaTone(delta, goodWhenHigher);
+  if (tone === "slate") return "→";
+  return delta > 0 ? "↑" : "↓";
+}
+
+function formatDelta(delta, suffix = "", goodWhenHigher = false) {
+  const tone = getDeltaTone(delta, goodWhenHigher);
+  const arrow = getDeltaArrow(delta, goodWhenHigher);
+  const abs = Math.abs(delta);
+
+  return {
+    tone,
+    label: `${arrow}${abs}${suffix}`,
+  };
 }
 
 function isInHorizon(property, horizon) {
-  if (horizon === "All Active") return true;
+  if (horizon === "All Active" || horizon === "Current") return true;
 
   const ecd = new Date(property.projectedCompletion);
+  if (Number.isNaN(ecd.getTime())) return false;
+
   const diffDays = Math.ceil((ecd - TODAY) / (1000 * 60 * 60 * 24));
 
-  if (horizon === "Current") return true;
   if (horizon === "Next 7 Days") return diffDays <= 7;
   if (horizon === "Next 14 Days") return diffDays <= 14;
-
   return true;
-}
-
-function average(values) {
-  if (!values.length) return 0;
-  return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
 function getStageAnalytics(rows) {
@@ -42,37 +87,44 @@ function getStageAnalytics(rows) {
     "Dispatch",
     "Pending RRI",
     "Rent Ready Open",
+    "Failed Rent Ready",
   ];
 
-  return stages.map((stage) => {
-    const items = rows.filter((r) => r.currentStage === stage);
-    const count = items.length;
-    const avgDays = count ? average(items.map((r) => r.daysInStage || 0)) : 0;
-    const blockedPct = count
-      ? Math.round((items.filter((r) => r.turnStatus === "Blocked").length / count) * 100)
-      : 0;
+  return stages
+    .map((stage) => {
+      const items = rows.filter((row) => row.currentStage === stage);
+      const count = items.length;
+      const avgDays = count ? average(items.map((row) => row.daysInStage || 0)) : 0;
+      const blockedCount = items.filter((row) => row.turnStatus === "Blocked").length;
+      const overSlaCount = items.filter(
+        (row) => (row.daysInStage || 0) > getStageSla(stage)
+      ).length;
 
-    return {
-      stage,
-      count,
-      avgDays: Number(avgDays.toFixed(1)),
-      blockedPct,
-    };
-  });
+      return {
+        stage,
+        count,
+        avgDays: Number(avgDays.toFixed(1)),
+        blockedPct: count ? Math.round((blockedCount / count) * 100) : 0,
+        overSlaPct: count ? Math.round((overSlaCount / count) * 100) : 0,
+        sla: getStageSla(stage),
+      };
+    })
+    .filter((item) => item.count > 0);
 }
 
 function getMarketAnalytics(rows) {
-  return Array.from(new Set(rows.map((r) => r.market)))
+  return Array.from(new Set(rows.map((row) => row.market).filter(Boolean)))
     .map((market) => {
-      const items = rows.filter((r) => r.market === market);
+      const items = rows.filter((row) => row.market === market);
+
       return {
         market,
         openTurns: items.length,
-        avgRisk: Math.round(average(items.map((r) => r.risk))),
-        avgReadiness: Math.round(average(items.map((r) => r.readiness))),
-        blocked: items.filter((r) => r.turnStatus === "Blocked").length,
-        pastDue: items.filter(
-          (r) => new Date(r.projectedCompletion) < new Date("2026-05-07")
+        avgRisk: Math.round(average(items.map((row) => row.risk || 0))),
+        avgReadiness: Math.round(average(items.map((row) => row.readiness || 0))),
+        blocked: items.filter((row) => row.turnStatus === "Blocked").length,
+        overSla: items.filter(
+          (row) => (row.daysInStage || 0) > getStageSla(row.currentStage)
         ).length,
       };
     })
@@ -85,10 +137,17 @@ function getDelayDriverAnalytics(rows) {
   rows.forEach((row) => {
     (row.delayDrivers || []).forEach((driver) => {
       if (!map[driver.label]) {
-        map[driver.label] = { label: driver.label, totalDays: 0, appearances: 0 };
+        map[driver.label] = {
+          label: driver.label,
+          totalDays: 0,
+          appearances: 0,
+          revenueExposure: 0,
+        };
       }
-      map[driver.label].totalDays += driver.days;
+
+      map[driver.label].totalDays += driver.days || 0;
       map[driver.label].appearances += 1;
+      map[driver.label].revenueExposure += getRevenueProtected(driver.days || 0, row);
     });
   });
 
@@ -97,16 +156,19 @@ function getDelayDriverAnalytics(rows) {
       ...item,
       avgDays: Number((item.totalDays / item.appearances).toFixed(1)),
     }))
-    .sort((a, b) => b.totalDays - a.totalDays)
-    .slice(0, 6);
+    .sort((a, b) => b.revenueExposure - a.revenueExposure)
+    .slice(0, 8);
 }
 
 function getVendorAnalytics(rows) {
-  const vendors = Array.from(new Set(rows.map((r) => r.vendor).filter(Boolean)));
+  const vendors = Array.from(new Set(rows.map((row) => row.vendor).filter(Boolean)));
 
   return vendors
     .map((vendor) => {
-      const items = rows.filter((r) => r.vendor === vendor);
+      const items = rows.filter((row) => row.vendor === vendor);
+      const jobs = items.length;
+      const avgRisk = Math.round(average(items.map((row) => row.risk || 0)));
+      const avgReadiness = Math.round(average(items.map((row) => row.readiness || 0)));
 
       const onTimeRate = Math.max(
         72,
@@ -115,10 +177,10 @@ function getVendorAnalytics(rows) {
           Math.round(
             100 -
               average(
-                items.map((r) => {
-                  if (r.turnStatus === "Blocked") return 22;
-                  if (r.risk >= 80) return 14;
-                  if (r.risk >= 70) return 9;
+                items.map((row) => {
+                  if (row.turnStatus === "Blocked") return 20;
+                  if ((row.daysInStage || 0) > getStageSla(row.currentStage)) return 12;
+                  if ((row.risk || 0) >= 80) return 10;
                   return 4;
                 })
               )
@@ -132,10 +194,10 @@ function getVendorAnalytics(rows) {
           97,
           Math.round(
             average(
-              items.map((r) => {
-                if (r.readiness >= 90) return 95;
-                if (r.readiness >= 75) return 90;
-                if (r.readiness >= 60) return 84;
+              items.map((row) => {
+                if ((row.readiness || 0) >= 90) return 95;
+                if ((row.readiness || 0) >= 75) return 90;
+                if ((row.readiness || 0) >= 60) return 84;
                 return 78;
               })
             )
@@ -143,22 +205,25 @@ function getVendorAnalytics(rows) {
         )
       );
 
-      const avgRisk = Math.round(average(items.map((r) => r.risk)));
-      const jobs = items.length;
       const score = Math.round(
-        onTimeRate * 0.4 + qualityRate * 0.35 + (100 - avgRisk) * 0.25
+        onTimeRate * 0.35 +
+          qualityRate * 0.3 +
+          (100 - avgRisk) * 0.2 +
+          avgReadiness * 0.15
       );
-      const capacity = Math.min(96, 45 + jobs * 18 + (100 - avgRisk) * 0.25);
+
+      const capacity = Math.min(96, Math.round(45 + jobs * 10 + (100 - avgRisk) * 0.2));
 
       return {
         vendor,
         jobs,
         avgRisk,
+        avgReadiness,
         onTimeRate,
         qualityRate,
         score,
-        capacity: Math.round(capacity),
-        markets: Array.from(new Set(items.map((r) => r.market))).join(", "),
+        capacity,
+        markets: Array.from(new Set(items.map((row) => row.market))).join(", "),
       };
     })
     .sort((a, b) => b.score - a.score);
@@ -166,25 +231,25 @@ function getVendorAnalytics(rows) {
 
 function getRiskBands(rows) {
   return {
-    high: rows.filter((r) => r.risk >= 75).length,
-    watch: rows.filter((r) => r.risk >= 60 && r.risk < 75).length,
-    healthy: rows.filter((r) => r.risk < 60).length,
+    high: rows.filter((row) => row.risk >= 75).length,
+    watch: rows.filter((row) => row.risk >= 60 && row.risk < 75).length,
+    healthy: rows.filter((row) => row.risk < 60).length,
   };
 }
 
 function getActionAnalytics(actionHistory) {
-  const completed = actionHistory.filter((a) => a.kind === "completed");
+  const completed = actionHistory.filter((item) => item.kind === "completed");
 
   const totalActions = completed.length;
-  const totalDaysAvoided = completed.reduce((sum, a) => sum + (a.daysAvoided || 0), 0);
+  const totalDaysAvoided = completed.reduce((sum, item) => sum + (item.daysAvoided || 0), 0);
   const totalVacancySavings = completed.reduce(
-    (sum, a) => sum + (a.vacancySavings || 0),
+    (sum, item) => sum + (item.vacancySavings || 0),
     0
   );
 
   const avgResponseMinutes = totalActions
     ? Math.round(
-        completed.reduce((sum, a) => sum + (a.responseMinutes || 0), 0) / totalActions
+        completed.reduce((sum, item) => sum + (item.responseMinutes || 0), 0) / totalActions
       )
     : 0;
 
@@ -220,7 +285,7 @@ function getActionAnalytics(actionHistory) {
           Math.round(totalVacancySavings * 0.35)
       ),
     },
-  ].filter((x) => x.actions > 0);
+  ].filter((item) => item.actions > 0);
 
   return {
     totalActions,
@@ -231,22 +296,15 @@ function getActionAnalytics(actionHistory) {
   };
 }
 
-function getInsights(
-  rows,
-  stageAnalytics,
-  marketAnalytics,
-  vendorAnalytics,
-  delayDrivers,
-  actionAnalytics
-) {
+function getInsights(stageAnalytics, marketAnalytics, vendorAnalytics, delayDrivers, actionAnalytics) {
   const insights = [];
 
-  const worstStage = [...stageAnalytics].sort((a, b) => b.avgDays - a.avgDays)[0];
-  if (worstStage && worstStage.count > 0) {
+  const worstStage = [...stageAnalytics].sort((a, b) => b.overSlaPct - a.overSlaPct)[0];
+  if (worstStage) {
     insights.push({
       tone: "amber",
-      title: `Stage bottleneck: ${worstStage.stage}`,
-      body: `${worstStage.count} turns are sitting in ${worstStage.stage} for an average of ${worstStage.avgDays} days.`,
+      title: `Stage pressure: ${worstStage.stage}`,
+      body: `${worstStage.overSlaPct}% of turns in ${worstStage.stage} are over SLA, with average stage time at ${worstStage.avgDays} days.`,
     });
   }
 
@@ -254,8 +312,8 @@ function getInsights(
   if (worstMarket) {
     insights.push({
       tone: worstMarket.avgRisk >= 75 ? "red" : "amber",
-      title: `Highest-risk market: ${worstMarket.market}`,
-      body: `${worstMarket.market} is averaging risk ${worstMarket.avgRisk} across ${worstMarket.openTurns} open turns.`,
+      title: `Market to watch: ${worstMarket.market}`,
+      body: `${worstMarket.market} has ${worstMarket.openTurns} active turns, average TurnIQ-computed risk ${worstMarket.avgRisk}, and ${worstMarket.overSla} turns over SLA.`,
     });
   }
 
@@ -264,7 +322,7 @@ function getInsights(
     insights.push({
       tone: "blue",
       title: `Top delay driver: ${biggestDriver.label}`,
-      body: `${biggestDriver.label} is contributing ${biggestDriver.totalDays} total modeled delay days across active turns.`,
+      body: `${biggestDriver.label} represents ${biggestDriver.totalDays} modeled delay days and ~$${biggestDriver.revenueExposure.toLocaleString()} of exposure.`,
     });
   }
 
@@ -272,7 +330,7 @@ function getInsights(
   if (bestVendor) {
     insights.push({
       tone: "emerald",
-      title: `Best-performing vendor: ${bestVendor.vendor}`,
+      title: `Strongest vendor signal: ${bestVendor.vendor}`,
       body: `${bestVendor.vendor} leads with score ${bestVendor.score}, on-time rate ${bestVendor.onTimeRate}%, and quality ${bestVendor.qualityRate}%.`,
     });
   }
@@ -281,18 +339,77 @@ function getInsights(
     insights.push({
       tone: "blue",
       title: "Operator actions are reducing delay exposure",
-      body: `${actionAnalytics.totalActions} completed actions have avoided ${actionAnalytics.totalDaysAvoided} delay days and saved $${actionAnalytics.totalVacancySavings} in projected vacancy.`,
+      body: `${actionAnalytics.totalActions} completed actions have avoided ${actionAnalytics.totalDaysAvoided} delay days and saved $${actionAnalytics.totalVacancySavings.toLocaleString()} in projected vacancy.`,
     });
   }
 
   return insights.slice(0, 5);
 }
 
+function buildSummary(rows) {
+  return {
+    avgRisk: Math.round(average(rows.map((property) => property.risk || 0))),
+    avgReadiness: Math.round(average(rows.map((property) => property.readiness || 0))),
+    avgStageAge: Number(average(rows.map((property) => property.daysInStage || 0)).toFixed(1)),
+    avgConfidence: Math.round(average(rows.map((property) => property.timelineConfidence || 0))),
+    blockedTurns: rows.filter((property) => property.turnStatus === "Blocked").length,
+    overSlaTurns: rows.filter(
+      (property) => (property.daysInStage || 0) > getStageSla(property.currentStage)
+    ).length,
+  };
+}
+
+function renderKpiDelta(currentValue, baselineValue, suffix = "", goodWhenHigher = false) {
+  const delta = Math.round((currentValue - baselineValue) * 10) / 10;
+  const { tone, label } = formatDelta(delta, suffix, goodWhenHigher);
+
+  return (
+    <div
+      className={`mt-2 text-xs font-medium ${
+        tone === "green"
+          ? "text-emerald-600"
+          : tone === "red"
+          ? "text-red-600"
+          : "text-slate-400"
+      }`}
+    >
+      {label} vs Current
+    </div>
+  );
+}
+
+function CapacityBar({ value }) {
+  const tone = getCapacityTone(value);
+  const barClass =
+    tone === "red"
+      ? "bg-red-500"
+      : tone === "amber"
+      ? "bg-amber-500"
+      : "bg-emerald-500";
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className="min-w-[44px] text-xs text-slate-500">{value}%</div>
+      <div className="h-3 w-full min-w-[160px] rounded-full bg-slate-100">
+        <div
+          className={`h-3 rounded-full ${barClass}`}
+          style={{ width: `${Math.max(0, Math.min(100, value))}%` }}
+        />
+      </div>
+    </div>
+  );
+}
+
 export default function AnalyticsTab({ properties, actionHistory = [] }) {
   const [horizon, setHorizon] = useState("Current");
 
+  const currentProperties = useMemo(
+    () => properties.filter((property) => isInHorizon(property, "Current")),
+    [properties]
+  );
+
   const scopedProperties = useMemo(
-    () => properties.filter((p) => isInHorizon(p, horizon)),
+    () => properties.filter((property) => isInHorizon(property, horizon)),
     [properties, horizon]
   );
 
@@ -327,36 +444,15 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
   );
 
   const insights = useMemo(
-    () =>
-      getInsights(
-        scopedProperties,
-        stageAnalytics,
-        marketAnalytics,
-        vendorAnalytics,
-        delayDrivers,
-        actionAnalytics
-      ),
-    [
-      scopedProperties,
-      stageAnalytics,
-      marketAnalytics,
-      vendorAnalytics,
-      delayDrivers,
-      actionAnalytics,
-    ]
+    () => getInsights(stageAnalytics, marketAnalytics, vendorAnalytics, delayDrivers, actionAnalytics),
+    [stageAnalytics, marketAnalytics, vendorAnalytics, delayDrivers, actionAnalytics]
   );
 
-  const avgRisk = Math.round(average(scopedProperties.map((p) => p.risk)));
-  const avgReadiness = Math.round(average(scopedProperties.map((p) => p.readiness)));
-  const avgStageAge = Number(
-    average(scopedProperties.map((p) => p.daysInStage || 0)).toFixed(1)
-  );
-  const avgConfidence = Math.round(
-    average(scopedProperties.map((p) => p.timelineConfidence || 0))
-  );
+  const summary = useMemo(() => buildSummary(scopedProperties), [scopedProperties]);
+  const baselineSummary = useMemo(() => buildSummary(currentProperties), [currentProperties]);
 
-  const maxStageDays = Math.max(...stageAnalytics.map((s) => s.avgDays), 1);
-  const maxDelayDays = Math.max(...delayDrivers.map((d) => d.totalDays), 1);
+  const maxStageDays = Math.max(...stageAnalytics.map((item) => item.avgDays), 1);
+  const maxDelayExposure = Math.max(...delayDrivers.map((item) => item.revenueExposure), 1);
   const hasOperatorData = actionAnalytics.totalActions > 0;
 
   return (
@@ -365,7 +461,7 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
         <div>
           <div className="text-3xl font-semibold text-slate-900">Analytics</div>
           <div className="mt-1 text-sm text-slate-500">
-            Analyze bottlenecks, market risk, vendor performance, modeled delay drivers, and operator impact.
+            Performance, bottlenecks, vendor outcomes, TurnIQ-computed risk/readiness, delay drivers, and operator learning.
           </div>
         </div>
 
@@ -386,103 +482,92 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <Card>
-          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Portfolio Risk</div>
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-3xl font-semibold text-slate-900">{avgRisk}</div>
-            <span className="text-sm text-emerald-500">↑4</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-400">vs last week</div>
-          <div className="mt-2 text-sm text-slate-500">Across scoped active turns</div>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Avg Risk</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.avgRisk}</div>
+          <div className="mt-1 text-sm text-slate-500">TurnIQ-computed portfolio risk</div>
+          {renderKpiDelta(summary.avgRisk, baselineSummary.avgRisk)}
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Readiness</div>
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-3xl font-semibold text-slate-900">{avgReadiness}/100</div>
-            <span className="text-sm text-emerald-500">↑4</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-400">vs last week</div>
-          <div className="mt-2 text-sm text-slate-500">Portfolio execution readiness</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.avgReadiness}</div>
+          <div className="mt-1 text-sm text-slate-500">TurnIQ-computed readiness</div>
+          {renderKpiDelta(summary.avgReadiness, baselineSummary.avgReadiness, "", true)}
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">Avg Days In Stage</div>
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-3xl font-semibold text-slate-900">{avgStageAge}</div>
-            <span className="text-sm text-emerald-500">↑4</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-400">vs last week</div>
-          <div className="mt-2 text-sm text-slate-500">Current stage aging</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.avgStageAge}</div>
+          <div className="mt-1 text-sm text-slate-500">Stage aging signal</div>
+          {renderKpiDelta(summary.avgStageAge, baselineSummary.avgStageAge)}
         </Card>
 
         <Card>
           <div className="text-xs uppercase tracking-wide text-slate-500">AI Confidence</div>
-          <div className="mt-3 flex items-center gap-2">
-            <div className="text-3xl font-semibold text-slate-900">{avgConfidence}%</div>
-            <span className="text-sm text-emerald-500">↑4</span>
-          </div>
-          <div className="mt-1 text-xs text-slate-400">vs last week</div>
-          <div className="mt-2 text-sm text-slate-500">Average modeled timeline confidence</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.avgConfidence}%</div>
+          <div className="mt-1 text-sm text-slate-500">Modeled timeline confidence</div>
+          {renderKpiDelta(summary.avgConfidence, baselineSummary.avgConfidence, "%", true)}
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Blocked Turns</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.blockedTurns}</div>
+          <div className="mt-1 text-sm text-slate-500">Current execution blockers</div>
+          {renderKpiDelta(summary.blockedTurns, baselineSummary.blockedTurns)}
+        </Card>
+
+        <Card>
+          <div className="text-xs uppercase tracking-wide text-slate-500">Over-SLA Turns</div>
+          <div className="mt-2 text-2xl font-semibold text-slate-900">{summary.overSlaTurns}</div>
+          <div className="mt-1 text-sm text-slate-500">Stage pressure above target</div>
+          {renderKpiDelta(summary.overSlaTurns, baselineSummary.overSlaTurns)}
         </Card>
       </div>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-6">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Stage Bottleneck Analysis</div>
+            <div className="text-xl font-semibold text-slate-900">Stage performance</div>
             <div className="mt-1 text-sm text-slate-500">
-              Average days spent in each stage across the scoped turn set.
+              Average time in stage plus blocked and over-SLA pressure.
             </div>
 
-            <div className="mt-5">
-              <div className="mb-3 grid grid-cols-[1fr_72px] gap-3">
-                <div className="flex justify-between px-1 text-[11px] uppercase tracking-wide text-slate-400">
-                  <span>0d</span>
-                  <span>{Math.ceil(maxStageDays / 4)}d</span>
-                  <span>{Math.ceil(maxStageDays / 2)}d</span>
-                  <span>{Math.ceil((maxStageDays * 3) / 4)}d</span>
-                  <span>{Math.ceil(maxStageDays)}d</span>
-                </div>
-                <div />
-              </div>
-
-              <div className="space-y-4">
-                {stageAnalytics.map((item) => (
-                  <div key={item.stage}>
-                    <div className="mb-1 flex items-center justify-between gap-3">
-                      <div className="text-sm font-medium text-slate-800">{item.stage}</div>
-                      <div className="text-xs text-slate-500">
-                        {item.count} turns • {item.avgDays} days
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-3">
-                      <div className="h-3 flex-1 rounded-full bg-slate-100">
-                        <div
-                          className={`h-3 rounded-full ${
-                            item.avgDays === maxStageDays ? "bg-amber-500" : "bg-blue-500"
-                          }`}
-                          style={{ width: `${(item.avgDays / maxStageDays) * 100}%` }}
-                        />
-                      </div>
-                      <div className="w-16 text-right text-xs text-slate-500">
-                        {item.blockedPct}% blocked
-                      </div>
+            <div className="mt-5 space-y-4">
+              {stageAnalytics.map((item) => (
+                <div key={item.stage}>
+                  <div className="mb-1 flex items-center justify-between gap-3">
+                    <div className="text-sm font-medium text-slate-800">{item.stage}</div>
+                    <div className="text-xs text-slate-500">
+                      {item.count} turns • avg {item.avgDays}d • SLA {item.sla}d
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  <div className="flex items-center gap-3">
+                    <div className="h-3 flex-1 rounded-full bg-slate-100">
+                      <div
+                        className={`h-3 rounded-full ${
+                          item.avgDays > item.sla ? "bg-amber-500" : "bg-blue-500"
+                        }`}
+                        style={{ width: `${(item.avgDays / maxStageDays) * 100}%` }}
+                      />
+                    </div>
+                    <div className="w-24 text-right text-xs text-slate-500">
+                      {item.overSlaPct}% over SLA
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
           </Card>
         </div>
 
         <div className="xl:col-span-6">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Market Risk Heatmap</div>
+            <div className="text-xl font-semibold text-slate-900">Market pressure</div>
             <div className="mt-1 text-sm text-slate-500">
-              Relative market pressure based on open turns, blocked turns, and average risk.
+              Relative market load based on TurnIQ-computed risk, blocked turns, and stage pressure.
             </div>
 
             <div className="mt-5 grid gap-3 sm:grid-cols-2">
@@ -501,10 +586,10 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
                     <div>
                       <div className="font-semibold text-slate-900">{market.market}</div>
                       <div className="mt-1 text-sm text-slate-600">
-                        {market.openTurns} turns • {market.blocked} blocked • {market.pastDue} past due
+                        {market.openTurns} turns • {market.blocked} blocked • {market.overSla} over SLA
                       </div>
                     </div>
-                    <Pill tone={getToneFromRisk(market.avgRisk)}>{market.avgRisk}</Pill>
+                    <Pill tone={getRiskTone(market.avgRisk)}>{market.avgRisk}</Pill>
                   </div>
 
                   <div className="mt-4">
@@ -523,9 +608,9 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-5">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Delay Driver Contribution</div>
+            <div className="text-xl font-semibold text-slate-900">Delay driver contribution</div>
             <div className="mt-1 text-sm text-slate-500">
-              Which modeled issues are contributing the most total delay exposure.
+              Which modeled issues are contributing the most exposure.
             </div>
 
             <div className="mt-5 space-y-4">
@@ -534,14 +619,14 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
                   <div className="mb-1 flex items-center justify-between gap-3">
                     <div className="text-sm font-medium text-slate-800">{driver.label}</div>
                     <div className="text-xs text-slate-500">
-                      {driver.totalDays} total days • avg {driver.avgDays}
+                      ${driver.revenueExposure.toLocaleString()} • avg {driver.avgDays}d
                     </div>
                   </div>
 
                   <div className="h-3 rounded-full bg-slate-100">
                     <div
                       className="h-3 rounded-full bg-red-500"
-                      style={{ width: `${(driver.totalDays / maxDelayDays) * 100}%` }}
+                      style={{ width: `${(driver.revenueExposure / maxDelayExposure) * 100}%` }}
                     />
                   </div>
                 </div>
@@ -552,9 +637,9 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
 
         <div className="xl:col-span-7">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Vendor Performance Leaderboard</div>
+            <div className="text-xl font-semibold text-slate-900">Vendor performance</div>
             <div className="mt-1 text-sm text-slate-500">
-              Performance summary based on timing, quality, average risk, and current capacity.
+              Performance summary based on timing, quality, TurnIQ-computed risk/readiness, and current capacity.
             </div>
 
             <div className="mt-5 overflow-x-auto">
@@ -574,33 +659,19 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
                 <tbody>
                   {vendorAnalytics.map((vendor, index) => (
                     <tr key={vendor.vendor} className="border-b border-slate-50">
-                      <td className="px-3 py-3 text-slate-500 font-medium">{index + 1}</td>
+                      <td className="px-3 py-3 font-medium text-slate-500">{index + 1}</td>
                       <td className="px-3 py-3 font-medium text-slate-900">{vendor.vendor}</td>
                       <td className="px-3 py-3 text-slate-600">{vendor.markets}</td>
                       <td className="px-3 py-3">{vendor.jobs}</td>
                       <td className="px-3 py-3">
-                        <Pill tone={vendor.score >= 90 ? "emerald" : vendor.score >= 80 ? "blue" : "amber"}>
+                        <Pill tone={vendor.score >= 90 ? "green" : vendor.score >= 80 ? "blue" : "amber"}>
                           {vendor.score}
                         </Pill>
                       </td>
                       <td className="px-3 py-3">{vendor.onTimeRate}%</td>
                       <td className="px-3 py-3">{vendor.qualityRate}%</td>
-                      <td className="px-3 py-3 w-[180px]">
-                        <div className="flex items-center gap-3">
-                          <div className="min-w-[44px] text-xs text-slate-500">{vendor.capacity}%</div>
-                          <div className="flex-1">
-                            <ProgressBar
-                              value={vendor.capacity}
-                              tone={
-                                vendor.capacity >= 80
-                                  ? "red"
-                                  : vendor.capacity >= 65
-                                  ? "amber"
-                                  : "emerald"
-                              }
-                            />
-                          </div>
-                        </div>
+                      <td className="px-3 py-3">
+                        <CapacityBar value={vendor.capacity} />
                       </td>
                     </tr>
                   ))}
@@ -614,9 +685,9 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-5">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">Risk Distribution</div>
+            <div className="text-xl font-semibold text-slate-900">Risk distribution</div>
             <div className="mt-1 text-sm text-slate-500">
-              Current portfolio mix by risk classification.
+              Current portfolio mix by TurnIQ-computed risk band.
             </div>
 
             <div className="mt-5">
@@ -624,31 +695,19 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
                 <div
                   className="bg-red-500"
                   style={{
-                    width: `${
-                      scopedProperties.length
-                        ? (riskBands.high / scopedProperties.length) * 100
-                        : 0
-                    }%`,
+                    width: `${scopedProperties.length ? (riskBands.high / scopedProperties.length) * 100 : 0}%`,
                   }}
                 />
                 <div
                   className="bg-amber-400"
                   style={{
-                    width: `${
-                      scopedProperties.length
-                        ? (riskBands.watch / scopedProperties.length) * 100
-                        : 0
-                    }%`,
+                    width: `${scopedProperties.length ? (riskBands.watch / scopedProperties.length) * 100 : 0}%`,
                   }}
                 />
                 <div
                   className="bg-emerald-500"
                   style={{
-                    width: `${
-                      scopedProperties.length
-                        ? (riskBands.healthy / scopedProperties.length) * 100
-                        : 0
-                    }%`,
+                    width: `${scopedProperties.length ? (riskBands.healthy / scopedProperties.length) * 100 : 0}%`,
                   }}
                 />
               </div>
@@ -675,9 +734,9 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
 
         <div className="xl:col-span-7">
           <Card className="h-full">
-            <div className="text-xl font-semibold text-slate-900">TurnIQ Operating Insights</div>
+            <div className="text-xl font-semibold text-slate-900">TurnIQ operating insights</div>
             <div className="mt-1 text-sm text-slate-500">
-              AI-generated operating takeaways from current turn performance, operator actions, and predicted execution risk.
+              Synthesized takeaways from performance, vendor outcomes, delay drivers, and actions.
             </div>
 
             <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -707,47 +766,37 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
         <div className="grid gap-6 xl:grid-cols-12">
           <div className="xl:col-span-6">
             <Card className="h-full">
-              <div className="text-xl font-semibold text-slate-900">
-                Operator Performance Loop
-              </div>
+              <div className="text-xl font-semibold text-slate-900">Operator performance loop</div>
               <div className="mt-1 text-sm text-slate-500">
                 Impact generated from action center execution.
               </div>
 
               <div className="mt-5 grid gap-3 sm:grid-cols-2">
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Actions Completed
-                  </div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Actions Completed</div>
                   <div className="mt-2 text-3xl font-semibold text-slate-900">
                     {actionAnalytics.totalActions}
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Avg Response Time
-                  </div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Avg Response Time</div>
                   <div className="mt-2 text-3xl font-semibold text-slate-900">
                     {actionAnalytics.avgResponseMinutes}m
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Delay Days Avoided
-                  </div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Delay Days Avoided</div>
                   <div className="mt-2 text-3xl font-semibold text-slate-900">
                     {actionAnalytics.totalDaysAvoided}
                   </div>
                 </div>
 
                 <div className="rounded-2xl border border-slate-200 p-4">
-                  <div className="text-xs uppercase tracking-wide text-slate-500">
-                    Vacancy Savings
-                  </div>
+                  <div className="text-xs uppercase tracking-wide text-slate-500">Vacancy Savings</div>
                   <div className="mt-2 text-3xl font-semibold text-slate-900">
-                    ${actionAnalytics.totalVacancySavings}
+                    ${actionAnalytics.totalVacancySavings.toLocaleString()}
                   </div>
                 </div>
               </div>
@@ -756,11 +805,9 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
 
           <div className="xl:col-span-6">
             <Card className="h-full">
-              <div className="text-xl font-semibold text-slate-900">
-                Operator Leaderboard
-              </div>
+              <div className="text-xl font-semibold text-slate-900">Operator leaderboard</div>
               <div className="mt-1 text-sm text-slate-500">
-                Ranking based on execution impact and modeled savings.
+                Ranked by execution impact and modeled savings.
               </div>
 
               <div className="mt-5 space-y-3">
@@ -774,16 +821,14 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
                         {index + 1}
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-900">
-                          {operator.operator}
-                        </div>
+                        <div className="font-semibold text-slate-900">{operator.operator}</div>
                         <div className="text-sm text-slate-500">
                           {operator.actions} actions • {operator.daysAvoided} days avoided
                         </div>
                       </div>
                     </div>
                     <div className="text-sm font-medium text-slate-900">
-                      ${operator.savings}
+                      ${operator.savings.toLocaleString()}
                     </div>
                   </div>
                 ))}
@@ -793,16 +838,12 @@ export default function AnalyticsTab({ properties, actionHistory = [] }) {
         </div>
       ) : (
         <Card>
-          <div className="text-xl font-semibold text-slate-900">
-            Operator Performance
-          </div>
-          <div className="mt-1 text-sm text-slate-500">
-            No operator activity yet.
-          </div>
+          <div className="text-xl font-semibold text-slate-900">Operator performance</div>
+          <div className="mt-1 text-sm text-slate-500">No operator activity yet.</div>
 
           <div className="mt-6 rounded-2xl border border-dashed border-slate-200 p-6 text-center">
             <div className="text-sm text-slate-600">
-              Complete actions from the Dashboard to start tracking performance impact.
+              Complete actions from the control center to start tracking performance impact.
             </div>
             <div className="mt-2 text-xs text-slate-400">
               Metrics will include delay days avoided, response time, and vacancy savings.
