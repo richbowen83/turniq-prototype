@@ -73,58 +73,126 @@ function StatCard({ label, value, subtext }) {
   );
 }
 
+function OperatingShiftCard({ title, before, after, tone = "default" }) {
+  const toneClasses =
+    tone === "blue"
+      ? "border-blue-200 bg-blue-50"
+      : tone === "emerald"
+      ? "border-emerald-200 bg-emerald-50"
+      : "border-slate-200 bg-white";
+
+  return (
+    <div className={`rounded-3xl border p-5 ${toneClasses}`}>
+      <div className="text-sm font-semibold text-slate-900">{title}</div>
+      <div className="mt-4 rounded-2xl bg-white/70 p-4">
+        <div className="text-xs uppercase tracking-[0.14em] text-slate-400">
+          Before
+        </div>
+        <div className="mt-2 text-sm leading-6 text-slate-600">{before}</div>
+      </div>
+      <div className="mt-3 rounded-2xl bg-slate-900 p-4 text-white">
+        <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
+          With TurnIQ
+        </div>
+        <div className="mt-2 text-sm leading-6 text-slate-100">{after}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function OverviewTab() {
   return (
     <div className="space-y-6">
-      {/* HERO */}
-      <Card className="overflow-hidden border-blue-200 bg-gradient-to-br from-slate-900 via-slate-900 to-blue-950 text-white">
+      <Card className="overflow-hidden border-blue-200 bg-gradient-to-br from-slate-950 via-slate-900 to-blue-950 text-white">
         <div className="grid gap-8 xl:grid-cols-12">
           <div className="xl:col-span-8">
             <div className="text-xs uppercase tracking-[0.18em] text-blue-200">
               TurnIQ overview
             </div>
 
-            <div className="mt-4 max-w-4xl text-4xl font-semibold tracking-tight text-white xl:text-5xl">
-              The operating system for turns execution.
-            </div>
+           <div className="mt-4 max-w-5xl text-4xl font-semibold tracking-tight text-white xl:text-6xl">
+  Turn chaos into a prioritized operating plan.
+</div>
 
-            <div className="mt-4 max-w-3xl text-base leading-7 text-slate-200 xl:text-lg">
-              Your PMS records the work. BI explains what happened. TurnIQ sits
-              in the middle and tells the business what to do next — surfacing
-              risk, prioritizing turns, modeling recovery, and helping operators
-              move faster with more confidence.
-            </div>
+<div className="mt-2 text-lg text-blue-200">
+  The operating system for turns execution.
+</div>
+
+<div className="mt-4 max-w-4xl text-base leading-7 text-slate-200 xl:text-lg">
+  TurnIQ sits between your system of record and your reporting stack,
+  converting raw turn data into risk, readiness, bottlenecks, and
+  recovery paths — so operators know exactly what to do next and
+  leadership can see where time and revenue are being lost.
+</div>
 
             <div className="mt-6 flex flex-wrap gap-2">
               <Pill tone="blue">Control tower for turns</Pill>
-              <Pill tone="green">Action-oriented</Pill>
-              <Pill tone="slate">Operator + Executive lenses</Pill>
-              <Pill tone="slate">Portfolio-aware</Pill>
+              <Pill tone="green">Top actions engine</Pill>
+              <Pill tone="slate">Forecast + simulator</Pill>
+              <Pill tone="slate">Operator + executive lenses</Pill>
+            </div>
+
+            <div className="mt-8 grid gap-4 md:grid-cols-3">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
+                  Finds the work
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-white">
+                  What needs action now
+                </div>
+              </div>
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
+                  Quantifies the stakes
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-white">
+                  Time and revenue exposure
+                </div>
+              </div>
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+                <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
+                  Guides the move
+                </div>
+                <div className="mt-2 text-2xl font-semibold text-white">
+                  Best recovery path
+                </div>
+              </div>
             </div>
           </div>
 
           <div className="xl:col-span-4">
             <div className="grid gap-3">
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
                   Core promise
                 </div>
-                <div className="mt-2 text-lg font-semibold text-white">
-                  Less reporting. More action.
+                <div className="mt-2 text-xl font-semibold text-white">
+                  Less reporting. More intervention.
                 </div>
-                <div className="mt-2 text-sm leading-6 text-slate-300">
-                  TurnIQ reduces the gap between knowing there is a problem and
-                  taking the right action to recover time and revenue.
+                <div className="mt-3 text-sm leading-6 text-slate-300">
+                  TurnIQ closes the gap between seeing a problem and acting on
+                  it with confidence.
                 </div>
               </div>
 
-              <div className="rounded-3xl border border-white/10 bg-white/5 p-4">
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
                 <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
                   Product position
                 </div>
                 <div className="mt-2 text-sm leading-6 text-slate-200">
-                  Not another report. Not a replacement PMS. A decision layer
-                  built specifically for turns operations.
+                  Not another dashboard. Not a replacement PMS. A decision layer
+                  purpose-built for turns execution.
+                </div>
+              </div>
+
+              <div className="rounded-3xl border border-white/10 bg-white/5 p-5">
+                <div className="text-xs uppercase tracking-[0.14em] text-slate-300">
+                  Best used for
+                </div>
+                <div className="mt-2 text-sm leading-6 text-slate-200">
+                  Daily operating reviews, stage bottleneck triage, vendor
+                  allocation, forecast recovery planning, and executive
+                  portfolio readouts.
                 </div>
               </div>
             </div>
@@ -132,31 +200,29 @@ export default function OverviewTab() {
         </div>
       </Card>
 
-      {/* VALUE STRIP */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          label="Sees the portfolio"
-          value="Across turns"
-          subtext="One surface for stage pressure, blockers, delay risk, readiness, and vendor exposure."
-        />
-        <StatCard
-          label="Prioritizes action"
-          value="Next best move"
-          subtext="Highlights the few turns worth acting on now instead of forcing operators to hunt through noise."
-        />
-        <StatCard
-          label="Models recovery"
-          value="Before you commit"
-          subtext="Forecasts delay and revenue exposure, then tests the effect of intervention plans."
-        />
-        <StatCard
-          label="Connects audiences"
-          value="Ops + execs"
-          subtext="The same system, with different default lenses for execution management and portfolio outcomes."
-        />
+  label="What to fix now"
+  value="Prioritized turns"
+  subtext="Surfaces the few turns that actually need attention based on risk, blockers, and delay pressure."
+/>
+<StatCard
+  label="What it’s worth"
+  value="Time + revenue"
+  subtext="Quantifies days recoverable and revenue at risk so teams focus where impact is highest."
+/>
+<StatCard
+  label="What to do next"
+  value="Clear actions"
+  subtext="Recommends the fastest path to unblock, advance, and get to rent ready."
+/>
+<StatCard
+  label="Who needs to act"
+  value="Operator clarity"
+  subtext="Connects ownership, approvals, and vendors so nothing stalls between teams."
+/>
       </div>
 
-      {/* PMS TO TURNIQ TO BI */}
       <Card className="border-slate-200 bg-slate-50">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -164,13 +230,12 @@ export default function OverviewTab() {
               How TurnIQ fits
             </div>
             <div className="mt-2 text-2xl font-semibold text-slate-900">
-              TurnIQ sits between the system of record and the reporting layer
+              It sits between the system of record and the reporting layer
             </div>
             <div className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-              It is the action layer. PMS systems are great at storing
-              operational records. BI systems are great at reporting outcomes.
-              TurnIQ converts both into intervention, prioritization, and
-              operating control.
+              PMS systems store operational truth. BI systems explain outcomes.
+              TurnIQ turns both into prioritization, intervention, and operating
+              control.
             </div>
           </div>
 
@@ -179,17 +244,17 @@ export default function OverviewTab() {
 
         <div className="mt-6 grid gap-4 xl:grid-cols-12">
           <div className="xl:col-span-4">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 h-full">
+            <div className="h-full rounded-3xl border border-slate-200 bg-white p-5">
               <div className="text-xs uppercase tracking-[0.14em] text-slate-500">
-                PMS / system of record
+                System of record
               </div>
               <div className="mt-2 text-xl font-semibold text-slate-900">
                 Captures the work
               </div>
               <div className="mt-3 space-y-2 text-sm text-slate-600">
-                <div>• Turns, stages, owners, vendors, dates, approvals</div>
-                <div>• Work orders, inspections, notes, costs</div>
-                <div>• The raw operating truth</div>
+                <div>• Turns, stages, owners, vendors, dates</div>
+                <div>• Work orders, inspections, approvals, notes</div>
+                <div>• Costs, status changes, field activity</div>
               </div>
             </div>
           </div>
@@ -199,17 +264,17 @@ export default function OverviewTab() {
           </div>
 
           <div className="xl:col-span-2">
-            <div className="rounded-3xl border border-blue-200 bg-blue-50 p-5 h-full">
+            <div className="h-full rounded-3xl border border-blue-200 bg-blue-50 p-5">
               <div className="text-xs uppercase tracking-[0.14em] text-blue-700">
                 TurnIQ
               </div>
               <div className="mt-2 text-xl font-semibold text-slate-900">
-                Prioritizes action
+                Drives action
               </div>
               <div className="mt-3 space-y-2 text-sm text-slate-700">
-                <div>• Computes risk and readiness</div>
-                <div>• Surfaces blockers and pressure</div>
-                <div>• Recommends fastest path to recovery</div>
+                <div>• Computes risk + readiness</div>
+                <div>• Ranks turns by urgency</div>
+                <div>• Recommends recovery paths</div>
               </div>
             </div>
           </div>
@@ -219,16 +284,16 @@ export default function OverviewTab() {
           </div>
 
           <div className="xl:col-span-4">
-            <div className="rounded-3xl border border-slate-200 bg-white p-5 h-full">
+            <div className="h-full rounded-3xl border border-slate-200 bg-white p-5">
               <div className="text-xs uppercase tracking-[0.14em] text-slate-500">
-                BI / reporting layer
+                Reporting layer
               </div>
               <div className="mt-2 text-xl font-semibold text-slate-900">
                 Explains performance
               </div>
               <div className="mt-3 space-y-2 text-sm text-slate-600">
-                <div>• Turn duration, throughput, cost, vendor outcomes</div>
-                <div>• Executive reporting and trend analysis</div>
+                <div>• Throughput, turn duration, and cost</div>
+                <div>• Vendor outcomes and portfolio trendlines</div>
                 <div>• The business story after execution happens</div>
               </div>
             </div>
@@ -236,29 +301,78 @@ export default function OverviewTab() {
         </div>
       </Card>
 
-      {/* WHY IT MATTERS */}
       <div className="grid gap-4 xl:grid-cols-3">
         <CapabilityCard
           eyebrow="Why this matters"
-          title="Turns are not just workflow. They are revenue timing."
+          title="Turns are revenue timing, not just workflow."
           body="Every day of delay can mean avoidable vacancy, slower lease-up, missed readiness windows, and unnecessary operator thrash."
           tone="amber"
         />
         <CapabilityCard
           eyebrow="What TurnIQ changes"
           title="It converts passive visibility into active control."
-          body="Instead of just watching stage counts and aging, operators get a prioritized queue, richer context, and recovery paths."
+          body="Instead of watching stage counts and aging, teams get a prioritized queue, richer context, and a clearer path to recovery."
           tone="blue"
         />
         <CapabilityCard
-          eyebrow="What executives get"
-          title="A cleaner line from execution risk to portfolio impact."
-          body="Leadership can see where delay, vendor exposure, or approval friction are affecting outcomes — without digging through operational systems."
+          eyebrow="What leadership gets"
+          title="A cleaner line from operational friction to portfolio impact."
+          body="Executives can see where delay, approval drag, and vendor pressure are affecting outcomes without digging through operating systems."
           tone="emerald"
         />
       </div>
 
-      {/* JOURNEY */}
+      <Card>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <div className="text-xs uppercase tracking-[0.14em] text-slate-500">
+              What changes after import
+            </div>
+            <div className="mt-2 text-2xl font-semibold text-slate-900">
+              Raw CSV in. Operating intelligence out.
+            </div>
+            <div className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
+              Once imported, TurnIQ standardizes the portfolio and computes the
+              signals the team actually needs to manage work, not just record it.
+            </div>
+          </div>
+          <Pill tone="green">TurnIQ-computed signals</Pill>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <div className="rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="text-sm font-semibold text-slate-900">Risk</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600">
+              Identifies delay pressure and execution exposure.
+            </div>
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="text-sm font-semibold text-slate-900">Readiness</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600">
+              Shows how close a turn is to clean forward progress.
+            </div>
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="text-sm font-semibold text-slate-900">Delay drivers</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600">
+              Highlights the factors most likely to move ECD.
+            </div>
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="text-sm font-semibold text-slate-900">Forecast confidence</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600">
+              Makes timeline quality visible, not assumed.
+            </div>
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-5">
+            <div className="text-sm font-semibold text-slate-900">Action priority</div>
+            <div className="mt-2 text-sm leading-6 text-slate-600">
+              Pushes the highest-value turns to the top of the day.
+            </div>
+          </div>
+        </div>
+      </Card>
+
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -276,29 +390,48 @@ export default function OverviewTab() {
           <JourneyStep
             step="1. See the portfolio"
             title="Control Center"
-            body="Surface the turns that matter most right now across stage pressure, blockers, risk, readiness, ECD drift, and operator focus."
+            body="Surface the turns that matter most right now across blockers, stage pressure, ECD drift, risk, and actionability."
             tone="blue"
           />
           <JourneyStep
             step="2. Run the work"
             title="Pipeline"
-            body="Manage upcoming and active turns in a more execution-friendly surface without crowding the primary control tower."
+            body="Manage upcoming and active turns in a cleaner execution surface without cluttering the primary control tower."
           />
           <JourneyStep
             step="3. Diagnose faster"
             title="Turn Drawer"
-            body="Open a single turn, understand readiness, blocker state, linked work, vendor signal, and modeled recovery options."
+            body="Open a turn and understand blocker state, linked work, vendor context, readiness, and recommended moves."
           />
           <JourneyStep
             step="4. Commit smarter"
             title="Forecast + Simulator"
-            body="Model downside, recovery paths, and portfolio interventions before making changes that affect timelines and revenue."
+            body="Model downside, recovery paths, and portfolio interventions before committing timeline changes."
             tone="emerald"
           />
         </div>
       </Card>
 
-      {/* AUDIENCES */}
+      <div className="grid gap-4 xl:grid-cols-3">
+        <OperatingShiftCard
+          title="Queue management"
+          before="Operators hunt through stage views, aging lists, and scattered notes to decide what deserves attention."
+          after="TurnIQ ranks the work, explains why it matters now, and pushes the best interventions to the top."
+          tone="blue"
+        />
+        <OperatingShiftCard
+          title="Forecasting"
+          before="ECDs are reviewed passively, often without a clear view of recoverable days or the true cost of delay."
+          after="TurnIQ models downside, shows protectable revenue, and lets the team simulate recovery before acting."
+          tone="emerald"
+        />
+        <OperatingShiftCard
+          title="Executive readouts"
+          before="Leaders see outputs after the fact and have to infer which operational issues are creating drag."
+          after="TurnIQ links execution friction directly to stage pressure, vendor exposure, forecast slippage, and portfolio impact."
+        />
+      </div>
+
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
@@ -306,7 +439,7 @@ export default function OverviewTab() {
               Built for two audiences
             </div>
             <div className="mt-1 text-sm text-slate-500">
-              Same data model. Same operating system. Different default lens.
+              Same operating system. Different default lens.
             </div>
           </div>
           <Pill tone="blue">Mode-aware UI</Pill>
@@ -316,13 +449,13 @@ export default function OverviewTab() {
           <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-6">
             <div className="text-sm font-semibold text-slate-900">Operator View</div>
             <div className="mt-3 text-sm leading-6 text-slate-700">
-              Designed for execution. Operators need to know what is blocked,
-              what is aging, what is recoverable, what needs intervention, and
-              what to do next.
+              Built for execution. Operators need to know what is blocked, what
+              is aging, what is recoverable, who owns the next move, and which
+              turns deserve attention first.
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
-              <Pill tone="green">Next action</Pill>
-              <Pill tone="green">Execution context</Pill>
+              <Pill tone="green">Top actions</Pill>
+              <Pill tone="green">Next move</Pill>
               <Pill tone="slate">Stage flow</Pill>
               <Pill tone="slate">Readiness</Pill>
             </div>
@@ -331,9 +464,9 @@ export default function OverviewTab() {
           <div className="rounded-3xl border border-blue-200 bg-blue-50 p-6">
             <div className="text-sm font-semibold text-slate-900">Executive View</div>
             <div className="mt-3 text-sm leading-6 text-slate-700">
-              Designed for outcomes. Executives need a clean view of portfolio
+              Built for outcomes. Executives need a clean view of portfolio
               health, delay exposure, vendor signal, throughput, and the
-              operational drivers behind performance.
+              operating drivers behind performance.
             </div>
             <div className="mt-4 flex flex-wrap gap-2">
               <Pill tone="blue">Portfolio health</Pill>
@@ -345,11 +478,10 @@ export default function OverviewTab() {
         </div>
       </Card>
 
-      {/* SURFACES */}
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
         <SurfaceCard
           title="Forecast"
-          body="Forecast imported ECDs against modeled delay, quantify exposure, and simulate what recovery looks like before committing action."
+          body="Forecast imported ECDs against modeled delay, quantify exposure, and test what recovery looks like before committing action."
           pills={[
             { label: "Scenario modeling", tone: "blue" },
             { label: "Simulator", tone: "green" },
@@ -357,7 +489,7 @@ export default function OverviewTab() {
         />
         <SurfaceCard
           title="Vendors"
-          body="Understand vendor allocation, capacity pressure, bench coverage, recommendation fit, and where to expand or restrict share."
+          body="See vendor allocation, capacity pressure, recommendation fit, bench coverage, and where share should expand or tighten."
           pills={[
             { label: "Allocation", tone: "blue" },
             { label: "Capacity", tone: "amber" },
@@ -365,7 +497,7 @@ export default function OverviewTab() {
         />
         <SurfaceCard
           title="Analytics"
-          body="See how TurnIQ-computed signals translate into stage pressure, market load, delay-driver exposure, and operating insights."
+          body="Translate TurnIQ-computed signals into stage pressure, market load, delay-driver exposure, and operating insights."
           pills={[
             { label: "Computed signals", tone: "green" },
             { label: "Insights", tone: "blue" },
@@ -381,7 +513,6 @@ export default function OverviewTab() {
         />
       </div>
 
-      {/* DIFFERENTIATION */}
       <Card className="border-blue-200 bg-gradient-to-br from-blue-50 via-white to-slate-50">
         <div className="grid gap-6 xl:grid-cols-12">
           <div className="xl:col-span-8">
@@ -393,10 +524,10 @@ export default function OverviewTab() {
             </div>
             <div className="mt-3 text-sm leading-7 text-slate-700">
               Traditional systems are strongest at storing data or reporting on
-              history. TurnIQ is designed to improve the operating moment in
-              between: when a team has to decide where to focus, what to fix
-              first, what is slipping, which vendors are under pressure, and
-              what action is most likely to recover time and revenue.
+              history. TurnIQ is designed for the operating moment in between:
+              when a team has to decide where to focus, what to fix first, what
+              is slipping, which vendor is under pressure, and what move is most
+              likely to recover time and revenue.
             </div>
           </div>
 
@@ -409,8 +540,8 @@ export default function OverviewTab() {
                 Less reporting overhead. More operational clarity.
               </div>
               <div className="mt-3 text-sm leading-6 text-slate-600">
-                TurnIQ makes execution easier, forecasting smarter, and portfolio
-                conversations cleaner.
+                TurnIQ makes execution easier, forecasting smarter, and
+                portfolio conversations cleaner.
               </div>
             </div>
           </div>
