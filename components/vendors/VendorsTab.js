@@ -170,6 +170,98 @@ const VENDOR_PROFILE = {
   },
 };
 
+function safeDateString(value) {
+  if (!value) return "";
+  if (typeof value !== "string") return "";
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  return match ? match[0] : "";
+}
+
+function daysUntil(dateStr) {
+  const normalized = safeDateString(dateStr);
+  if (!normalized) return null;
+
+  const [year, month, day] = normalized.split("-").map(Number);
+  const target = new Date(year, month - 1, day);
+  const today = new Date();
+  const localToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const diffMs = target.getTime() - localToday.getTime();
+  return Math.ceil(diffMs / (1000 * 60 * 60 * 24));
+}
+
+function titleize(value) {
+  if (!value) return "";
+  return String(value)
+    .split(/[_\s/-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function inferTradesFromProperties(properties) {
+  const trades = new Set();
+
+  properties.forEach((property) => {
+    if (property.scope) {
+      trades.add(property.scope);
+    }
+    if (property.scope_category) {
+      trades.add(property.scope_category);
+    }
+    if (property.currentStage === "Owner Approval") {
+      trades.add("General");
+    }
+  });
+
+  return Array.from(trades).filter(Boolean);
+}
+
+function fallbackProfile(vendor, groupedRow) {
+  const avgRisk =
+    groupedRow.jobs > 0 ? Math.round(groupedRow.totalRisk / groupedRow.jobs) : 45;
+
+  const blockedRate =
+    groupedRow.jobs > 0 ? groupedRow.blockedJobs / groupedRow.jobs : 0;
+
+  const quality = Math.max(76, 90 - blockedRate * 18);
+  const speed = Math.max(74, 88 - blockedRate * 14 - Math.max(0, avgRisk - 60) * 0.2);
+  const reliability = Math.max(75, 89 - blockedRate * 16);
+  const cost = 78;
+  const onTimeRate = Math.max(72, Math.round(92 - blockedRate * 18 - Math.max(0, avgRisk - 65) * 0.15));
+  const qualityRate = Math.max(75, Math.round(quality));
+  const avgBidVariance = 6;
+  const avgCycleDays = Math.max(3.2, 4 + blockedRate * 2 + Math.max(0, avgRisk - 60) * 0.03);
+  const capacityUtilization = Math.min(94, Math.max(38, 40 + groupedRow.jobs * 12 + groupedRow.highRiskJobs * 4));
+  const preferredMarkets = Array.from(groupedRow.markets);
+  const trades = inferTradesFromProperties(groupedRow.properties);
+
+  return {
+    quality: Math.round(quality),
+    speed: Math.round(speed),
+    reliability: Math.round(reliability),
+    cost: Math.round(cost),
+    onTimeRate,
+    qualityRate,
+    avgBidVariance,
+    avgCycleDays: Number(avgCycleDays.toFixed(1)),
+    capacityUtilization,
+    preferredMarkets,
+    strengths: [
+      "Imported vendor assignment detected",
+      groupedRow.jobs > 0 ? `${groupedRow.jobs} active job${groupedRow.jobs > 1 ? "s" : ""}` : "Available capacity",
+      preferredMarkets.length ? `${preferredMarkets.join(", ")} coverage` : "Cross-market capable",
+    ],
+    concerns:
+      groupedRow.blockedJobs > 0
+        ? ["Blocked job exposure present"]
+        : ["Limited historical profile data"],
+    contracts: groupedRow.jobs > 0 ? "Imported" : "Approved",
+    recommendationCount: groupedRow.jobs,
+    selectedCount: groupedRow.jobs,
+    trades: trades.length ? trades : ["General"],
+  };
+}
+
 function getOverallScore(profile) {
   return Math.round(
     profile.quality * 0.35 +
@@ -218,12 +310,14 @@ function getVendorStatus(row) {
   if (row.capacityUtilization >= 90) return "Restricted";
   if (row.contracts === "Preferred") return "Preferred";
   if (row.capacityUtilization >= 85) return "Watchlist";
+  if (row.contracts === "Imported") return "Imported";
   return "Approved";
 }
 
 function getVendorStatusTone(status) {
   if (status === "Preferred") return "blue";
   if (status === "Approved") return "emerald";
+  if (status === "Imported") return "slate";
   if (status === "Watchlist") return "amber";
   return "red";
 }
@@ -232,7 +326,8 @@ function buildVendorRows(properties) {
   const grouped = {};
 
   properties.forEach((property) => {
-    const vendor = property.vendor || "Unassigned";
+    const rawVendor = String(property.vendor || "").trim();
+    const vendor = rawVendor || "Unassigned";
 
     if (!grouped[vendor]) {
       grouped[vendor] = {
@@ -243,31 +338,45 @@ function buildVendorRows(properties) {
         highRiskJobs: 0,
         blockedJobs: 0,
         ecdThisWeek: 0,
+        properties: [],
       };
     }
 
     grouped[vendor].jobs += 1;
-    grouped[vendor].markets.add(property.market);
+    grouped[vendor].markets.add(property.market || "Unknown");
     grouped[vendor].totalRisk += property.risk || 0;
+    grouped[vendor].properties.push(property);
 
     if ((property.risk || 0) >= 75) grouped[vendor].highRiskJobs += 1;
     if (property.turnStatus === "Blocked") grouped[vendor].blockedJobs += 1;
-    if (["2026-05-06", "2026-05-08"].includes(property.projectedCompletion)) {
+
+    const until = daysUntil(property.projectedCompletion);
+    if (until != null && until >= 0 && until <= 7) {
       grouped[vendor].ecdThisWeek += 1;
     }
   });
 
-  return Object.entries(VENDOR_PROFILE)
-    .map(([vendor, profile]) => {
+  const vendorNames = new Set([
+    ...Object.keys(VENDOR_PROFILE),
+    ...Object.keys(grouped),
+  ]);
+
+  return Array.from(vendorNames)
+    .filter((vendor) => vendor && vendor !== "Unassigned")
+    .map((vendor) => {
       const groupedRow = grouped[vendor] || {
         vendor,
         jobs: 0,
-        markets: new Set(profile.preferredMarkets || []),
+        markets: new Set((VENDOR_PROFILE[vendor]?.preferredMarkets) || []),
         totalRisk: 0,
         highRiskJobs: 0,
         blockedJobs: 0,
         ecdThisWeek: 0,
+        properties: [],
       };
+
+      const profile =
+        VENDOR_PROFILE[vendor] || fallbackProfile(vendor, groupedRow);
 
       const overall = getOverallScore(profile);
 
@@ -360,6 +469,9 @@ export default function VendorsTab({ properties }) {
     if (vendorFilter === "Bench Vendors") {
       rows = rows.filter((row) => row.jobs === 0);
     }
+    if (vendorFilter === "Imported Vendors") {
+      rows = rows.filter((row) => row.status === "Imported");
+    }
 
     if (sortBy === "Overall") {
       rows.sort((a, b) => b.overall - a.overall);
@@ -371,6 +483,8 @@ export default function VendorsTab({ properties }) {
       rows.sort((a, b) => (b.avgRisk ?? -1) - (a.avgRisk ?? -1));
     } else if (sortBy === "Recommendation Count") {
       rows.sort((a, b) => b.recommendationCount - a.recommendationCount);
+    } else if (sortBy === "Jobs") {
+      rows.sort((a, b) => b.jobs - a.jobs);
     }
 
     return rows;
@@ -401,6 +515,7 @@ export default function VendorsTab({ properties }) {
     const atRiskCapacity = vendorRows.filter((row) => row.capacityUtilization >= 85).length;
     const benchVendors = vendorRows.filter((row) => row.jobs === 0).length;
     const expandCandidates = vendorRows.filter((row) => row.actionLabel === "Expand").length;
+    const importedVendors = vendorRows.filter((row) => row.status === "Imported").length;
 
     return {
       activeVendors,
@@ -409,6 +524,7 @@ export default function VendorsTab({ properties }) {
       atRiskCapacity,
       benchVendors,
       expandCandidates,
+      importedVendors,
     };
   }, [vendorRows]);
 
@@ -428,7 +544,7 @@ export default function VendorsTab({ properties }) {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <button onClick={() => setVendorFilter("All Vendors")} className="text-left">
           <Card className="h-full hover:border-blue-300 hover:shadow-sm">
             <div className="text-xs uppercase tracking-wide text-slate-500">Active Vendors</div>
@@ -465,6 +581,14 @@ export default function VendorsTab({ properties }) {
             <div className="mt-2 text-sm text-slate-500">available capacity not yet in flight</div>
           </Card>
         </button>
+
+        <button onClick={() => setVendorFilter("Imported Vendors")} className="text-left">
+          <Card className="h-full hover:border-blue-300 hover:shadow-sm">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Imported Vendors</div>
+            <div className="mt-2 text-3xl font-semibold text-slate-900">{summary.importedVendors}</div>
+            <div className="mt-2 text-sm text-slate-500">new vendor names from imported data</div>
+          </Card>
+        </button>
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -490,6 +614,7 @@ export default function VendorsTab({ properties }) {
             <option>On-Time</option>
             <option>Risk</option>
             <option>Recommendation Count</option>
+            <option>Jobs</option>
           </select>
         </div>
       </div>
