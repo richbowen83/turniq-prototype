@@ -80,6 +80,32 @@ const VENDOR_SCORECARD = {
   },
 };
 
+function getEstimateAmount(row) {
+  return (
+    row?.estimated_cost ??
+    row?.estimatedCost ??
+    row?.estimateCost ??
+    row?.estimatedAmount ??
+    row?.projected_cost ??
+    row?.projectedCost ??
+    0
+  );
+}
+
+function getApprovedAmount(row) {
+  return (
+    row?.approved_cost ??
+    row?.approvedCost ??
+    row?.approvedAmount ??
+    0
+  );
+}
+
+function formatCurrency(value) {
+  const amount = Number(value || 0);
+  return `$${amount.toLocaleString()}`;
+}
+
 function getVendorOverall(score) {
   return Math.round(
     score.quality * 0.35 +
@@ -414,7 +440,12 @@ export default function TurnDetailDrawer({
     return getVendorSignal(row);
   }, [row]);
 
-  if (!row) return null;
+    if (!row) return null;
+
+  const estimateAmount = getEstimateAmount(row);
+  const approvedAmount = getApprovedAmount(row);
+  const projectedAmount =
+    approvedAmount > 0 ? approvedAmount : estimateAmount;
 
   const aiRecommendation = row.aiRecommendation || null;
   const aiRiskDrivers = Array.isArray(row.aiRiskDrivers) ? row.aiRiskDrivers : [];
@@ -750,16 +781,23 @@ export default function TurnDetailDrawer({
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Estimate Amount</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
-                ${Number(row.estimatedAmount || 0).toLocaleString()}
+                {formatCurrency(estimateAmount)}
               </div>
             </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Approved Amount</div>
               <div className="mt-1 text-sm font-medium text-slate-900">
-                ${Number(row.approvedAmount || 0).toLocaleString()}
+                {formatCurrency(approvedAmount)}
               </div>
             </div>
+
+           <div className="rounded-2xl border border-slate-200 p-4">
+              <div className="text-xs text-slate-500">Projected Amount</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {formatCurrency(projectedAmount)}
+            </div>
+         </div>
 
             <div className="rounded-2xl border border-slate-200 p-4">
               <div className="text-xs text-slate-500">Daily Rent</div>

@@ -25,22 +25,22 @@ function parseMoneyLike(value) {
 
 export function getMonthlyRentValue(row) {
   const candidates = [
-  row?.monthlyRentValue,
-  row?.monthlyRent,
-  row?.monthly_rent,
-  row?.monthly_rent_value,
-  row?.rent,
-  row?.rentAmount,
-  row?.rent_amount,
-  row?.marketRent,
-  row?.market_rent,
-  row?.askingRent,
-  row?.asking_rent,
-  row?.leaseRent,
-  row?.lease_rent,
-  row?.actualRent,
-  row?.actual_rent,
-];
+    row?.monthlyRentValue,
+    row?.monthlyRent,
+    row?.monthly_rent,
+    row?.monthly_rent_value,
+    row?.rent,
+    row?.rentAmount,
+    row?.rent_amount,
+    row?.marketRent,
+    row?.market_rent,
+    row?.askingRent,
+    row?.asking_rent,
+    row?.leaseRent,
+    row?.lease_rent,
+    row?.actualRent,
+    row?.actual_rent,
+  ];
 
   for (const candidate of candidates) {
     const parsed = parseMoneyLike(candidate);
@@ -52,13 +52,13 @@ export function getMonthlyRentValue(row) {
 
 export function getDailyRentValue(row) {
   const explicitDailyCandidates = [
-  row?.dailyRentValue,
-  row?.dailyRent,
-  row?.daily_rent,
-  row?.rentPerDay,
-  row?.rent_per_day,
-  row?.perDayRent,
-];
+    row?.dailyRentValue,
+    row?.dailyRent,
+    row?.daily_rent,
+    row?.rentPerDay,
+    row?.rent_per_day,
+    row?.perDayRent,
+  ];
 
   for (const candidate of explicitDailyCandidates) {
     const parsed = parseMoneyLike(candidate);
@@ -97,18 +97,41 @@ export function getRevenueProtected(daysSaved, row) {
   return Math.round(Math.max(0, daysSaved) * dailyRentValue);
 }
 
+function parseLocalDate(dateStr) {
+  if (!dateStr) return null;
+
+  const raw = String(dateStr).trim();
+
+  const ymdMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (ymdMatch) {
+    const [, year, month, day] = ymdMatch;
+    return new Date(Number(year), Number(month) - 1, Number(day), 12, 0, 0);
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+
+  return parsed;
+}
+
+function toYmd(date) {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 export function shiftDate(dateStr, deltaDays) {
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return dateStr;
+  const date = parseLocalDate(dateStr);
+  if (!date) return dateStr;
 
   date.setDate(date.getDate() + deltaDays);
-  return date.toISOString().slice(0, 10);
+  return toYmd(date);
 }
 
 export function formatShortDate(dateStr) {
-  if (!dateStr) return "—";
-  const date = new Date(dateStr);
-  if (Number.isNaN(date.getTime())) return "—";
+  const date = parseLocalDate(dateStr);
+  if (!date) return "—";
 
   return date.toLocaleDateString("en-US", {
     month: "short",
