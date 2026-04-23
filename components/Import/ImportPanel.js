@@ -343,7 +343,8 @@ export default function ImportPanel({
         setHeaders(detectedHeaders);
         setMapping(suggestedMapping);
         refreshValidation(parsedRows, suggestedMapping);
-      } catch {
+    } catch (error) {
+        console.error("CSV import failure", error);
         setError("Unable to parse CSV file.");
         setRawRows([]);
         setHeaders([]);
