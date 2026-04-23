@@ -367,14 +367,47 @@ export default function ImportPanel({
     refreshValidation(rawRows, nextMapping);
   }
 
-  function handleImport() {
-    if (!validation?.isValid || !rawRows.length) return;
-    const importedTurns = importRowsToTurnIQWithMapping(rawRows, mapping);
-    onImport(importedTurns, {
-  sourceName: fileName || "CSV Upload",
-  sourceType: "csv",
-});
+  async function handleImport() {
+  if (!validation?.isValid || !rawRows.length) return;
+
+  setError("");
+
+  try {
+    const response = await fetch("/api/import-turns", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        csvText: [
+          headers.join(","),
+          ...rawRows.map((row) =>
+            headers
+              .map((header) => `"${String(row[header] ?? "").replace(/"/g, '""')}"`)
+              .join(",")
+          ),
+        ].join("\n"),
+        mapping,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!response.ok || !result.ok) {
+      console.error("Import API failed", result);
+      setError(result.error || "Unable to parse CSV file.");
+      return;
+    }
+
+    onImport(result.turns, {
+      sourceName: fileName || "CSV Upload",
+      sourceType: "csv",
+    });
+  } catch (error) {
+    console.error("CSV import failed", error);
+    setError("Unable to parse CSV file.");
   }
+}
 
   function handleClear() {
     setFileName("");
