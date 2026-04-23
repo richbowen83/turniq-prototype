@@ -370,7 +370,10 @@ export default function ImportPanel({
   function handleImport() {
     if (!validation?.isValid || !rawRows.length) return;
     const importedTurns = importRowsToTurnIQWithMapping(rawRows, mapping);
-    onImport(importedTurns);
+    onImport(importedTurns, {
+  sourceName: fileName || "CSV Upload",
+  sourceType: "csv",
+});
   }
 
   function handleClear() {

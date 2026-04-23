@@ -283,6 +283,8 @@ export default function Page() {
   const [lastSkippedCount, setLastSkippedCount] = useState(0);
   const [lastImportTimestamp, setLastImportTimestamp] = useState(null);
   const [audienceMode, setAudienceMode] = useState("operator");
+  const [dataSource, setDataSource] = useState("Demo Dataset");
+  const [lastSyncType, setLastSyncType] = useState("demo");
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -679,7 +681,7 @@ export default function Page() {
     setSortBy("Risk");
   }
 
-  function handleImportTurns(importedTurns) {
+  function handleImportTurns(importedTurns, importMeta = {}) {
     const totalRows = importedTurns.length;
     let newCount = 0;
     let skippedCount = 0;
@@ -714,6 +716,8 @@ export default function Page() {
     setLastImportCount(newCount);
     setLastSkippedCount(skippedCount);
     setLastImportTimestamp(new Date().toISOString());
+    setDataSource(importMeta.sourceName || "CSV Upload");
+    setLastSyncType(importMeta.sourceType || "csv");
 
     if (importedTurns.length) {
       setSelectedPropertyId(importedTurns[0].id);
@@ -723,8 +727,8 @@ export default function Page() {
   }
 
   const activeDatasetLabel = importedProperties.length
-    ? `Imported dataset • ${importedProperties.length} turns`
-    : "Demo dataset";
+  ? `${dataSource} • ${importedProperties.length} turns`
+  : "Demo dataset";
 
   if (!hasHydrated) {
     return (
@@ -788,10 +792,12 @@ export default function Page() {
             </div>
 
             {lastImportTimestamp ? (
-              <div className="text-xs text-slate-500">
-                Last import: {new Date(lastImportTimestamp).toLocaleString()}
-              </div>
-            ) : null}
+  <div className="text-xs text-slate-500 flex gap-2">
+    <span>Last sync: {new Date(lastImportTimestamp).toLocaleString()}</span>
+    <span>•</span>
+    <span>Source: {dataSource}</span>
+  </div>
+) : null}
           </div>
 
           <GlobalKpiStrip
@@ -872,6 +878,8 @@ export default function Page() {
             savedRowIds={savedRowIds}
             dirtyRowIds={dirtyRowIds}
             markDirtyRow={markDirtyRow}
+            dataSource={dataSource}
+            lastSyncType={lastSyncType}
           />
         )}
 
