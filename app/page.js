@@ -300,20 +300,31 @@ export default function Page() {
   }, [importedProperties, hasHydrated]);
 
   useEffect(() => {
+  async function loadPersistedTurns() {
     try {
-      const saved = localStorage.getItem("turniq_imported_properties");
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          setImportedProperties(parsed);
+      const response = await fetch("/api/turns");
+      const data = await response.json();
+
+      if (data?.ok && Array.isArray(data.turns) && data.turns.length) {
+        setImportedProperties(data.turns);
+      } else {
+        const saved = localStorage.getItem("turniq_imported_properties");
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed)) {
+            setImportedProperties(parsed);
+          }
         }
       }
     } catch (error) {
-      console.error("Failed to load imported properties", error);
+      console.error("Failed to load persisted turns", error);
     } finally {
       setHasHydrated(true);
     }
-  }, []);
+  }
+
+  loadPersistedTurns();
+}, []);
 
   useEffect(() => {
     const savedUndo = localStorage.getItem("turniq_forecast_undo_stack");
@@ -619,6 +630,10 @@ export default function Page() {
   }
 
   function handleClearImportedData() {
+fetch("/api/turns", { method: "DELETE" }).catch((error) => {
+  console.error("Failed to clear persisted turns", error);
+});
+
     setImportedProperties([]);
     setPreviousImportedProperties([]);
     setCanUndoImport(false);
@@ -711,6 +726,14 @@ export default function Page() {
         return merged;
       });
     }
+
+fetch("/api/turns", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ turns: importedTurns }),
+}).catch((error) => {
+  console.error("Failed to persist turns", error);
+});
 
     setLastUploadedCount(totalRows);
     setLastImportCount(newCount);
