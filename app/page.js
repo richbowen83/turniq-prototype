@@ -285,6 +285,10 @@ export default function Page() {
   const [audienceMode, setAudienceMode] = useState("operator");
   const [dataSource, setDataSource] = useState("Demo Dataset");
   const [lastSyncType, setLastSyncType] = useState("demo");
+  const [lastSyncStatus, setLastSyncStatus] = useState("Not synced");
+  const [lastSyncSource, setLastSyncSource] = useState("");
+  const [lastSyncCount, setLastSyncCount] = useState(0);
+  const [lastSyncAt, setLastSyncAt] = useState(null);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -299,25 +303,91 @@ export default function Page() {
     }
   }, [importedProperties, hasHydrated]);
 
+useEffect(() => {
+  if (!hasHydrated) return;
+
+  const interval = setInterval(() => {
+    refreshPersistedTurns({ silent: true });
+  }, 30000);
+
+  return () => clearInterval(interval);
+}, [hasHydrated]);
+
+async function refreshPersistedTurns({ silent = false } = {}) {
+  try {
+    if (!silent) setLastSyncStatus("Syncing...");
+
+    const response = await fetch("/api/turns", {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (data?.ok && Array.isArray(data.turns)) {
+      if (data.turns.length) {
+        setImportedProperties(data.turns);
+
+        const latestTurn = data.turns
+          .filter((turn) => turn.lastSyncedAt)
+          .sort(
+            (a, b) =>
+              new Date(b.lastSyncedAt).getTime() -
+              new Date(a.lastSyncedAt).getTime()
+          )[0];
+
+        setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
+        setLastSyncCount(data.turns.length);
+        setLastSyncStatus("Synced");
+      } else {
+        setLastSyncCount(0);
+        setLastSyncSource("");
+        setLastSyncStatus("No persisted turns");
+      }
+    }
+  } catch (error) {
+    console.error("Failed to refresh persisted turns", error);
+    setLastSyncStatus("Sync failed");
+  }
+}
+
   useEffect(() => {
   async function loadPersistedTurns() {
     try {
-      const response = await fetch("/api/turns");
+      const response = await fetch("/api/turns", {
+        cache: "no-store",
+      });
+
       const data = await response.json();
 
       if (data?.ok && Array.isArray(data.turns) && data.turns.length) {
         setImportedProperties(data.turns);
+
+        const latestTurn = data.turns
+          .filter((turn) => turn.lastSyncedAt)
+          .sort(
+            (a, b) =>
+              new Date(b.lastSyncedAt).getTime() -
+              new Date(a.lastSyncedAt).getTime()
+          )[0];
+
+        setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
+        setLastSyncCount(data.turns.length);
+        setLastSyncStatus("Synced");
       } else {
         const saved = localStorage.getItem("turniq_imported_properties");
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed)) {
             setImportedProperties(parsed);
+            setLastSyncSource("Browser cache");
+            setLastSyncCount(parsed.length);
+            setLastSyncStatus("Loaded from cache");
           }
         }
       }
     } catch (error) {
       console.error("Failed to load persisted turns", error);
+      setLastSyncStatus("Sync failed");
     } finally {
       setHasHydrated(true);
     }
@@ -783,45 +853,60 @@ fetch("/api/turns", {
 </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-                {activeDatasetLabel}
-              </div>
+  <div className="flex flex-wrap items-center gap-2">
+    <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+      {activeDatasetLabel}
+    </div>
 
-              <div className="flex items-center gap-2">
-                {[
-                  { id: "operator", label: "Operator View" },
-                  { id: "exec", label: "Executive View" },
-                ].map((item) => (
-                  <button
-                    key={item.id}
-                    onClick={() => setAudienceMode(item.id)}
-                    className={`rounded-xl px-3 py-2 text-xs ${
-                      audienceMode === item.id
-                        ? "bg-slate-900 text-white"
-                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-                    }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
-              </div>
+    <div className="flex items-center gap-2">
+      {[
+        { id: "operator", label: "Operator View" },
+        { id: "exec", label: "Executive View" },
+      ].map((item) => (
+        <button
+          key={item.id}
+          onClick={() => setAudienceMode(item.id)}
+          className={`rounded-xl px-3 py-2 text-xs ${
+            audienceMode === item.id
+              ? "bg-slate-900 text-white"
+              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
 
-<div className="mt-1 text-xs text-slate-500">
-  {audienceMode === "operator"
-    ? "Execution performance across stages"
-    : "Portfolio outcomes and operating efficiency"}
-</div>
-            </div>
-
-            {lastImportTimestamp ? (
-  <div className="text-xs text-slate-500 flex gap-2">
-    <span>Last sync: {new Date(lastImportTimestamp).toLocaleString()}</span>
-    <span>•</span>
-    <span>Source: {dataSource}</span>
+    <div className="mt-1 text-xs text-slate-500">
+      {audienceMode === "operator"
+        ? "Execution performance across stages"
+        : "Portfolio outcomes and operating efficiency"}
+    </div>
   </div>
-) : null}
-          </div>
+
+  {/* 👇 SYNC BLOCK */}
+  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+    {lastImportTimestamp ? (
+      <span>
+        Last import: {new Date(lastImportTimestamp).toLocaleString()}
+      </span>
+    ) : null}
+
+    <span className="rounded-xl bg-white px-3 py-2 shadow-sm">
+      {lastSyncStatus}
+      {lastSyncCount ? ` • ${lastSyncCount} turns` : ""}
+      {lastSyncSource ? ` • ${lastSyncSource}` : ""}
+    </span>
+
+   <button
+  type="button"
+  onClick={() => refreshPersistedTurns()}
+  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+>
+  Refresh sync
+</button>
+  </div>
+</div>
 
           <GlobalKpiStrip
             kpis={kpis}
