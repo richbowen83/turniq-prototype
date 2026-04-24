@@ -1,1 +1,153 @@
-[]
+[
+  {
+    "id": "PMS-1001",
+    "request_id": "PMS-1001",
+    "turn_id": "PMS-1001",
+    "property_id": "unit-1",
+    "unit_id": "",
+    "property_name": "99 Integration Way, Dallas, TX",
+    "name": "99 Integration Way",
+    "market": "Dallas",
+    "region": "",
+    "city": "",
+    "state": "",
+    "owner_name": "",
+    "owner_type": "",
+    "legal_entity_name": "",
+    "property_management_company": "Imported Portfolio",
+    "vendor": "Bowen Inc",
+    "turnOwner": "Rich",
+    "turn_owner": "Rich",
+    "operator": "Rich",
+    "currentStage": "Owner Approval",
+    "current_stage": "Owner Approval",
+    "turnStatus": "Monitoring",
+    "turn_status": "Monitoring",
+    "projectedCompletion": "2026-05-18",
+    "projected_completion": "2026-05-18",
+    "initialProjectedCompletion": "2026-05-15",
+    "initial_estimated_completion": "2026-05-15",
+    "moveOutDate": "2026-05-10",
+    "move_out_date": "2026-05-10",
+    "leaseEnd": "2026-05-10",
+    "lease_end_date": "2026-05-10",
+    "turnStartDate": "",
+    "turn_start_date": "",
+    "pmDispatchDate": "",
+    "pm_dispatch_date": "",
+    "openDays": 8,
+    "days_open": 8,
+    "daysInStage": 4,
+    "days_in_stage": 4,
+    "stage_age_days": 4,
+    "estimatedCost": 2400,
+    "estimated_cost": 2400,
+    "approvedCost": 0,
+    "approved_cost": 0,
+    "projectedCost": 2400,
+    "projected_cost": 2400,
+    "risk": 33,
+    "risk_score": 33,
+    "readiness": 65,
+    "readiness_score": 65,
+    "timelineConfidence": 92,
+    "timeline_confidence": 92,
+    "notes": "Approval pending from owner.",
+    "scope_text": "Approval pending from owner.",
+    "scope": "General Turn",
+    "scope_category": "General Turn",
+    "moiStatus": "",
+    "moi_state": "",
+    "rriStatus": "",
+    "rri_state": "",
+    "rri_result": "",
+    "inspection_status": "",
+    "lockboxStatus": "",
+    "lockbox_status": "",
+    "accessDaysSince": 0,
+    "access_days_since": 0,
+    "woEstimatesCount": 0,
+    "woApprovedCount": 0,
+    "wo_estimate_count": 0,
+    "wo_approved_count": 0,
+    "latestApprovalRequestedAt": "",
+    "latestApprovalResponseAt": "",
+    "latest_approval_requested_at": "",
+    "latest_approval_response_at": "",
+    "approval_status": "Not Pending",
+    "blockers": [
+      "Access / lockbox issue"
+    ],
+    "delayDrivers": [
+      {
+        "label": "Standard execution variability",
+        "days": 1
+      }
+    ],
+    "delay_drivers": [
+      {
+        "label": "Standard execution variability",
+        "days": 1
+      }
+    ],
+    "ecd_delta_days": 8,
+    "ecd_reason": "Access / lockbox issue",
+    "alert": "Attention: Access / lockbox issue",
+    "insight": "Standard execution variability",
+    "turn_type": "",
+    "isForSale": false,
+    "is_for_sale": false,
+    "link": "",
+    "forecastCompletion": "2026-05-23",
+    "forecastDaysLate": 5,
+    "forecastConfidence": 79,
+    "forecastRiskBand": "High Delay Risk",
+    "forecastInsight": "Material slippage risk is modeled. Prioritize blocker removal and execution acceleration.",
+    "forecastDelayDrivers": [
+      {
+        "label": "Owner Approval stage pressure",
+        "days": 3
+      },
+      {
+        "label": "Access / lockbox issue",
+        "days": 2
+      }
+    ],
+    "timeline": [
+      {
+        "key": "moveout",
+        "label": "Move Out",
+        "date": "2026-05-10",
+        "progress": 100
+      },
+      {
+        "key": "scope",
+        "label": "Scope Review",
+        "date": "2026-05-18",
+        "progress": 70
+      },
+      {
+        "key": "dispatch",
+        "label": "PM Dispatch",
+        "date": "2026-05-18",
+        "progress": 0
+      },
+      {
+        "key": "ready",
+        "label": "Ready",
+        "date": "2026-05-18",
+        "progress": 0
+      }
+    ],
+    "recommendation": {
+      "action": "Monitor",
+      "reason": "No critical blockers",
+      "impact": "On track",
+      "priority": "Low"
+    },
+    "sourceSystemName": "Example PMS",
+    "syncStatus": "Synced",
+    "lastSyncedAt": "2026-04-24T02:12:40.974Z",
+    "lastSyncedLabel": "Example PMS sync"
+  }
+]
