@@ -259,6 +259,11 @@ function getStageFlow(properties) {
   }));
 }
 
+const ORG_INTEGRATION_KEYS = {
+  demo: "demo-local-key",
+  darwin: "darwin-local-key",
+};
+
 export default function Page() {
   const [activeTab, setActiveTab] = useState("Overview");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
@@ -289,121 +294,148 @@ export default function Page() {
   const [lastSyncSource, setLastSyncSource] = useState("");
   const [lastSyncCount, setLastSyncCount] = useState(0);
   const [lastSyncAt, setLastSyncAt] = useState(null);
+  const [orgId, setOrgId] = useState("demo");
+  const [isOrgLoading, setIsOrgLoading] = useState(false);
+
+  const orgOptions = [
+    { id: "demo", label: "Demo Client" },
+    { id: "darwin", label: "Darwin Homes" },
+  ];
+
+  function getOrgCacheKey(targetOrgId = orgId) {
+    return `turniq_imported_properties_${targetOrgId}`;
+  }
+
+  async function persistTurns(nextTurns, targetOrgId = orgId) {
+    try {
+      await fetch(`/api/turns?orgId=${encodeURIComponent(targetOrgId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orgId: targetOrgId,
+          turns: nextTurns.map((turn) => ({ ...turn, orgId: targetOrgId })),
+        }),
+      });
+    } catch (error) {
+      console.error("Failed to persist turns", error);
+    }
+  }
+
+  async function refreshPersistedTurns({ silent = false, targetOrgId = orgId } = {}) {
+    try {
+      if (!silent) setLastSyncStatus("Syncing...");
+
+      const response = await fetch(
+        `/api/turns?orgId=${encodeURIComponent(targetOrgId)}`,
+        { cache: "no-store" }
+      );
+
+      const data = await response.json();
+
+      if (data?.ok && Array.isArray(data.turns)) {
+        setImportedProperties(data.turns);
+
+        if (data.turns.length) {
+          const latestTurn = data.turns
+            .filter((turn) => turn.lastSyncedAt)
+            .sort(
+              (a, b) =>
+                new Date(b.lastSyncedAt).getTime() -
+                new Date(a.lastSyncedAt).getTime()
+            )[0];
+
+          setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
+          setLastSyncCount(data.turns.length);
+          setLastSyncStatus("Synced");
+          setLastSyncAt(new Date().toISOString());
+          setDataSource(latestTurn?.sourceSystemName || `${targetOrgId} dataset`);
+
+          if (data.turns[0]?.id) {
+            setSelectedPropertyId(data.turns[0].id);
+          }
+        } else {
+          const cached = localStorage.getItem(getOrgCacheKey(targetOrgId));
+
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length) {
+              setImportedProperties(parsed);
+              setLastSyncSource("Browser cache");
+              setLastSyncCount(parsed.length);
+              setLastSyncStatus("Loaded from cache");
+              setLastSyncAt(new Date().toISOString());
+              setDataSource(`${targetOrgId} cached dataset`);
+              return;
+            }
+          }
+
+          setImportedProperties([]);
+          setLastSyncCount(0);
+          setLastSyncSource("");
+          setLastSyncStatus(targetOrgId === "demo" ? "Demo dataset" : "No persisted turns");
+          setLastSyncAt(new Date().toISOString());
+          setDataSource(targetOrgId === "demo" ? "Demo Dataset" : `${targetOrgId} dataset`);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to refresh persisted turns", error);
+      setLastSyncStatus("Sync failed");
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const savedOrgId = localStorage.getItem("turniq_active_org_id");
+      if (savedOrgId) setOrgId(savedOrgId);
+    } catch (error) {
+      console.error("Failed to load org selection", error);
+    } finally {
+      setHasHydrated(true);
+    }
+  }, []);
 
   useEffect(() => {
     if (!hasHydrated) return;
 
     try {
-      localStorage.setItem(
-        "turniq_imported_properties",
-        JSON.stringify(importedProperties)
-      );
+      localStorage.setItem("turniq_active_org_id", orgId);
     } catch (error) {
-      console.error("Failed to persist imported properties", error);
+      console.error("Failed to persist org selection", error);
     }
-  }, [importedProperties, hasHydrated]);
 
-useEffect(() => {
-  if (!hasHydrated) return;
-
-  const interval = setInterval(() => {
-    refreshPersistedTurns({ silent: true });
-  }, 30000);
-
-  return () => clearInterval(interval);
-}, [hasHydrated]);
-
-async function refreshPersistedTurns({ silent = false } = {}) {
-  try {
-    if (!silent) setLastSyncStatus("Syncing...");
-
-    const response = await fetch("/api/turns", {
-      cache: "no-store",
-    });
-
-    const data = await response.json();
-
-    if (data?.ok && Array.isArray(data.turns)) {
-      if (data.turns.length) {
-        setImportedProperties(data.turns);
-
-        const latestTurn = data.turns
-          .filter((turn) => turn.lastSyncedAt)
-          .sort(
-            (a, b) =>
-              new Date(b.lastSyncedAt).getTime() -
-              new Date(a.lastSyncedAt).getTime()
-          )[0];
-
-        setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
-        setLastSyncCount(data.turns.length);
-        setLastSyncStatus("Synced");
-      } else {
-        setLastSyncCount(0);
-        setLastSyncSource("");
-        setLastSyncStatus("No persisted turns");
-      }
-    }
-  } catch (error) {
-    console.error("Failed to refresh persisted turns", error);
-    setLastSyncStatus("Sync failed");
-  }
-}
+    setSelectedMarket("All Markets");
+    setSelectedStageFilter(null);
+    setQueueFilter("All Open Turns");
+    setLastSyncStatus("Syncing...");
+    refreshPersistedTurns({ silent: true, targetOrgId: orgId });
+  }, [orgId, hasHydrated]);
 
   useEffect(() => {
-  async function loadPersistedTurns() {
+    if (!hasHydrated) return;
+
     try {
-      const response = await fetch("/api/turns", {
-        cache: "no-store",
-      });
-
-      const data = await response.json();
-
-      if (data?.ok && Array.isArray(data.turns) && data.turns.length) {
-        setImportedProperties(data.turns);
-
-        const latestTurn = data.turns
-          .filter((turn) => turn.lastSyncedAt)
-          .sort(
-            (a, b) =>
-              new Date(b.lastSyncedAt).getTime() -
-              new Date(a.lastSyncedAt).getTime()
-          )[0];
-
-        setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
-        setLastSyncCount(data.turns.length);
-        setLastSyncStatus("Synced");
-      } else {
-        const saved = localStorage.getItem("turniq_imported_properties");
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed)) {
-            setImportedProperties(parsed);
-            setLastSyncSource("Browser cache");
-            setLastSyncCount(parsed.length);
-            setLastSyncStatus("Loaded from cache");
-          }
-        }
-      }
+      localStorage.setItem(getOrgCacheKey(orgId), JSON.stringify(importedProperties));
     } catch (error) {
-      console.error("Failed to load persisted turns", error);
-      setLastSyncStatus("Sync failed");
-    } finally {
-      setHasHydrated(true);
+      console.error("Failed to persist imported properties cache", error);
     }
-  }
+  }, [importedProperties, hasHydrated, orgId]);
 
-  loadPersistedTurns();
-}, []);
+  useEffect(() => {
+    if (!hasHydrated) return;
+
+    const interval = setInterval(() => {
+      refreshPersistedTurns({ silent: true, targetOrgId: orgId });
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [hasHydrated, orgId]);
 
   useEffect(() => {
     const savedUndo = localStorage.getItem("turniq_forecast_undo_stack");
     if (savedUndo) {
       try {
         const parsed = JSON.parse(savedUndo);
-        if (Array.isArray(parsed)) {
-          setForecastUndoStack(parsed);
-        }
+        if (Array.isArray(parsed)) setForecastUndoStack(parsed);
       } catch (error) {
         console.error("Failed to load forecast undo stack", error);
       }
@@ -417,10 +449,10 @@ async function refreshPersistedTurns({ silent = false } = {}) {
     );
   }, [forecastUndoStack]);
 
-  const activeProperties = useMemo(
-    () => (importedProperties.length ? importedProperties : properties),
-    [importedProperties, properties]
-  );
+  const activeProperties = useMemo(() => {
+    if (importedProperties.length) return importedProperties;
+    return orgId === "demo" ? properties : [];
+  }, [importedProperties, properties, orgId]);
 
   const markets = useMemo(
     () => ["All Markets", ...Array.from(new Set(activeProperties.map((x) => x.market)))],
@@ -577,9 +609,11 @@ async function refreshPersistedTurns({ silent = false } = {}) {
 
   function updateProperty(id, patch) {
     if (importedProperties.length) {
-      setImportedProperties((prev) =>
-        prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
-      );
+      setImportedProperties((prev) => {
+        const next = prev.map((row) => (row.id === id ? { ...row, ...patch } : row));
+        persistTurns(next);
+        return next;
+      });
       return;
     }
 
@@ -598,6 +632,7 @@ async function refreshPersistedTurns({ silent = false } = {}) {
   function applyRowsToDataset(datasetType, nextRows) {
     if (datasetType === "imported") {
       setImportedProperties(nextRows);
+      persistTurns(nextRows);
     } else {
       setProperties(nextRows);
     }
@@ -649,11 +684,7 @@ async function refreshPersistedTurns({ silent = false } = {}) {
       patchMap.has(row.id) ? { ...row, ...patchMap.get(row.id) } : row
     );
 
-    if (datasetType === "imported") {
-      setImportedProperties(nextRows);
-    } else {
-      setProperties(nextRows);
-    }
+    applyRowsToDataset(datasetType, nextRows);
 
     setForecastUndoStack((prev) => [
       {
@@ -700,9 +731,11 @@ async function refreshPersistedTurns({ silent = false } = {}) {
   }
 
   function handleClearImportedData() {
-fetch("/api/turns", { method: "DELETE" }).catch((error) => {
-  console.error("Failed to clear persisted turns", error);
-});
+    fetch(`/api/turns?orgId=${encodeURIComponent(orgId)}`, {
+      method: "DELETE",
+    }).catch((error) => {
+      console.error("Failed to clear persisted turns", error);
+    });
 
     setImportedProperties([]);
     setPreviousImportedProperties([]);
@@ -712,7 +745,10 @@ fetch("/api/turns", { method: "DELETE" }).catch((error) => {
     setLastSkippedCount(0);
     setLastImportTimestamp(null);
     setForecastUndoStack([]);
-    localStorage.removeItem("turniq_imported_properties");
+    setLastSyncCount(0);
+    setLastSyncSource("");
+    setLastSyncStatus(orgId === "demo" ? "Demo dataset" : "No persisted turns");
+    localStorage.removeItem(getOrgCacheKey(orgId));
     localStorage.removeItem("turniq_forecast_undo_stack");
     setSelectedMarket("All Markets");
     setSelectedPropertyId("p1");
@@ -720,7 +756,9 @@ fetch("/api/turns", { method: "DELETE" }).catch((error) => {
   }
 
   function handleUndoImport() {
-    setImportedProperties(previousImportedProperties || []);
+    const restored = previousImportedProperties || [];
+    setImportedProperties(restored);
+    persistTurns(restored);
     setCanUndoImport(false);
     setLastImportCount(0);
     setLastUploadedCount(0);
@@ -774,36 +812,33 @@ fetch("/api/turns", { method: "DELETE" }).catch((error) => {
     setPreviousImportedProperties(importedProperties);
     setCanUndoImport(true);
 
+    const scopedTurns = importedTurns.map((turn) => ({ ...turn, orgId }));
+
+    let nextRows = [];
+
     if (importMode === "replace") {
       newCount = totalRows;
       skippedCount = 0;
-      setImportedProperties(importedTurns);
+      nextRows = scopedTurns;
     } else {
-      setImportedProperties((prev) => {
-        const merged = [...prev];
-        const existingIds = new Set(prev.map((row) => row.id));
+      const merged = [...importedProperties];
+      const existingIds = new Set(merged.map((row) => row.id));
 
-        importedTurns.forEach((row) => {
-          if (!existingIds.has(row.id)) {
-            merged.push(row);
-            existingIds.add(row.id);
-            newCount += 1;
-          } else {
-            skippedCount += 1;
-          }
-        });
-
-        return merged;
+      scopedTurns.forEach((row) => {
+        if (!existingIds.has(row.id)) {
+          merged.push(row);
+          existingIds.add(row.id);
+          newCount += 1;
+        } else {
+          skippedCount += 1;
+        }
       });
+
+      nextRows = merged;
     }
 
-fetch("/api/turns", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ turns: importedTurns }),
-}).catch((error) => {
-  console.error("Failed to persist turns", error);
-});
+    setImportedProperties(nextRows);
+    persistTurns(nextRows);
 
     setLastUploadedCount(totalRows);
     setLastImportCount(newCount);
@@ -811,17 +846,26 @@ fetch("/api/turns", {
     setLastImportTimestamp(new Date().toISOString());
     setDataSource(importMeta.sourceName || "CSV Upload");
     setLastSyncType(importMeta.sourceType || "csv");
+    setLastSyncSource(importMeta.sourceName || "CSV Upload");
+    setLastSyncCount(nextRows.length);
+    setLastSyncStatus("Synced");
+    setLastSyncAt(new Date().toISOString());
 
-    if (importedTurns.length) {
-      setSelectedPropertyId(importedTurns[0].id);
+    if (scopedTurns.length) {
+      setSelectedPropertyId(scopedTurns[0].id);
       setSelectedMarket("All Markets");
       setActiveTab("Control Center");
     }
   }
 
+  const activeOrgLabel =
+    orgOptions.find((org) => org.id === orgId)?.label || orgId;
+
   const activeDatasetLabel = importedProperties.length
-  ? `${dataSource} • ${importedProperties.length} turns`
-  : "Demo dataset";
+    ? `${activeOrgLabel} • ${dataSource} • ${importedProperties.length} turns`
+    : orgId === "demo"
+    ? `Demo Client • Demo dataset`
+    : `${activeOrgLabel} • No persisted turns`;
 
   if (!hasHydrated) {
     return (
@@ -829,9 +873,7 @@ fetch("/api/turns", {
         <div className="mx-auto max-w-7xl px-6 py-8">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
-            <div className="mt-2 text-sm text-slate-500">
-              Loading workspace...
-            </div>
+            <div className="mt-2 text-sm text-slate-500">Loading workspace...</div>
           </div>
         </div>
       </div>
@@ -848,65 +890,81 @@ fetch("/api/turns", {
             markets={markets}
           />
 
-         <div className="mt-1 text-sm text-slate-500">
-  TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
-</div>
+          <div className="mt-1 text-sm text-slate-500">
+            TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
+          </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
-  <div className="flex flex-wrap items-center gap-2">
-    <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
-      {activeDatasetLabel}
-    </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={orgId}
+                onChange={(e) => {
+  setIsOrgLoading(true);
+  setOrgId(e.target.value);
+  setTimeout(() => setIsOrgLoading(false), 450);
+}}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
+              >
+                {orgOptions.map((org) => (
+                  <option key={org.id} value={org.id}>
+                    {org.label}
+                  </option>
+                ))}
+              </select>
 
-    <div className="flex items-center gap-2">
-      {[
-        { id: "operator", label: "Operator View" },
-        { id: "exec", label: "Executive View" },
-      ].map((item) => (
-        <button
-          key={item.id}
-          onClick={() => setAudienceMode(item.id)}
-          className={`rounded-xl px-3 py-2 text-xs ${
-            audienceMode === item.id
-              ? "bg-slate-900 text-white"
-              : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-          }`}
-        >
-          {item.label}
-        </button>
-      ))}
-    </div>
+              <div className="rounded-xl bg-slate-100 px-3 py-2 text-xs text-slate-600">
+                {activeDatasetLabel}
+              </div>
 
-    <div className="mt-1 text-xs text-slate-500">
-      {audienceMode === "operator"
-        ? "Execution performance across stages"
-        : "Portfolio outcomes and operating efficiency"}
-    </div>
-  </div>
+              <div className="flex items-center gap-2">
+                {[
+                  { id: "operator", label: "Operator View" },
+                  { id: "exec", label: "Executive View" },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setAudienceMode(item.id)}
+                    className={`rounded-xl px-3 py-2 text-xs ${
+                      audienceMode === item.id
+                        ? "bg-slate-900 text-white"
+                        : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+                    }`}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
 
-  {/* 👇 SYNC BLOCK */}
-  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-    {lastImportTimestamp ? (
-      <span>
-        Last import: {new Date(lastImportTimestamp).toLocaleString()}
-      </span>
-    ) : null}
+              <div className="mt-1 text-xs text-slate-500">
+                {audienceMode === "operator"
+                  ? "Execution performance across stages"
+                  : "Portfolio outcomes and operating efficiency"}
+              </div>
+            </div>
 
-    <span className="rounded-xl bg-white px-3 py-2 shadow-sm">
-      {lastSyncStatus}
-      {lastSyncCount ? ` • ${lastSyncCount} turns` : ""}
-      {lastSyncSource ? ` • ${lastSyncSource}` : ""}
-    </span>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              {lastImportTimestamp ? (
+                <span>
+                  Last import: {new Date(lastImportTimestamp).toLocaleString()}
+                </span>
+              ) : null}
 
-   <button
-  type="button"
-  onClick={() => refreshPersistedTurns()}
-  className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
->
-  Refresh sync
-</button>
-  </div>
-</div>
+              <span className="rounded-xl bg-white px-3 py-2 shadow-sm">
+                {lastSyncStatus}
+                {lastSyncCount ? ` • ${lastSyncCount} turns` : ""}
+                {lastSyncSource ? ` • ${lastSyncSource}` : ""}
+                {lastSyncAt ? ` • ${new Date(lastSyncAt).toLocaleTimeString()}` : ""}
+              </span>
+
+              <button
+                type="button"
+                onClick={() => refreshPersistedTurns()}
+                className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 hover:bg-slate-50"
+              >
+                Refresh sync
+              </button>
+            </div>
+          </div>
 
           <GlobalKpiStrip
             kpis={kpis}
@@ -952,7 +1010,11 @@ fetch("/api/turns", {
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-6 py-4">
+<div
+  className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
+    isOrgLoading ? "opacity-40" : "opacity-100"
+  }`}
+>
         <TabNav
           tabs={TABS}
           activeTab={activeTab}
@@ -961,92 +1023,182 @@ fetch("/api/turns", {
         />
       </div>
 
-      <div className="mx-auto max-w-7xl px-6 py-4">
-        {activeTab === "Overview" && <OverviewTab />}
-{activeTab === "Control Center" && (
-          <ControlCenterTab
-            mode={audienceMode}
-            rows={queueRows}
-            queueFilter={queueFilter}
-            setQueueFilter={setQueueFilter}
-            resetQueueView={resetQueueView}
-            selectedStageFilter={selectedStageFilter}
-            toggleStageFilter={toggleStageFilter}
-            sortBy={sortBy}
-            setSortBy={setSortBy}
-            operatorSummary={operatorSummary}
-            selectedPropertyId={selectedPropertyId}
-            setSelectedPropertyId={setSelectedPropertyId}
-            updateProperty={updateProperty}
-            getToneFromRisk={getToneFromRisk}
-            stagePipeline={stagePipeline}
-            topStageBottleneck={topStageBottleneck}
-            saveRow={saveRow}
-            openRow={openRow}
-            savedRowIds={savedRowIds}
-            dirtyRowIds={dirtyRowIds}
-            markDirtyRow={markDirtyRow}
-            dataSource={dataSource}
-            lastSyncType={lastSyncType}
-          />
-        )}
+ {orgId !== "demo" && !importedProperties.length && activeTab !== "Import" ? (
+  <div className="mx-auto max-w-7xl px-6 py-8">
+    <div className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-8 shadow-sm">
+      <div className="mx-auto max-w-3xl text-center">
+        <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
+          Customer onboarding
+        </div>
 
-        {activeTab === "Pipeline" && (
-          <PipelineTab
-            rows={filteredProperties}
-            selectedPropertyId={selectedPropertyId}
-            setSelectedPropertyId={setSelectedPropertyId}
-            updateProperty={updateProperty}
-          />
-        )}
+        <div className="mt-2 text-2xl font-semibold text-slate-900">
+          Connect PMS for {activeOrgLabel}
+        </div>
 
-        {activeTab === "Forecast" && (
-          <ForecastTab
-            mode={audienceMode}
-            selectedProperty={selectedProperty}
-            properties={filteredProperties}
-            setSelectedPropertyId={setSelectedPropertyId}
-            applyForecastPatch={applyForecastPatch}
-            applyForecastBatch={applyForecastBatch}
-            undoLastForecastAction={undoLastForecastAction}
-            canUndoForecastAction={forecastUndoStack.length > 0}
-            lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
-          />
-        )}
+        <div className="mt-2 text-sm text-slate-600">
+          TurnIQ is ready for this org. Use the secure sync endpoint below to push turn data from a PMS, webhook, scheduled export, or integration job.
+        </div>
 
-        {activeTab === "Analytics" && (
-          <AnalyticsTab
-            properties={filteredProperties}
-            actionHistory={actionHistory}
-          />
-        )}
+        <div className="mt-6 grid gap-4 text-left md:grid-cols-3">
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Org ID</div>
+            <div className="mt-2 font-mono text-sm text-slate-900">{orgId}</div>
+          </div>
 
-        {activeTab === "Vendors" && (
-          <VendorsTab properties={filteredProperties} />
-        )}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">API Key</div>
+            <div className="mt-2 font-mono text-sm text-slate-900">
+              {ORG_INTEGRATION_KEYS[orgId] || "generated-server-side"}
+            </div>
+          </div>
 
-        {activeTab === "Import" && (
-          <ImportPanel
-            onImport={handleImportTurns}
-            onClearSuccess={() => {
-              setLastImportCount(0);
-              setLastUploadedCount(0);
-              setLastSkippedCount(0);
-              setLastImportTimestamp(null);
-            }}
-            onClearImportedData={handleClearImportedData}
-            onUndoImport={handleUndoImport}
-            canUndoImport={canUndoImport}
-            hasImportedData={importedProperties.length > 0}
-            importMode={importMode}
-            setImportMode={setImportMode}
-            lastImportCount={lastImportCount}
-            lastUploadedCount={lastUploadedCount}
-            lastSkippedCount={lastSkippedCount}
-            lastImportTimestamp={lastImportTimestamp}
-          />
-        )}
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Endpoint</div>
+            <div className="mt-2 font-mono text-sm text-slate-900">POST /api/pms-sync</div>
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-950 p-4 text-left text-xs text-slate-100">
+          <pre className="overflow-x-auto whitespace-pre-wrap">{`curl -X POST http://localhost:3000/api/pms-sync \\
+  -H "Content-Type: application/json" \\
+  -H "x-turniq-org-id: ${orgId}" \\
+  -H "x-turniq-api-key: ${ORG_INTEGRATION_KEYS[orgId] || "YOUR_API_KEY"}" \\
+  -d '{
+    "source": "${activeOrgLabel} PMS",
+    "mode": "upsert",
+    "turns": [
+      {
+        "Request Id": "SYNC-1001",
+        "Full Address": "100 Integration Way, Dallas, TX",
+        "Market": "Dallas",
+        "Turn Status": "OPEN",
+        "Turn Stage": "DISPATCH",
+        "Assignee": "Rich",
+        "Vendors": "FloorCo",
+        "Current Estimated Rent Ready Date": "2026-06-01",
+        "Move Out Date": "2026-05-22",
+        "Days Open": "4",
+        "Current Days in Stage": "1",
+        "Estimate Cost": "1800",
+        "Approved Cost": "1800"
+      }
+    ]
+  }'`}</pre>
+        </div>
+
+        <div className="mt-6 flex flex-wrap justify-center gap-3">
+          <button
+            onClick={() => setActiveTab("Import")}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Import CSV instead
+          </button>
+
+          <button
+            onClick={() => refreshPersistedTurns()}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+          >
+            Check for synced turns
+          </button>
+        </div>
       </div>
+    </div>
+  </div>
+) : (
+
+ <div
+
+  className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
+    isOrgLoading ? "opacity-40" : "opacity-100"
+  }`}
+>
+      {activeTab === "Overview" && <OverviewTab />}
+
+      {activeTab === "Control Center" && (
+        <ControlCenterTab
+          mode={audienceMode}
+          rows={queueRows}
+          queueFilter={queueFilter}
+          setQueueFilter={setQueueFilter}
+          resetQueueView={resetQueueView}
+          selectedStageFilter={selectedStageFilter}
+          toggleStageFilter={toggleStageFilter}
+          sortBy={sortBy}
+          setSortBy={setSortBy}
+          operatorSummary={operatorSummary}
+          selectedPropertyId={selectedPropertyId}
+          setSelectedPropertyId={setSelectedPropertyId}
+          updateProperty={updateProperty}
+          getToneFromRisk={getToneFromRisk}
+          stagePipeline={stagePipeline}
+          topStageBottleneck={topStageBottleneck}
+          saveRow={saveRow}
+          openRow={openRow}
+          savedRowIds={savedRowIds}
+          dirtyRowIds={dirtyRowIds}
+          markDirtyRow={markDirtyRow}
+          dataSource={dataSource}
+          lastSyncType={lastSyncType}
+        />
+      )}
+
+      {activeTab === "Pipeline" && (
+        <PipelineTab
+          rows={filteredProperties}
+          selectedPropertyId={selectedPropertyId}
+          setSelectedPropertyId={setSelectedPropertyId}
+          updateProperty={updateProperty}
+        />
+      )}
+
+      {activeTab === "Forecast" && (
+        <ForecastTab
+          mode={audienceMode}
+          selectedProperty={selectedProperty}
+          properties={filteredProperties}
+          setSelectedPropertyId={setSelectedPropertyId}
+          applyForecastPatch={applyForecastPatch}
+          applyForecastBatch={applyForecastBatch}
+          undoLastForecastAction={undoLastForecastAction}
+          canUndoForecastAction={forecastUndoStack.length > 0}
+          lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+        />
+      )}
+
+      {activeTab === "Analytics" && (
+        <AnalyticsTab
+          properties={filteredProperties}
+          actionHistory={actionHistory}
+        />
+      )}
+
+      {activeTab === "Vendors" && (
+        <VendorsTab properties={filteredProperties} />
+      )}
+
+      {activeTab === "Import" && (
+        <ImportPanel
+          onImport={handleImportTurns}
+          onClearSuccess={() => {
+            setLastImportCount(0);
+            setLastUploadedCount(0);
+            setLastSkippedCount(0);
+            setLastImportTimestamp(null);
+          }}
+          onClearImportedData={handleClearImportedData}
+          onUndoImport={handleUndoImport}
+          canUndoImport={canUndoImport}
+          hasImportedData={importedProperties.length > 0}
+          importMode={importMode}
+          setImportMode={setImportMode}
+          lastImportCount={lastImportCount}
+          lastUploadedCount={lastUploadedCount}
+          lastSkippedCount={lastSkippedCount}
+          lastImportTimestamp={lastImportTimestamp}
+        />
+       )}
+    </div>
+)}
     </div>
   );
 }
