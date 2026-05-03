@@ -264,6 +264,29 @@ const ORG_INTEGRATION_KEYS = {
   darwin: "darwin-local-key",
 };
 
+function CopyButton({ value }) {
+  const [copied, setCopied] = useState(false);
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch (e) {
+      console.error("Copy failed", e);
+    }
+  }
+
+  return (
+    <button
+      onClick={handleCopy}
+      className="ml-2 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+    >
+      {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
+
 export default function Page() {
   const [activeTab, setActiveTab] = useState("Overview");
   const [selectedMarket, setSelectedMarket] = useState("All Markets");
@@ -296,6 +319,11 @@ export default function Page() {
   const [lastSyncAt, setLastSyncAt] = useState(null);
   const [orgId, setOrgId] = useState("demo");
   const [isOrgLoading, setIsOrgLoading] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
+  const [testWebhookStatus, setTestWebhookStatus] = useState(null);
+  const [isSendingTestWebhook, setIsSendingTestWebhook] = useState(false);
 
   const orgOptions = [
     { id: "demo", label: "Demo Client" },
@@ -448,6 +476,60 @@ export default function Page() {
       JSON.stringify(forecastUndoStack)
     );
   }, [forecastUndoStack]);
+
+useEffect(() => {
+  if (!hasHydrated || !orgId) return;
+
+  async function loadOrgKey() {
+    try {
+      const response = await fetch(`/api/org-keys?orgId=${encodeURIComponent(orgId)}`, {
+        cache: "no-store",
+      });
+      const data = await response.json();
+
+      if (data?.ok && data.apiKey) {
+        setApiKey(data.apiKey);
+      }
+    } catch (error) {
+      console.error("Failed to load org key", error);
+    }
+  }
+
+  loadOrgKey();
+}, [orgId, hasHydrated]);
+
+useEffect(() => {
+  const hasTestData = importedProperties.some((row) => row.isTestData);
+
+  if (!hasTestData) return;
+
+  const timer = setTimeout(() => {
+    const realRows = importedProperties.filter((row) => !row.isTestData);
+
+    setImportedProperties(realRows);
+    persistTurns(realRows);
+    setTestWebhookStatus(null);
+
+    if (!realRows.length) {
+      setLastSyncCount(0);
+      setLastSyncSource("");
+      setLastSyncStatus(orgId === "demo" ? "Demo dataset" : "No persisted turns");
+      setActiveTab("Overview");
+    }
+  }, 1000 * 60 * 5);
+
+  return () => clearTimeout(timer);
+}, [importedProperties, orgId]);
+
+useEffect(() => {
+  if (testWebhookStatus?.type === "success") {
+    const timer = setTimeout(() => {
+      handleClearImportedData();
+    }, 1000 * 60 * 5); // 5 minutes
+
+    return () => clearTimeout(timer); // cleanup
+  }
+}, [testWebhookStatus]);
 
   const activeProperties = useMemo(() => {
     if (importedProperties.length) return importedProperties;
@@ -752,7 +834,9 @@ export default function Page() {
     localStorage.removeItem("turniq_forecast_undo_stack");
     setSelectedMarket("All Markets");
     setSelectedPropertyId("p1");
-    setActiveTab("Import");
+    setTestWebhookStatus(null);
+    setIsSendingTestWebhook(false);
+    setActiveTab("Overview");
   }
 
   function handleUndoImport() {
@@ -805,6 +889,8 @@ export default function Page() {
   }
 
   function handleImportTurns(importedTurns, importMeta = {}) {
+
+
     const totalRows = importedTurns.length;
     let newCount = 0;
     let skippedCount = 0;
@@ -858,6 +944,94 @@ export default function Page() {
     }
   }
 
+async function regenerateApiKey() {
+  try {
+    setIsRegeneratingKey(true);
+
+    const response = await fetch("/api/org-keys", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ orgId }),
+    });
+
+    const data = await response.json();
+
+    if (data?.ok && data.apiKey) {
+      setApiKey(data.apiKey);
+      setShowApiKey(true);
+    }
+  } catch (error) {
+    console.error("Failed to regenerate API key", error);
+  } finally {
+    setIsRegeneratingKey(false);
+  }
+}
+
+async function sendTestWebhook() {
+  try {
+    setIsSendingTestWebhook(true);
+    setTestWebhookStatus(null);
+
+    const response = await fetch("/api/pms-sync", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-turniq-org-id": orgId,
+        "x-turniq-api-key": apiKey,
+      },
+      body: JSON.stringify({
+source: `${activeOrgLabel} Test Webhook`,
+isTestData: true,
+        source: `${activeOrgLabel} Test Webhook`,
+        mode: "upsert",
+        turns: [
+          {
+            "Request Id": `TEST-${Date.now()}`,
+            "Full Address": "100 Integration Way, Dallas, TX",
+            Market: "Dallas",
+            "Turn Status": "OPEN",
+            "Turn Stage": "DISPATCH",
+            Assignee: "Test User",
+            Vendors: "FloorCo",
+            "Current Estimated Rent Ready Date": "2026-06-01",
+            "Move Out Date": "2026-05-22",
+            "Days Open": "4",
+            "Current Days in Stage": "1",
+            "Estimate Cost": "1800",
+            "Approved Cost": "1800",
+            Notes: "Generated by onboarding test webhook.",
+isTestData: true,
+sourceSystemName: `${activeOrgLabel} Test Webhook`,
+          },
+        ],
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Webhook test failed");
+    }
+
+    setTestWebhookStatus({
+      type: "success",
+      message: "Test webhook received. Turn data synced successfully.",
+    });
+
+    await refreshPersistedTurns({ targetOrgId: orgId });
+  } catch (error) {
+    console.error("Failed to send test webhook", error);
+    setTestWebhookStatus({
+      type: "error",
+      message: error.message || "Failed to send test webhook.",
+    });
+  } finally {
+    setIsSendingTestWebhook(false);
+  }
+}
+
   const activeOrgLabel =
     orgOptions.find((org) => org.id === orgId)?.label || orgId;
 
@@ -866,6 +1040,45 @@ export default function Page() {
     : orgId === "demo"
     ? `Demo Client • Demo dataset`
     : `${activeOrgLabel} • No persisted turns`;
+
+const shouldShowOnboarding =
+  orgId !== "demo" && !importedProperties.length && activeTab !== "Import";
+
+const baseUrl =
+  typeof window !== "undefined"
+    ? window.location.origin
+    : "https://your-vercel-domain.vercel.app";
+
+const maskedApiKey = apiKey ? "••••••••••••••••" : "No key generated";
+const visibleApiKey = showApiKey ? apiKey : maskedApiKey;
+
+const webhookEndpoint = `${baseUrl}/api/pms-sync`;
+
+const curlCommandString = `curl -X POST ${webhookEndpoint} \\
+-H "Content-Type: application/json" \\
+-H "x-turniq-org-id: ${orgId}" \\
+-H "x-turniq-api-key: ${apiKey || "YOUR_API_KEY"}" \\
+-d '{
+  "source": "${activeOrgLabel} PMS / BI Webhook",
+  "mode": "upsert",
+  "turns": [
+    {
+      "Request Id": "SYNC-1001",
+      "Full Address": "100 Integration Way, Dallas, TX",
+      "Market": "Dallas",
+      "Turn Status": "OPEN",
+      "Turn Stage": "DISPATCH",
+      "Assignee": "Rich",
+      "Vendors": "FloorCo",
+      "Current Estimated Rent Ready Date": "2026-06-01",
+      "Move Out Date": "2026-05-22",
+      "Days Open": "4",
+      "Current Days in Stage": "1",
+      "Estimate Cost": "1800",
+      "Approved Cost": "1800"
+    }
+  ]
+}'`;
 
   if (!hasHydrated) {
     return (
@@ -1010,25 +1223,12 @@ export default function Page() {
         </div>
       </div>
 
-<div
-  className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
-    isOrgLoading ? "opacity-40" : "opacity-100"
-  }`}
->
-        <TabNav
-          tabs={TABS}
-          activeTab={activeTab}
-          onChange={setActiveTab}
-          mode={audienceMode}
-        />
-      </div>
-
- {orgId !== "demo" && !importedProperties.length && activeTab !== "Import" ? (
+{shouldShowOnboarding ? (
   <div className="mx-auto max-w-7xl px-6 py-8">
     <div className="rounded-3xl border border-blue-200 bg-gradient-to-br from-blue-50 via-white to-slate-50 p-8 shadow-sm">
       <div className="mx-auto max-w-3xl text-center">
         <div className="text-xs font-semibold uppercase tracking-wide text-blue-700">
-          Customer onboarding
+          Client onboarding
         </div>
 
         <div className="mt-2 text-2xl font-semibold text-slate-900">
@@ -1039,166 +1239,234 @@ export default function Page() {
           TurnIQ is ready for this org. Use the secure sync endpoint below to push turn data from a PMS, webhook, scheduled export, or integration job.
         </div>
 
-        <div className="mt-6 grid gap-4 text-left md:grid-cols-3">
+        <div className="mt-6 grid grid-cols-1 gap-4 text-left md:grid-cols-3">
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
             <div className="text-xs uppercase tracking-wide text-slate-500">Org ID</div>
-            <div className="mt-2 font-mono text-sm text-slate-900">{orgId}</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">API Key</div>
-            <div className="mt-2 font-mono text-sm text-slate-900">
-              {ORG_INTEGRATION_KEYS[orgId] || "generated-server-side"}
+            <div className="mt-2 flex items-center justify-between">
+              <span className="font-mono text-sm text-slate-900">{orgId}</span>
+              <CopyButton value={orgId} />
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Endpoint</div>
-            <div className="mt-2 font-mono text-sm text-slate-900">POST /api/pms-sync</div>
+  <div className="text-xs uppercase tracking-wide text-slate-500">Webhook / API Key</div>
+
+  <div className="mt-2 flex items-center justify-between gap-2">
+    <span className="truncate font-mono text-sm text-slate-900">
+      {visibleApiKey}
+    </span>
+
+    <div className="flex items-center gap-1">
+      <button
+        type="button"
+        onClick={() => setShowApiKey((prev) => !prev)}
+        className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+      >
+        {showApiKey ? "Hide" : "Reveal"}
+      </button>
+
+      <CopyButton value={apiKey || ""} />
+    </div>
+  </div>
+
+  <div className="mt-3 flex items-center justify-between gap-2">
+    <div className="text-xs text-slate-500">
+      Stored server-side. Used by BI/webhooks and API clients.
+    </div>
+
+    <button
+      type="button"
+      onClick={regenerateApiKey}
+      disabled={isRegeneratingKey}
+      className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+    >
+      {isRegeneratingKey ? "Rotating..." : "Regenerate"}
+    </button>
+  </div>
+</div>
+
+          <div className="rounded-2xl border border-slate-200 bg-white p-4">
+            <div className="text-xs uppercase tracking-wide text-slate-500">Webhook Endpoint</div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="font-mono text-sm text-slate-900">POST /api/pms-sync</span>
+              <CopyButton value={webhookEndpoint} />
+            </div>
           </div>
         </div>
 
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-950 p-4 text-left text-xs text-slate-100">
-          <pre className="overflow-x-auto whitespace-pre-wrap">{`curl -X POST http://localhost:3000/api/pms-sync \\
-  -H "Content-Type: application/json" \\
-  -H "x-turniq-org-id: ${orgId}" \\
-  -H "x-turniq-api-key: ${ORG_INTEGRATION_KEYS[orgId] || "YOUR_API_KEY"}" \\
-  -d '{
-    "source": "${activeOrgLabel} PMS",
-    "mode": "upsert",
-    "turns": [
-      {
-        "Request Id": "SYNC-1001",
-        "Full Address": "100 Integration Way, Dallas, TX",
-        "Market": "Dallas",
-        "Turn Status": "OPEN",
-        "Turn Stage": "DISPATCH",
-        "Assignee": "Rich",
-        "Vendors": "FloorCo",
-        "Current Estimated Rent Ready Date": "2026-06-01",
-        "Move Out Date": "2026-05-22",
-        "Days Open": "4",
-        "Current Days in Stage": "1",
-        "Estimate Cost": "1800",
-        "Approved Cost": "1800"
-      }
-    ]
-  }'`}</pre>
+        <div className="mt-6 rounded-2xl bg-slate-900 p-6 text-white">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-xs uppercase tracking-wide text-slate-400">
+              Example request
+            </span>
+            <CopyButton value={curlCommandString} />
+          </div>
+
+          <pre className="overflow-x-auto whitespace-pre-wrap text-sm leading-relaxed text-slate-200">
+            {curlCommandString}
+          </pre>
         </div>
 
-        <div className="mt-6 flex flex-wrap justify-center gap-3">
-          <button
-            onClick={() => setActiveTab("Import")}
-            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-          >
-            Import CSV instead
-          </button>
+        <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
+  <button
+    onClick={() => setActiveTab("Import")}
+    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+  >
+    Import CSV instead
+  </button>
 
-          <button
-            onClick={() => refreshPersistedTurns()}
-            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-          >
-            Check for synced turns
-          </button>
+  <button
+    onClick={() => refreshPersistedTurns()}
+    className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+  >
+    Check for synced turns
+  </button>
+
+  <button
+    onClick={sendTestWebhook}
+    disabled={!apiKey || isSendingTestWebhook}
+    className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+  >
+    {isSendingTestWebhook ? "Sending test..." : "Send test webhook"}
+  </button>
+</div>
+
+{testWebhookStatus ? (
+  <div
+    className={`mt-4 rounded-xl px-4 py-3 text-sm ${
+      testWebhookStatus.type === "success"
+        ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+        : "border border-red-200 bg-red-50 text-red-700"
+    }`}
+  >
+    {testWebhookStatus.message}
+  </div>
+) : null}
+
+{importedProperties.some((row) => row.isTestData) && (
+  <div className="mt-3 flex justify-center">
+    <div className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+      Test data active (auto-clears in ~5 min)
+    </div>
+  </div>
+)}
+
+{(testWebhookStatus || importedProperties.length > 0) && (
+  <div className="mt-3 text-center">
+    <button
+      onClick={handleClearImportedData}
+      className="text-xs text-slate-500 hover:text-slate-700 underline"
+    >
+      Reset (clear all synced data)
+    </button>
+  </div>
+)}
         </div>
       </div>
     </div>
-  </div>
-) : (
-
- <div
-
-  className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
-    isOrgLoading ? "opacity-40" : "opacity-100"
-  }`}
->
-      {activeTab === "Overview" && <OverviewTab />}
-
-      {activeTab === "Control Center" && (
-        <ControlCenterTab
+  ) : (
+    <>
+      <div
+        className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
+          isOrgLoading ? "opacity-40" : "opacity-100"
+        }`}
+      >
+        <TabNav
+          tabs={TABS}
+          activeTab={activeTab}
+          onChange={setActiveTab}
           mode={audienceMode}
-          rows={queueRows}
-          queueFilter={queueFilter}
-          setQueueFilter={setQueueFilter}
-          resetQueueView={resetQueueView}
-          selectedStageFilter={selectedStageFilter}
-          toggleStageFilter={toggleStageFilter}
-          sortBy={sortBy}
-          setSortBy={setSortBy}
-          operatorSummary={operatorSummary}
-          selectedPropertyId={selectedPropertyId}
-          setSelectedPropertyId={setSelectedPropertyId}
-          updateProperty={updateProperty}
-          getToneFromRisk={getToneFromRisk}
-          stagePipeline={stagePipeline}
-          topStageBottleneck={topStageBottleneck}
-          saveRow={saveRow}
-          openRow={openRow}
-          savedRowIds={savedRowIds}
-          dirtyRowIds={dirtyRowIds}
-          markDirtyRow={markDirtyRow}
-          dataSource={dataSource}
-          lastSyncType={lastSyncType}
         />
-      )}
+      </div>
 
-      {activeTab === "Pipeline" && (
-        <PipelineTab
-          rows={filteredProperties}
-          selectedPropertyId={selectedPropertyId}
-          setSelectedPropertyId={setSelectedPropertyId}
-          updateProperty={updateProperty}
-        />
-      )}
+      <div
+        className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
+          isOrgLoading ? "opacity-40" : "opacity-100"
+        }`}
+      >
+        {activeTab === "Overview" && <OverviewTab />}
 
-      {activeTab === "Forecast" && (
-        <ForecastTab
-          mode={audienceMode}
-          selectedProperty={selectedProperty}
-          properties={filteredProperties}
-          setSelectedPropertyId={setSelectedPropertyId}
-          applyForecastPatch={applyForecastPatch}
-          applyForecastBatch={applyForecastBatch}
-          undoLastForecastAction={undoLastForecastAction}
-          canUndoForecastAction={forecastUndoStack.length > 0}
-          lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
-        />
-      )}
+        {activeTab === "Control Center" && (
+          <ControlCenterTab
+            mode={audienceMode}
+            rows={queueRows}
+            queueFilter={queueFilter}
+            setQueueFilter={setQueueFilter}
+            resetQueueView={resetQueueView}
+            selectedStageFilter={selectedStageFilter}
+            toggleStageFilter={toggleStageFilter}
+            sortBy={sortBy}
+            setSortBy={setSortBy}
+            operatorSummary={operatorSummary}
+            selectedPropertyId={selectedPropertyId}
+            setSelectedPropertyId={setSelectedPropertyId}
+            updateProperty={updateProperty}
+            getToneFromRisk={getToneFromRisk}
+            stagePipeline={stagePipeline}
+            topStageBottleneck={topStageBottleneck}
+            saveRow={saveRow}
+            openRow={openRow}
+            savedRowIds={savedRowIds}
+            dirtyRowIds={dirtyRowIds}
+            markDirtyRow={markDirtyRow}
+            dataSource={dataSource}
+            lastSyncType={lastSyncType}
+          />
+        )}
 
-      {activeTab === "Analytics" && (
-        <AnalyticsTab
-          properties={filteredProperties}
-          actionHistory={actionHistory}
-        />
-      )}
+        {activeTab === "Pipeline" && (
+          <PipelineTab
+            rows={filteredProperties}
+            selectedPropertyId={selectedPropertyId}
+            setSelectedPropertyId={setSelectedPropertyId}
+            updateProperty={updateProperty}
+          />
+        )}
 
-      {activeTab === "Vendors" && (
-        <VendorsTab properties={filteredProperties} />
-      )}
+        {activeTab === "Forecast" && (
+          <ForecastTab
+            mode={audienceMode}
+            selectedProperty={selectedProperty}
+            properties={filteredProperties}
+            setSelectedPropertyId={setSelectedPropertyId}
+            applyForecastPatch={applyForecastPatch}
+            applyForecastBatch={applyForecastBatch}
+            undoLastForecastAction={undoLastForecastAction}
+            canUndoForecastAction={forecastUndoStack.length > 0}
+            lastForecastUndoLabel={forecastUndoStack[0]?.label || ""}
+          />
+        )}
 
-      {activeTab === "Import" && (
-        <ImportPanel
-          onImport={handleImportTurns}
-          onClearSuccess={() => {
-            setLastImportCount(0);
-            setLastUploadedCount(0);
-            setLastSkippedCount(0);
-            setLastImportTimestamp(null);
-          }}
-          onClearImportedData={handleClearImportedData}
-          onUndoImport={handleUndoImport}
-          canUndoImport={canUndoImport}
-          hasImportedData={importedProperties.length > 0}
-          importMode={importMode}
-          setImportMode={setImportMode}
-          lastImportCount={lastImportCount}
-          lastUploadedCount={lastUploadedCount}
-          lastSkippedCount={lastSkippedCount}
-          lastImportTimestamp={lastImportTimestamp}
-        />
-       )}
-    </div>
-)}
-    </div>
-  );
+        {activeTab === "Analytics" && (
+          <AnalyticsTab properties={filteredProperties} actionHistory={actionHistory} />
+        )}
+
+        {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
+
+        {activeTab === "Import" && (
+          <ImportPanel
+            onImport={handleImportTurns}
+            onClearSuccess={() => {
+              setLastImportCount(0);
+              setLastUploadedCount(0);
+              setLastSkippedCount(0);
+              setLastImportTimestamp(null);
+            }}
+            onClearImportedData={handleClearImportedData}
+            onUndoImport={handleUndoImport}
+            canUndoImport={canUndoImport}
+            hasImportedData={importedProperties.length > 0}
+            importMode={importMode}
+            setImportMode={setImportMode}
+            lastImportCount={lastImportCount}
+            lastUploadedCount={lastUploadedCount}
+            lastSkippedCount={lastSkippedCount}
+            lastImportTimestamp={lastImportTimestamp}
+          />
+        )}
+      </div>
+    </>
+  )}
+</div>
+);
 }

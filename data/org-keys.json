@@ -1,0 +1,12 @@
+{
+  "darwin": {
+    "apiKey": "tiq_darwin_3ecc3a2d7228793d86cdd7e4732a963f7eebb125319ab39e",
+    "createdAt": "2026-05-03T03:10:04.819Z",
+    "rotatedAt": "2026-05-03T03:10:32.636Z"
+  },
+  "demo": {
+    "apiKey": "tiq_demo_8065569dad125e041ef839de0358ed3ced25ba72e1138f3a",
+    "createdAt": "2026-05-03T03:11:43.309Z",
+    "rotatedAt": null
+  }
+}
