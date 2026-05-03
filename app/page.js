@@ -301,7 +301,7 @@ export default function Page() {
   const [sortBy, setSortBy] = useState("Priority");
   const [dirtyRowIds, setDirtyRowIds] = useState([]);
   const [savedRowIds, setSavedRowIds] = useState([]);
-  const [importedProperties, setImportedProperties] = useState([]);
+  const [importedPropertiesByOrg, setImportedPropertiesByOrg] = useState({});
   const [hasHydrated, setHasHydrated] = useState(false);
   const [previousImportedProperties, setPreviousImportedProperties] = useState([]);
   const [canUndoImport, setCanUndoImport] = useState(false);
@@ -324,11 +324,19 @@ export default function Page() {
   const [isRegeneratingKey, setIsRegeneratingKey] = useState(false);
   const [testWebhookStatus, setTestWebhookStatus] = useState(null);
   const [isSendingTestWebhook, setIsSendingTestWebhook] = useState(false);
+  const importedProperties = importedPropertiesByOrg[orgId] || [];
 
   const orgOptions = [
     { id: "demo", label: "Demo Client" },
     { id: "darwin", label: "Darwin Homes" },
   ];
+
+function setOrgImportedProperties(targetOrgId, nextRows) {
+  setImportedPropertiesByOrg((prev) => ({
+    ...prev,
+    [targetOrgId]: nextRows,
+  }));
+}
 
   function getOrgCacheKey(targetOrgId = orgId) {
     return `turniq_imported_properties_${targetOrgId}`;
@@ -350,66 +358,55 @@ export default function Page() {
   }
 
   async function refreshPersistedTurns({ silent = false, targetOrgId = orgId } = {}) {
-    try {
-      if (!silent) setLastSyncStatus("Syncing...");
+  try {
+    if (!silent) setLastSyncStatus("Syncing...");
 
-      const response = await fetch(
-        `/api/turns?orgId=${encodeURIComponent(targetOrgId)}`,
-        { cache: "no-store" }
-      );
+    const response = await fetch(
+      `/api/turns?orgId=${encodeURIComponent(targetOrgId)}`,
+      { cache: "no-store" }
+    );
 
-      const data = await response.json();
+    const data = await response.json();
 
-      if (data?.ok && Array.isArray(data.turns)) {
-        setImportedProperties(data.turns);
+    if (data?.ok && Array.isArray(data.turns)) {
+      const importedTurns = data.turns;
 
-        if (data.turns.length) {
-          const latestTurn = data.turns
-            .filter((turn) => turn.lastSyncedAt)
-            .sort(
-              (a, b) =>
-                new Date(b.lastSyncedAt).getTime() -
-                new Date(a.lastSyncedAt).getTime()
-            )[0];
+      setOrgImportedProperties(targetOrgId, importedTurns);
 
-          setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
-          setLastSyncCount(data.turns.length);
-          setLastSyncStatus("Synced");
-          setLastSyncAt(new Date().toISOString());
-          setDataSource(latestTurn?.sourceSystemName || `${targetOrgId} dataset`);
+      if (importedTurns.length) {
+        const latestTurn = importedTurns
+          .filter((turn) => turn.lastSyncedAt)
+          .sort(
+            (a, b) =>
+              new Date(b.lastSyncedAt).getTime() -
+              new Date(a.lastSyncedAt).getTime()
+          )[0];
 
-          if (data.turns[0]?.id) {
-            setSelectedPropertyId(data.turns[0].id);
-          }
-        } else {
-          const cached = localStorage.getItem(getOrgCacheKey(targetOrgId));
+        setLastSyncSource(latestTurn?.sourceSystemName || "Saved dataset");
+        setLastSyncCount(importedTurns.length);
+        setLastSyncStatus("Synced");
+        setLastSyncAt(new Date().toISOString());
+        setDataSource(latestTurn?.sourceSystemName || `${targetOrgId} dataset`);
 
-          if (cached) {
-            const parsed = JSON.parse(cached);
-            if (Array.isArray(parsed) && parsed.length) {
-              setImportedProperties(parsed);
-              setLastSyncSource("Browser cache");
-              setLastSyncCount(parsed.length);
-              setLastSyncStatus("Loaded from cache");
-              setLastSyncAt(new Date().toISOString());
-              setDataSource(`${targetOrgId} cached dataset`);
-              return;
-            }
-          }
-
-          setImportedProperties([]);
-          setLastSyncCount(0);
-          setLastSyncSource("");
-          setLastSyncStatus(targetOrgId === "demo" ? "Demo dataset" : "No persisted turns");
-          setLastSyncAt(new Date().toISOString());
-          setDataSource(targetOrgId === "demo" ? "Demo Dataset" : `${targetOrgId} dataset`);
+        if (importedTurns[0]?.id) {
+          setSelectedPropertyId(importedTurns[0].id);
         }
+      } else {
+        setLastSyncCount(0);
+        setLastSyncSource("");
+        setLastSyncStatus(targetOrgId === "demo" ? "Demo dataset" : "No persisted turns");
+        setLastSyncAt(new Date().toISOString());
+        setDataSource(targetOrgId === "demo" ? "Demo Dataset" : `${targetOrgId} dataset`);
       }
-    } catch (error) {
-      console.error("Failed to refresh persisted turns", error);
+    }
+  } catch (error) {
+    console.error("Failed to refresh persisted turns", error);
+
+    if (!importedProperties.length) {
       setLastSyncStatus("Sync failed");
     }
   }
+}
 
   useEffect(() => {
     try {
@@ -423,20 +420,21 @@ export default function Page() {
   }, []);
 
   useEffect(() => {
-    if (!hasHydrated) return;
+  if (!hasHydrated) return;
 
-    try {
-      localStorage.setItem("turniq_active_org_id", orgId);
-    } catch (error) {
-      console.error("Failed to persist org selection", error);
-    }
+  try {
+    localStorage.setItem("turniq_active_org_id", orgId);
+  } catch (error) {
+    console.error("Failed to persist org selection", error);
+  }
 
-    setSelectedMarket("All Markets");
-    setSelectedStageFilter(null);
-    setQueueFilter("All Open Turns");
-    setLastSyncStatus("Syncing...");
-    refreshPersistedTurns({ silent: true, targetOrgId: orgId });
-  }, [orgId, hasHydrated]);
+  setTestWebhookStatus(null);
+  setSelectedMarket("All Markets");
+  setSelectedStageFilter(null);
+  setQueueFilter("All Open Turns");
+  setLastSyncStatus("Loading...");
+  refreshPersistedTurns({ silent: true, targetOrgId: orgId });
+}, [orgId, hasHydrated]);
 
   useEffect(() => {
     if (!hasHydrated) return;
@@ -506,7 +504,7 @@ useEffect(() => {
   const timer = setTimeout(() => {
     const realRows = importedProperties.filter((row) => !row.isTestData);
 
-    setImportedProperties(realRows);
+    setOrgImportedProperties(orgId, realRows);
     persistTurns(realRows);
     setTestWebhookStatus(null);
 
@@ -532,9 +530,9 @@ useEffect(() => {
 }, [testWebhookStatus]);
 
   const activeProperties = useMemo(() => {
-    if (importedProperties.length) return importedProperties;
-    return orgId === "demo" ? properties : [];
-  }, [importedProperties, properties, orgId]);
+  if (importedProperties.length) return importedProperties;
+  return orgId === "demo" ? properties : [];
+}, [importedProperties, properties, orgId]);
 
   const markets = useMemo(
     () => ["All Markets", ...Array.from(new Set(activeProperties.map((x) => x.market)))],
@@ -713,7 +711,7 @@ useEffect(() => {
 
   function applyRowsToDataset(datasetType, nextRows) {
     if (datasetType === "imported") {
-      setImportedProperties(nextRows);
+      setOrgImportedProperties(orgId, nextRows);
       persistTurns(nextRows);
     } else {
       setProperties(nextRows);
@@ -819,7 +817,7 @@ useEffect(() => {
       console.error("Failed to clear persisted turns", error);
     });
 
-    setImportedProperties([]);
+    setOrgImportedProperties(orgId, []);
     setPreviousImportedProperties([]);
     setCanUndoImport(false);
     setLastImportCount(0);
@@ -840,15 +838,15 @@ useEffect(() => {
   }
 
   function handleUndoImport() {
-    const restored = previousImportedProperties || [];
-    setImportedProperties(restored);
-    persistTurns(restored);
-    setCanUndoImport(false);
-    setLastImportCount(0);
-    setLastUploadedCount(0);
-    setLastSkippedCount(0);
-    setLastImportTimestamp(null);
-  }
+  const restored = previousImportedProperties || [];
+  setOrgImportedProperties(orgId, restored);
+  persistTurns(restored);
+  setCanUndoImport(false);
+  setLastImportCount(0);
+  setLastUploadedCount(0);
+  setLastSkippedCount(0);
+  setLastImportTimestamp(null);
+}
 
   function addActionHistory(entry) {
     setActionHistory((prev) => [
@@ -923,7 +921,7 @@ useEffect(() => {
       nextRows = merged;
     }
 
-    setImportedProperties(nextRows);
+    setOrgImportedProperties(orgId, nextRows);
     persistTurns(nextRows);
 
     setLastUploadedCount(totalRows);
@@ -934,7 +932,7 @@ useEffect(() => {
     setLastSyncType(importMeta.sourceType || "csv");
     setLastSyncSource(importMeta.sourceName || "CSV Upload");
     setLastSyncCount(nextRows.length);
-    setLastSyncStatus("Synced");
+    setLastSyncStatus("Loading...");
     setLastSyncAt(new Date().toISOString());
 
     if (scopedTurns.length) {
@@ -974,6 +972,83 @@ async function sendTestWebhook() {
     setIsSendingTestWebhook(true);
     setTestWebhookStatus(null);
 
+const demoMarkets = ["Dallas", "Phoenix", "Atlanta", "Nashville", "Charlotte"];
+
+const demoTurns = Array.from({ length: 50 }, (_, index) => {
+  const n = index + 1;
+  const market = demoMarkets[index % demoMarkets.length];
+
+  const marketProfiles = {
+    Dallas: {
+      stage: "OWNER_APPROVAL",
+      status: index % 3 === 0 ? "BLOCKED" : "OPEN",
+      daysOpen: 18 + (index % 18),
+      daysInStage: 5 + (index % 6),
+      estimateCost: 2400 + index * 35,
+      vendor: "FloorCo",
+      note: "Owner approval backlog driving ECD risk.",
+    },
+    Phoenix: {
+      stage: "FAILED_RENT_READY",
+      status: index % 2 === 0 ? "BLOCKED" : "OPEN",
+      daysOpen: 25 + (index % 22),
+      daysInStage: 4 + (index % 7),
+      estimateCost: 3200 + index * 45,
+      vendor: "CoolAir",
+      note: "Failed rent-ready cluster tied to rework and access issues.",
+    },
+    Atlanta: {
+      stage: "DISPATCH",
+      status: index % 4 === 0 ? "BLOCKED" : "OPEN",
+      daysOpen: 12 + (index % 16),
+      daysInStage: 3 + (index % 5),
+      estimateCost: 1800 + index * 30,
+      vendor: "BuildRight",
+      note: "Dispatch aging creating execution bottleneck.",
+    },
+    Nashville: {
+      stage: "SCOPE_REVIEW",
+      status: "OPEN",
+      daysOpen: 6 + (index % 10),
+      daysInStage: 1 + (index % 3),
+      estimateCost: 950 + index * 20,
+      vendor: "Prime Paint",
+      note: "Moderate scope review volume; watch for approval slippage.",
+    },
+    Charlotte: {
+      stage: "PENDING_RRI",
+      status: "OPEN",
+      daysOpen: 3 + (index % 7),
+      daysInStage: 1 + (index % 2),
+      estimateCost: 650 + index * 15,
+      vendor: "Sparkle",
+      note: "Mostly healthy turns moving toward rent-ready.",
+    },
+  };
+
+  const profile = marketProfiles[market];
+  const ecdDay = Math.min(28, 1 + (index % 24));
+
+  return {
+    "Request Id": `TEST-${Date.now()}-${n}`,
+    "Full Address": `${100 + n} Integration Way, ${market}, TX`,
+    Market: market,
+    "Turn Status": profile.status,
+    "Turn Stage": profile.stage,
+    Assignee: ["Rich", "Ashley", "Justin", "Megan"][index % 4],
+    Vendors: profile.vendor,
+    "Current Estimated Rent Ready Date": `2026-06-${String(ecdDay).padStart(2, "0")}`,
+    "Move Out Date": `2026-05-${String((index % 25) + 1).padStart(2, "0")}`,
+    "Days Open": String(profile.daysOpen),
+    "Current Days in Stage": String(profile.daysInStage),
+    "Estimate Cost": String(profile.estimateCost),
+    "Approved Cost": String(Math.max(0, profile.estimateCost - 150)),
+    Notes: profile.note,
+    isTestData: true,
+    sourceSystemName: `${activeOrgLabel} Test Webhook`,
+  };
+});
+
     const response = await fetch("/api/pms-sync", {
       method: "POST",
       headers: {
@@ -982,32 +1057,12 @@ async function sendTestWebhook() {
         "x-turniq-api-key": apiKey,
       },
       body: JSON.stringify({
-source: `${activeOrgLabel} Test Webhook`,
-isTestData: true,
-        source: `${activeOrgLabel} Test Webhook`,
-        mode: "upsert",
-        turns: [
-          {
-            "Request Id": `TEST-${Date.now()}`,
-            "Full Address": "100 Integration Way, Dallas, TX",
-            Market: "Dallas",
-            "Turn Status": "OPEN",
-            "Turn Stage": "DISPATCH",
-            Assignee: "Test User",
-            Vendors: "FloorCo",
-            "Current Estimated Rent Ready Date": "2026-06-01",
-            "Move Out Date": "2026-05-22",
-            "Days Open": "4",
-            "Current Days in Stage": "1",
-            "Estimate Cost": "1800",
-            "Approved Cost": "1800",
-            Notes: "Generated by onboarding test webhook.",
-isTestData: true,
-sourceSystemName: `${activeOrgLabel} Test Webhook`,
-          },
-        ],
-      }),
-    });
+  source: `${activeOrgLabel} Test Webhook`,
+  mode: "replace", // important for demo
+  isTestData: true,
+  turns: demoTurns,
+}),
+});
 
     const data = await response.json();
 
@@ -1017,7 +1072,7 @@ sourceSystemName: `${activeOrgLabel} Test Webhook`,
 
     setTestWebhookStatus({
       type: "success",
-      message: "Test webhook received. Turn data synced successfully.",
+      message: `Webhook synced • ${demoTurns.length} turns imported`
     });
 
     await refreshPersistedTurns({ targetOrgId: orgId });
@@ -1081,17 +1136,17 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
 }'`;
 
   if (!hasHydrated) {
-    return (
-      <div className="min-h-screen bg-slate-50 text-slate-900">
-        <div className="mx-auto max-w-7xl px-6 py-8">
-          <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-            <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
-            <div className="mt-2 text-sm text-slate-500">Loading workspace...</div>
-          </div>
+  return (
+    <div className="min-h-screen bg-slate-50 text-slate-900">
+      <div className="mx-auto max-w-7xl px-6 py-8">
+        <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="text-2xl font-semibold text-slate-900">TurnIQ</div>
+          <div className="mt-2 text-sm text-slate-500">Loading workspace...</div>
         </div>
       </div>
-    );
-  }
+    </div>
+  );
+}
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -1249,44 +1304,46 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
           </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-  <div className="text-xs uppercase tracking-wide text-slate-500">Webhook / API Key</div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">Webhook / API Key</div>
 
-  <div className="mt-2 flex items-center justify-between gap-2">
-    <span className="truncate font-mono text-sm text-slate-900">
-      {visibleApiKey}
-    </span>
+            <div className="mt-2 flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-sm text-slate-900">
+                {visibleApiKey}
+              </span>
 
-    <div className="flex items-center gap-1">
-      <button
-        type="button"
-        onClick={() => setShowApiKey((prev) => !prev)}
-        className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
-      >
-        {showApiKey ? "Hide" : "Reveal"}
-      </button>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey((prev) => !prev)}
+                  className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50"
+                >
+                  {showApiKey ? "Hide" : "Reveal"}
+                </button>
 
-      <CopyButton value={apiKey || ""} />
-    </div>
-  </div>
+                <CopyButton value={apiKey || ""} />
+              </div>
+            </div>
 
-  <div className="mt-3 flex items-center justify-between gap-2">
-    <div className="text-xs text-slate-500">
-      Stored server-side. Used by BI/webhooks and API clients.
-    </div>
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <div className="text-xs text-slate-500">
+                Stored server-side. Used by BI/webhooks and API clients.
+              </div>
 
-    <button
-      type="button"
-      onClick={regenerateApiKey}
-      disabled={isRegeneratingKey}
-      className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
-    >
-      {isRegeneratingKey ? "Rotating..." : "Regenerate"}
-    </button>
-  </div>
-</div>
+              <button
+                type="button"
+                onClick={regenerateApiKey}
+                disabled={isRegeneratingKey}
+                className="rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                {isRegeneratingKey ? "Rotating..." : "Regenerate"}
+              </button>
+            </div>
+          </div>
 
           <div className="rounded-2xl border border-slate-200 bg-white p-4">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Webhook Endpoint</div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Webhook Endpoint
+            </div>
             <div className="mt-2 flex items-center justify-between">
               <span className="font-mono text-sm text-slate-900">POST /api/pms-sync</span>
               <CopyButton value={webhookEndpoint} />
@@ -1308,69 +1365,78 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
         </div>
 
         <div className="mt-4 flex flex-wrap items-center justify-center gap-3">
-  <button
-    onClick={() => setActiveTab("Import")}
-    className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
-  >
-    Import CSV instead
-  </button>
+          <button
+            onClick={() => setActiveTab("Import")}
+            className="rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm text-slate-700 hover:bg-slate-50"
+          >
+            Import CSV instead
+          </button>
 
-  <button
-    onClick={() => refreshPersistedTurns()}
-    className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
-  >
-    Check for synced turns
-  </button>
+          <button
+            onClick={() => refreshPersistedTurns()}
+            className="rounded-xl bg-slate-900 px-4 py-2 text-sm text-white hover:bg-slate-800"
+          >
+            Check for synced turns
+          </button>
 
-  <button
-    onClick={sendTestWebhook}
-    disabled={!apiKey || isSendingTestWebhook}
-    className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-  >
-    {isSendingTestWebhook ? "Sending test..." : "Send test webhook"}
-  </button>
-</div>
-
-{testWebhookStatus ? (
-  <div
-    className={`mt-4 rounded-xl px-4 py-3 text-sm ${
-      testWebhookStatus.type === "success"
-        ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
-        : "border border-red-200 bg-red-50 text-red-700"
-    }`}
-  >
-    {testWebhookStatus.message}
-  </div>
-) : null}
-
-{importedProperties.some((row) => row.isTestData) && (
-  <div className="mt-3 flex justify-center">
-    <div className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
-      Test data active (auto-clears in ~5 min)
-    </div>
-  </div>
-)}
-
-{(testWebhookStatus || importedProperties.length > 0) && (
-  <div className="mt-3 text-center">
-    <button
-      onClick={handleClearImportedData}
-      className="text-xs text-slate-500 hover:text-slate-700 underline"
-    >
-      Reset (clear all synced data)
-    </button>
-  </div>
-)}
+          <button
+            onClick={sendTestWebhook}
+            disabled={!apiKey || isSendingTestWebhook}
+            className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+          >
+            {isSendingTestWebhook ? "Sending test..." : "Send test webhook"}
+          </button>
         </div>
+
+        {importedProperties.some((row) => row.isTestData) && (
+          <div className="mt-3 flex justify-center">
+            <div className="inline-flex items-center rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-amber-700">
+              Test data active (auto-clears in ~5 min)
+            </div>
+          </div>
+        )}
+
+        {(testWebhookStatus || importedProperties.length > 0) && (
+          <div className="mt-3 text-center">
+            <button
+              onClick={handleClearImportedData}
+              className="text-xs text-slate-500 hover:text-slate-700 underline"
+            >
+              Reset (clear all synced data)
+            </button>
+          </div>
+        )}
       </div>
     </div>
-  ) : (
-    <>
-      <div
-        className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
-          isOrgLoading ? "opacity-40" : "opacity-100"
-        }`}
-      >
+  </div>
+) : (
+  <>
+    {testWebhookStatus && (
+      <div className="mx-auto max-w-7xl px-6 pt-4">
+        <div
+          className={`flex items-center justify-between rounded-xl px-4 py-3 text-sm ${
+            testWebhookStatus.type === "success"
+              ? "border border-emerald-200 bg-emerald-50 text-emerald-700"
+              : "border border-red-200 bg-red-50 text-red-700"
+          }`}
+        >
+          <span>{testWebhookStatus.message}</span>
+
+          <button
+            onClick={() => setTestWebhookStatus(null)}
+            className="ml-4 text-xs underline opacity-70 hover:opacity-100"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    )}
+
+    <div
+      className={`mx-auto max-w-7xl px-6 py-4 transition-opacity duration-300 ${
+        isOrgLoading ? "opacity-40" : "opacity-100"
+      }`}
+    >
         <TabNav
           tabs={TABS}
           activeTab={activeTab}
@@ -1447,6 +1513,10 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
           <ImportPanel
             onImport={handleImportTurns}
             onClearSuccess={() => {
+              setLastSyncStatus("Webhook synced");
+              setLastSyncSource(`${activeOrgLabel} Test Webhook`);
+              setLastSyncCount(demoTurns.length);
+              setLastSyncAt(new Date().toISOString());
               setLastImportCount(0);
               setLastUploadedCount(0);
               setLastSkippedCount(0);

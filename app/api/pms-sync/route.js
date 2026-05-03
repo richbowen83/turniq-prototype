@@ -22,11 +22,14 @@ function writeTurns(turns) {
 
 export async function POST(request) {
   try {
+console.log("ORG:", request.headers.get("x-turniq-org-id"));
+console.log("KEY:", request.headers.get("x-turniq-api-key"));
     const body = await request.json();
 
     const source = body.source || "PMS";
     const mode = body.mode || "upsert";
     const rawTurns = Array.isArray(body.turns) ? body.turns : [];
+    const orgId = request.headers.get("x-turniq-org-id") || body.orgId || "demo";
 
     if (!rawTurns.length) {
       return NextResponse.json(
@@ -36,18 +39,24 @@ export async function POST(request) {
     }
 
     const incomingTurns = rawTurns.map((row, index) => {
-      const mapped = mapRawRowToTurnIQTurn(row, index);
-      return {
-        ...mapped,
-        sourceSystemName: source,
-        syncStatus: "Synced",
-        lastSyncedAt: new Date().toISOString(),
-        lastSyncedLabel: `${source} sync`,
-      };
-    });
+  const mapped = mapRawRowToTurnIQTurn(row, index);
+
+  return {
+    ...mapped,
+    orgId,
+    isTestData: Boolean(body.isTestData || row.isTestData),
+    sourceSystemName: source,
+    syncStatus: "Synced",
+    lastSyncedAt: new Date().toISOString(),
+    lastSyncedLabel: `${source} sync`,
+  };
+});
 
     if (mode === "replace") {
-      writeTurns(incomingTurns);
+  const existingTurns = readTurns().filter((turn) => turn.orgId !== orgId);
+  const nextTurns = [...existingTurns, ...incomingTurns];
+
+  writeTurns(nextTurns);
 
       return NextResponse.json({
         ok: true,
@@ -58,8 +67,11 @@ export async function POST(request) {
       });
     }
 
-    const existingTurns = readTurns();
-    const byId = new Map(existingTurns.map((turn) => [turn.id, turn]));
+    const allTurns = readTurns();
+const otherOrgTurns = allTurns.filter((turn) => turn.orgId !== orgId);
+const sameOrgTurns = allTurns.filter((turn) => turn.orgId === orgId);
+
+const byId = new Map(sameOrgTurns.map((turn) => [turn.id, turn]));
 
     incomingTurns.forEach((turn) => {
       byId.set(turn.id, {
@@ -68,22 +80,26 @@ export async function POST(request) {
       });
     });
 
-    const mergedTurns = Array.from(byId.values());
-    writeTurns(mergedTurns);
+    const mergedOrgTurns = Array.from(byId.values());
+const mergedTurns = [...otherOrgTurns, ...mergedOrgTurns];
+
+writeTurns(mergedTurns);
 
     return NextResponse.json({
-      ok: true,
-      mode,
-      source,
-      received: incomingTurns.length,
-      count: mergedTurns.length,
-      turns: incomingTurns,
-    });
+  ok: true,
+  mode,
+  source,
+  received: incomingTurns.length,
+  count: mergedTurns.length,
+  turns: incomingTurns,
+});
   } catch (error) {
-    console.error("PMS sync failed", error);
+    console.error("PMS sync failed");
+    console.error("MESSAGE:", error.message);
+    console.error("STACK:", error.stack);
 
     return NextResponse.json(
-      { ok: false, error: "PMS sync failed" },
+      { ok: false, error: error.message || "PMS sync failed" },
       { status: 500 }
     );
   }
