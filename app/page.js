@@ -1098,12 +1098,27 @@ const demoTurns = Array.from({ length: 50 }, (_, index) => {
       throw new Error(data?.error || "Webhook test failed");
     }
 
+const syncedTurns = data.turns || demoTurns;
+
+setOrgImportedProperties(orgId, syncedTurns);
+setLastSyncStatus("Webhook synced");
+setLastSyncSource(`${activeOrgLabel} Test Webhook`);
+setLastSyncCount(syncedTurns.length);
+setLastSyncAt(new Date().toISOString());
+setDataSource(`${activeOrgLabel} Test Webhook`);
+setSelectedMarket("All Markets");
+
+if (syncedTurns[0]?.id) {
+  setSelectedPropertyId(syncedTurns[0].id);
+}
+
+setActiveTab("Control Center");
+
     setTestWebhookStatus({
       type: "success",
       message: `Webhook synced • ${demoTurns.length} turns imported`
     });
 
-    await refreshPersistedTurns({ targetOrgId: orgId });
   } catch (error) {
     console.error("Failed to send test webhook", error);
     setTestWebhookStatus({
