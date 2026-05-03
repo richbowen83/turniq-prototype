@@ -1,22 +1,12 @@
 import { NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
-
-const DATA_FILE = path.join(process.cwd(), "data", "turns.json");
+global.turniqTurnsStore = global.turniqTurnsStore || [];
 
 function readTurns() {
-  try {
-    if (!fs.existsSync(DATA_FILE)) return [];
-    const raw = fs.readFileSync(DATA_FILE, "utf8");
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  return global.turniqTurnsStore || [];
 }
 
 function writeTurns(turns) {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(turns, null, 2));
+  global.turniqTurnsStore = turns;
 }
 
 export async function GET(request) {
