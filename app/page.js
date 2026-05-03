@@ -837,6 +837,34 @@ useEffect(() => {
     setActiveTab("Overview");
   }
 
+async function handleClearAllData() {
+  try {
+    await fetch("/api/turns?all=true", {
+      method: "DELETE",
+    });
+
+    setImportedPropertiesByOrg({});
+    setPreviousImportedProperties([]);
+    setCanUndoImport(false);
+    setLastImportCount(0);
+    setLastUploadedCount(0);
+    setLastSkippedCount(0);
+    setLastImportTimestamp(null);
+    setForecastUndoStack([]);
+    setLastSyncCount(0);
+    setLastSyncSource("");
+    setLastSyncStatus(orgId === "demo" ? "Demo dataset" : "No persisted turns");
+    setTestWebhookStatus(null);
+    setSelectedMarket("All Markets");
+    setSelectedPropertyId("p1");
+    setActiveTab("Overview");
+
+    localStorage.clear();
+  } catch (error) {
+    console.error("Failed to clear all data", error);
+  }
+}
+
   function handleUndoImport() {
   const restored = previousImportedProperties || [];
   setOrgImportedProperties(orgId, restored);
@@ -1510,30 +1538,43 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
         {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
 
         {activeTab === "Import" && (
-          <ImportPanel
-            onImport={handleImportTurns}
-            onClearSuccess={() => {
-              setLastSyncStatus("Webhook synced");
-              setLastSyncSource(`${activeOrgLabel} Test Webhook`);
-              setLastSyncCount(demoTurns.length);
-              setLastSyncAt(new Date().toISOString());
-              setLastImportCount(0);
-              setLastUploadedCount(0);
-              setLastSkippedCount(0);
-              setLastImportTimestamp(null);
-            }}
-            onClearImportedData={handleClearImportedData}
-            onUndoImport={handleUndoImport}
-            canUndoImport={canUndoImport}
-            hasImportedData={importedProperties.length > 0}
-            importMode={importMode}
-            setImportMode={setImportMode}
-            lastImportCount={lastImportCount}
-            lastUploadedCount={lastUploadedCount}
-            lastSkippedCount={lastSkippedCount}
-            lastImportTimestamp={lastImportTimestamp}
-          />
-        )}
+  <>
+    <ImportPanel
+      onImport={handleImportTurns}
+      onClearSuccess={() => {
+        setLastImportCount(0);
+        setLastUploadedCount(0);
+        setLastSkippedCount(0);
+        setLastImportTimestamp(null);
+      }}
+      onClearImportedData={handleClearImportedData}
+      onUndoImport={handleUndoImport}
+      canUndoImport={canUndoImport}
+      hasImportedData={importedProperties.length > 0}
+      importMode={importMode}
+      setImportMode={setImportMode}
+      lastImportCount={lastImportCount}
+      lastUploadedCount={lastUploadedCount}
+      lastSkippedCount={lastSkippedCount}
+      lastImportTimestamp={lastImportTimestamp}
+    />
+
+    <div className="mt-4 rounded-2xl border border-red-200 bg-red-50 p-4 text-center">
+      <div className="text-sm font-medium text-red-700">Admin reset</div>
+      <div className="mt-1 text-xs text-red-600">
+        Clears all synced turns across all orgs. Use for demos or QA only.
+      </div>
+
+      <button
+        type="button"
+        onClick={handleClearAllData}
+        className="mt-3 rounded-xl bg-red-600 px-4 py-2 text-sm text-white hover:bg-red-700"
+      >
+        Reset all org data
+      </button>
+    </div>
+  </>
+)}
       </div>
     </>
   )}

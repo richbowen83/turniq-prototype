@@ -79,26 +79,35 @@ export async function POST(request) {
 export async function DELETE(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const orgId = searchParams.get("orgId");
 
-    if (!orgId) {
+    const orgId = searchParams.get("orgId");
+    const clearAll = searchParams.get("all") === "true";
+
+    const existingTurns = readTurns();
+
+    // 🔥 Global nuke
+    if (clearAll) {
       writeTurns([]);
-      return NextResponse.json({ ok: true, count: 0 });
+      return NextResponse.json({ ok: true, cleared: "all" });
     }
 
-    const remainingTurns = readTurns().filter((turn) => turn.orgId !== orgId);
-    writeTurns(remainingTurns);
+    // 🔥 Org-specific delete
+    if (orgId) {
+      const remaining = existingTurns.filter((t) => t.orgId !== orgId);
+      writeTurns(remaining);
 
-    return NextResponse.json({
-      ok: true,
-      orgId,
-      count: 0,
-    });
-  } catch (error) {
-    console.error("Failed to delete turns", error);
+      return NextResponse.json({ ok: true, cleared: orgId });
+    }
 
     return NextResponse.json(
-      { ok: false, error: "Failed to delete turns" },
+      { ok: false, error: "Missing orgId or all=true" },
+      { status: 400 }
+    );
+  } catch (error) {
+    console.error("Failed to clear turns", error);
+
+    return NextResponse.json(
+      { ok: false, error: "Failed to clear turns" },
       { status: 500 }
     );
   }
