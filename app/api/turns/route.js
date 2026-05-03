@@ -1,13 +1,5 @@
 import { NextResponse } from "next/server";
-global.turniqTurnsStore = global.turniqTurnsStore || [];
-
-function readTurns() {
-  return global.turniqTurnsStore || [];
-}
-
-function writeTurns(turns) {
-  global.turniqTurnsStore = turns;
-}
+import { readTurns, writeTurns } from "../../../lib/serverTurnStore";
 
 export async function GET(request) {
   try {
@@ -75,15 +67,13 @@ export async function DELETE(request) {
 
     const existingTurns = readTurns();
 
-    // 🔥 Global nuke
     if (clearAll) {
       writeTurns([]);
       return NextResponse.json({ ok: true, cleared: "all" });
     }
 
-    // 🔥 Org-specific delete
     if (orgId) {
-      const remaining = existingTurns.filter((t) => t.orgId !== orgId);
+      const remaining = existingTurns.filter((turn) => turn.orgId !== orgId);
       writeTurns(remaining);
 
       return NextResponse.json({ ok: true, cleared: orgId });
