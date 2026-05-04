@@ -780,7 +780,7 @@ function ActionCard({ row, onOpen, onApply }) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Pill tone={row.actionEngine.tone}>{row.actionEngine.urgency}</Pill>
             <div className="text-xs text-slate-500">Score {row.aiPriorityScore}</div>
@@ -793,29 +793,41 @@ function ActionCard({ row, onOpen, onApply }) {
           </button>
 
           <div className="mt-1 text-sm text-slate-500">
-            {row.market} • {row.currentStage} • ECD {formatShortDate(row.projectedCompletion)}
+            {row.market} • {row.currentStage} • ECD{" "}
+            {formatShortDate(row.projectedCompletion)}
           </div>
 
-          <div className="mt-3 text-sm font-medium text-slate-900">
-            {row.actionEngine.headline}
-          </div>
-          <div className="mt-1 text-sm text-slate-600">{row.actionEngine.whyNow}</div>
+          <div className="mt-3 text-[10px] uppercase tracking-wide text-blue-600">
+  AI Recommendation
+</div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
-            {(row.aiRiskDrivers || []).slice(0, 4).map((driver) => (
-              <span
-                key={driver}
-                className="rounded-full bg-slate-100 px-2 py-1 text-[11px] text-slate-600"
-              >
-                {driver}
-              </span>
-            ))}
-          </div>
+<div className="mt-1 text-sm font-medium text-slate-900">
+  {row.actionEngine.headline}
+</div>
+
+<div className="mt-1 text-sm text-slate-600">
+  {row.actionEngine.whyNow}
+</div>
+
+          {row.aiRiskDrivers?.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {row.aiRiskDrivers.slice(0, 4).map((driver) => (
+                <span
+                  key={driver}
+                  className="rounded-full bg-amber-50 px-2 py-1 text-[11px] text-amber-700"
+                >
+                  {driver}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div className="min-w-[150px] shrink-0">
           <div className="rounded-2xl bg-slate-50 p-3">
-            <div className="text-xs uppercase tracking-wide text-slate-500">Modeled lift</div>
+            <div className="text-xs uppercase tracking-wide text-slate-500">
+              Modeled lift
+            </div>
             <div className="mt-2 text-xl font-semibold text-slate-900">
               +{row.actionEngine.daysRecovered}d
             </div>
@@ -906,6 +918,9 @@ export default function ControlCenterTab({
   const [actionLearningLog, setActionLearningLog] = useState([]);
   const [localLastUpdated, setLocalLastUpdated] = useState(new Date().toISOString());
   const [drawerRow, setDrawerRow] = useState(null);
+  const [askQuestion, setAskQuestion] = useState("");
+  const [askAnswer, setAskAnswer] = useState("");
+  const [isAskingTurnIQ, setIsAskingTurnIQ] = useState(false);
 
   const queueRef = useRef(null);
 
@@ -967,6 +982,38 @@ export default function ControlCenterTab({
       { daysRecovered: 0, revenueRecovered: 0, critical: 0 }
     );
   }, [topActionRows]);
+
+const aiPortfolioSummary = useMemo(() => {
+  const highRiskRows = enrichedRows.filter((row) => (row.risk || 0) >= 75);
+  const totalRevenueAtRisk = highRiskRows.reduce(
+    (sum, row) => sum + (row.actionEngine?.revenueRecovered || 0),
+    0
+  );
+
+  const clusterCounts = enrichedRows.reduce((acc, row) => {
+    const key =
+      row.currentStage === "Owner Approval"
+        ? "Owner Approval delays"
+        : row.currentStage === "Failed Rent Ready"
+        ? "Failed Rent Ready rework"
+        : row.turnStatus === "Blocked"
+        ? "Blocked execution"
+        : row.currentStage || "Other";
+
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
+
+  const biggestCluster =
+    Object.entries(clusterCounts).sort((a, b) => b[1] - a[1])[0]?.[0] ||
+    "No major cluster";
+
+  return {
+    biggestCluster,
+    highRiskCount: highRiskRows.length,
+    totalRevenueAtRisk,
+  };
+}, [enrichedRows]);
 
   const topActionBuckets = useMemo(() => {
     return buildTopActionBuckets(topActionRows);
@@ -1078,6 +1125,40 @@ export default function ControlCenterTab({
       console.error("Failed to persist saved views", error);
     }
   }
+
+async function handleAskTurnIQ(questionOverride = "") {
+  const question = questionOverride || askQuestion;
+
+  if (!question.trim()) return;
+
+  try {
+    setIsAskingTurnIQ(true);
+    setAskAnswer("");
+
+    const response = await fetch("/api/ask-turniq", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        question,
+        rows: enrichedRows,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Ask TurnIQ failed");
+    }
+
+    setAskAnswer(data.answer);
+  } catch (error) {
+    setAskAnswer(error.message || "Ask TurnIQ failed.");
+  } finally {
+    setIsAskingTurnIQ(false);
+  }
+}
 
   function persistActionLearning(nextLog) {
     setActionLearningLog(nextLog);
@@ -1474,6 +1555,103 @@ export default function ControlCenterTab({
           </div>
         </div>
       </Card>
+<div className="grid gap-4 md:grid-cols-3">
+  <div className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
+    <div className="text-xs uppercase tracking-wide text-blue-700">
+      AI portfolio read
+    </div>
+    <div className="mt-2 text-lg font-semibold text-slate-900">
+      Biggest risk cluster: {aiPortfolioSummary.biggestCluster}
+    </div>
+    <div className="mt-1 text-sm text-blue-700">
+      TurnIQ detected the most concentrated operating risk in this area.
+    </div>
+  </div>
+
+  <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+    <div className="text-xs uppercase tracking-wide text-amber-700">
+      Revenue at risk
+    </div>
+    <div className="mt-2 text-lg font-semibold text-slate-900">
+      ${aiPortfolioSummary.totalRevenueAtRisk.toLocaleString()} across{" "}
+      {aiPortfolioSummary.highRiskCount} turns
+    </div>
+    <div className="mt-1 text-sm text-amber-700">
+      Based on high-risk turns and modeled recoverable delay.
+    </div>
+  </div>
+
+  <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+    <div className="text-xs uppercase tracking-wide text-emerald-700">
+      Recommended operating focus
+    </div>
+    <div className="mt-2 text-lg font-semibold text-slate-900">
+      Work the Top 10 Actions first
+    </div>
+    <div className="mt-1 text-sm text-emerald-700">
+      Prioritized by urgency, recoverable days, and protectable revenue.
+    </div>
+  </div>
+</div>
+
+<Card>
+  <div className="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div className="text-xl font-semibold text-slate-900">Ask TurnIQ</div>
+      <div className="mt-1 text-sm text-slate-500">
+        Ask questions about risk, bottlenecks, priorities, owners, markets, and next actions.
+      </div>
+    </div>
+
+    <Pill tone="blue">Portfolio AI</Pill>
+  </div>
+
+  <div className="mt-4 flex flex-col gap-3 md:flex-row">
+    <input
+      value={askQuestion}
+      onChange={(e) => setAskQuestion(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") handleAskTurnIQ();
+      }}
+      placeholder="Ask: What should we fix first today?"
+      className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm"
+    />
+
+    <button
+      onClick={() => handleAskTurnIQ()}
+      disabled={isAskingTurnIQ || !askQuestion.trim()}
+      className="rounded-xl bg-slate-900 px-4 py-3 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+    >
+      {isAskingTurnIQ ? "Thinking..." : "Ask"}
+    </button>
+  </div>
+
+  <div className="mt-3 flex flex-wrap gap-2">
+    {[
+      "What should we fix first today?",
+      "Where is the biggest bottleneck?",
+      "Which market has the most revenue at risk?",
+      "Summarize this for an executive update.",
+    ].map((prompt) => (
+      <button
+        key={prompt}
+        onClick={() => {
+          setAskQuestion(prompt);
+          handleAskTurnIQ(prompt);
+        }}
+        className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs text-slate-600 hover:bg-slate-50"
+      >
+        {prompt}
+      </button>
+    ))}
+  </div>
+
+  {askAnswer ? (
+    <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-slate-800 whitespace-pre-wrap">
+      {askAnswer}
+    </div>
+  ) : null}
+</Card>
 
       {lastActionImpact ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { readTurns, writeTurns } from "../../../lib/serverTurnStore";
 import { mapRawRowToTurnIQTurn } from "../../../lib/turniqImport";
+import { enrichTurnWithIntelligence } from "../../../lib/turniqBrain";
 
 export async function POST(request) {
   try {
@@ -20,7 +21,9 @@ export async function POST(request) {
     }
 
     const incomingTurns = rawTurns.map((row, index) => {
-      const mapped = mapRawRowToTurnIQTurn(row, index);
+      const mapped = enrichTurnWithIntelligence(
+  mapRawRowToTurnIQTurn(row, index)
+);
 
       return {
         ...mapped,
