@@ -1,27 +1,29 @@
 import { NextResponse } from "next/server";
-import { readTurns, writeTurns } from "../../../lib/serverTurnStore";
+import {
+  deleteAllTurns,
+  deleteTurnsForOrg,
+  getTurnsByOrg,
+  replaceTurnsForOrg,
+} from "../../../lib/turnsDb";
 
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
-    const orgId = searchParams.get("orgId");
+    const orgId = searchParams.get("orgId") || "demo";
 
-    const turns = readTurns();
-
-    const filteredTurns = orgId
-      ? turns.filter((turn) => turn.orgId === orgId)
-      : turns;
+    const turns = await getTurnsByOrg(orgId);
 
     return NextResponse.json({
       ok: true,
-      count: filteredTurns.length,
-      turns: filteredTurns,
+      orgId,
+      count: turns.length,
+      turns,
     });
   } catch (error) {
     console.error("Failed to load turns", error);
 
     return NextResponse.json(
-      { ok: false, error: "Failed to load turns" },
+      { ok: false, error: error.message || "Failed to load turns" },
       { status: 500 }
     );
   }
@@ -37,22 +39,19 @@ export async function POST(request) {
       ? body.turns.map((turn) => ({ ...turn, orgId }))
       : [];
 
-    const existingTurns = readTurns().filter((turn) => turn.orgId !== orgId);
-    const nextTurns = [...existingTurns, ...incomingTurns];
-
-    writeTurns(nextTurns);
+    const turns = await replaceTurnsForOrg(orgId, incomingTurns);
 
     return NextResponse.json({
       ok: true,
       orgId,
-      count: incomingTurns.length,
-      turns: incomingTurns,
+      count: turns.length,
+      turns,
     });
   } catch (error) {
     console.error("Failed to save turns", error);
 
     return NextResponse.json(
-      { ok: false, error: "Failed to save turns" },
+      { ok: false, error: error.message || "Failed to save turns" },
       { status: 500 }
     );
   }
@@ -65,17 +64,13 @@ export async function DELETE(request) {
     const orgId = searchParams.get("orgId");
     const clearAll = searchParams.get("all") === "true";
 
-    const existingTurns = readTurns();
-
     if (clearAll) {
-      writeTurns([]);
+      await deleteAllTurns();
       return NextResponse.json({ ok: true, cleared: "all" });
     }
 
     if (orgId) {
-      const remaining = existingTurns.filter((turn) => turn.orgId !== orgId);
-      writeTurns(remaining);
-
+      await deleteTurnsForOrg(orgId);
       return NextResponse.json({ ok: true, cleared: orgId });
     }
 
@@ -87,7 +82,7 @@ export async function DELETE(request) {
     console.error("Failed to clear turns", error);
 
     return NextResponse.json(
-      { ok: false, error: "Failed to clear turns" },
+      { ok: false, error: error.message || "Failed to clear turns" },
       { status: 500 }
     );
   }

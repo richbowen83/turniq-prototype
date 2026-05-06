@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { readTurns, writeTurns } from "../../../lib/serverTurnStore";
 import { mapRawRowToTurnIQTurn } from "../../../lib/turniqImport";
 import { enrichTurnWithIntelligence } from "../../../lib/turniqBrain";
+import { replaceTurnsForOrg, upsertTurnsForOrg } from "../../../lib/turnsDb";
 
 export async function POST(request) {
   try {
@@ -22,8 +22,8 @@ export async function POST(request) {
 
     const incomingTurns = rawTurns.map((row, index) => {
       const mapped = enrichTurnWithIntelligence(
-  mapRawRowToTurnIQTurn(row, index)
-);
+        mapRawRowToTurnIQTurn(row, index)
+      );
 
       return {
         ...mapped,
@@ -36,39 +36,10 @@ export async function POST(request) {
       };
     });
 
-    if (mode === "replace") {
-      const existingTurns = readTurns().filter((turn) => turn.orgId !== orgId);
-      const nextTurns = [...existingTurns, ...incomingTurns];
-
-      writeTurns(nextTurns);
-
-      return NextResponse.json({
-        ok: true,
-        mode,
-        source,
-        orgId,
-        count: incomingTurns.length,
-        turns: incomingTurns,
-      });
-    }
-
-    const allTurns = readTurns();
-    const otherOrgTurns = allTurns.filter((turn) => turn.orgId !== orgId);
-    const sameOrgTurns = allTurns.filter((turn) => turn.orgId === orgId);
-
-    const byId = new Map(sameOrgTurns.map((turn) => [turn.id, turn]));
-
-    incomingTurns.forEach((turn) => {
-      byId.set(turn.id, {
-        ...(byId.get(turn.id) || {}),
-        ...turn,
-      });
-    });
-
-    const mergedOrgTurns = Array.from(byId.values());
-    const mergedTurns = [...otherOrgTurns, ...mergedOrgTurns];
-
-    writeTurns(mergedTurns);
+    const turns =
+      mode === "replace"
+        ? await replaceTurnsForOrg(orgId, incomingTurns)
+        : await upsertTurnsForOrg(orgId, incomingTurns);
 
     return NextResponse.json({
       ok: true,
@@ -76,8 +47,8 @@ export async function POST(request) {
       source,
       orgId,
       received: incomingTurns.length,
-      count: mergedOrgTurns.length,
-      turns: incomingTurns,
+      count: turns.length,
+      turns,
     });
   } catch (error) {
     console.error("PMS sync failed", error);
