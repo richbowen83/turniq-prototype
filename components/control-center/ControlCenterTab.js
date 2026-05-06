@@ -1181,48 +1181,76 @@ async function handleAskTurnIQ(questionOverride = "") {
   }
 
   function recordActionOutcome(row, patch, label) {
-    const nextDays = patch.daysInStage ?? row.daysInStage ?? 0;
-    const daysSaved = Math.max(0, (row.daysInStage || 0) - nextDays);
-    const prevECD = row.projectedCompletion;
-    const nextECD = daysSaved > 0 ? shiftDate(prevECD, -daysSaved) : prevECD;
-    const revenueProtected = getRevenueProtected(daysSaved, row);
+  const nextDays = patch.daysInStage ?? row.daysInStage ?? 0;
+  const daysSaved = Math.max(0, (row.daysInStage || 0) - nextDays);
+  const prevECD = row.projectedCompletion;
+  const nextECD = daysSaved > 0 ? shiftDate(prevECD, -daysSaved) : prevECD;
+  const revenueProtected = getRevenueProtected(daysSaved, row);
 
-    const learningEntry = {
-      id: `learn-${Date.now()}-${row.id}`,
-      propertyId: row.id,
-      propertyName: row.name,
-      actionLabel: label,
-      stage: row.currentStage,
-      blocker: row.blocker || getPrimaryBlocker(row),
-      turnStatus: row.turnStatus,
-      risk: row.risk || 0,
-      daysSaved,
-      revenueProtected,
+  const learningEntry = {
+    id: `learn-${Date.now()}-${row.id}`,
+    propertyId: row.id,
+    propertyName: row.name,
+    actionLabel: label,
+    stage: row.currentStage,
+    blocker: row.blocker || getPrimaryBlocker(row),
+    turnStatus: row.turnStatus,
+    risk: row.risk || 0,
+    daysSaved,
+    revenueProtected,
+    timestamp: new Date().toISOString(),
+  };
+
+  const nextLearningLog = [learningEntry, ...actionLearningLog].slice(0, 200);
+  persistActionLearning(nextLearningLog);
+
+  patchRow(row.id, {
+    lastAction: {
+      label,
       timestamp: new Date().toISOString(),
-    };
-
-    const nextLearningLog = [learningEntry, ...actionLearningLog].slice(0, 200);
-    persistActionLearning(nextLearningLog);
-
-    patchRow(row.id, {
-      lastAction: {
-        label,
-        timestamp: new Date().toISOString(),
-        daysRecovered: daysSaved,
-        revenueProtected,
-        prevECD,
-        nextECD,
-      },
-    });
-
-    setLastActionImpact({
-      property: row.name,
-      daysSaved,
+      daysRecovered: daysSaved,
       revenueProtected,
       prevECD,
       nextECD,
-    });
-  }
+    },
+  });
+
+  setLastActionImpact({
+    property: row.name,
+    daysSaved,
+    revenueProtected,
+    prevECD,
+    nextECD,
+  });
+
+  fetch("/api/action-history", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      orgId: row.orgId || "demo",
+      turnId: row.id,
+      propertyName: row.name,
+      market: row.market,
+      actionType: label,
+      actionSource: "operator",
+      aiRecommendation:
+        row.aiRecommendation?.title || row.actionEngine?.headline,
+      previousStage: row.currentStage,
+      newStage: patch.currentStage || row.currentStage,
+      previousStatus: row.turnStatus,
+      newStatus: patch.turnStatus || row.turnStatus,
+      previousRisk: row.risk,
+      newRisk: patch.risk || row.risk,
+      estimatedDaysSaved: daysSaved,
+      estimatedRevenueProtected: revenueProtected,
+      actorName: "Operator",
+    }),
+  }).catch((error) => {
+    console.error("Failed to log action history", error);
+  });
+}
 
   function handleOwnerChange(id, value) {
     patchRow(id, { turnOwner: value });
