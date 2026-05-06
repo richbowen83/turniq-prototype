@@ -1,67 +1,106 @@
 import { NextResponse } from "next/server";
+import { getTurnsByOrg } from "../../../lib/turnsDb";
+
+function buildPortfolioContext(rows) {
+  return rows.slice(0, 100).map((row) => ({
+    id: row.id,
+    name: row.name,
+    market: row.market,
+    stage: row.currentStage,
+    status: row.turnStatus,
+    daysOpen: row.openDays,
+    daysInStage: row.daysInStage,
+    risk: row.risk,
+    readiness: row.readiness,
+    projectedCompletion: row.projectedCompletion,
+    owner: row.turnOwner,
+    vendor: row.vendor,
+    blockers: row.blockers,
+    scope: row.scope,
+    alert: row.alert,
+    insight: row.insight,
+    sourceSystemName: row.sourceSystemName,
+    syncStatus: row.syncStatus,
+    lastSyncedAt: row.lastSyncedAt,
+  }));
+}
+
+function buildDeterministicAnswer(question, rows) {
+  const highRisk = rows.filter((row) => (row.risk || 0) >= 75);
+  const blocked = rows.filter((row) => row.turnStatus === "Blocked");
+  const ownerApproval = rows.filter((row) => row.currentStage === "Owner Approval");
+  const failedReady = rows.filter((row) => row.currentStage === "Failed Rent Ready");
+
+  const top = [...rows].sort((a, b) => {
+    return (
+      (b.risk || 0) - (a.risk || 0) ||
+      (b.daysInStage || 0) - (a.daysInStage || 0) ||
+      (b.openDays || 0) - (a.openDays || 0)
+    );
+  })[0];
+
+  return [
+    `I reviewed ${rows.length} live turns for this org.`,
+    `${highRisk.length} are high-risk, ${blocked.length} are blocked, ${ownerApproval.length} are in owner approval, and ${failedReady.length} are failed rent ready.`,
+    top
+      ? `Highest-priority turn: ${top.name} in ${top.market}. It is in ${top.currentStage}, risk ${top.risk}, open ${top.openDays} days, and ${top.daysInStage} days in stage.`
+      : "No turn rows are currently available.",
+    "Add or confirm OPENAI_API_KEY to enable full natural-language reasoning."
+  ].join("\n\n");
+}
 
 export async function POST(request) {
   try {
-    const { question, rows = [] } = await request.json();
+    const body = await request.json();
 
-    if (!question?.trim()) {
+    const question = body.question || "";
+    const orgId =
+      request.headers.get("x-turniq-org-id") ||
+      body.orgId ||
+      "demo";
+
+    if (!question.trim()) {
       return NextResponse.json(
         { ok: false, error: "Question is required" },
         { status: 400 }
       );
     }
 
-    const portfolioContext = rows.slice(0, 75).map((row) => ({
-      name: row.name,
-      market: row.market,
-      stage: row.currentStage,
-      status: row.turnStatus,
-      daysOpen: row.openDays,
-      daysInStage: row.daysInStage,
-      risk: row.risk,
-      readiness: row.readiness,
-      priorityScore: row.aiPriorityScore,
-      urgency: row.actionEngine?.urgency,
-      recommendation: row.actionEngine?.headline,
-      whyNow: row.actionEngine?.whyNow,
-      riskDrivers: row.aiRiskDrivers,
-      revenueRecovered: row.actionEngine?.revenueRecovered,
-      daysRecovered: row.actionEngine?.daysRecovered,
-      projectedCompletion: row.projectedCompletion,
-      owner: row.turnOwner,
-      vendor: row.vendor,
-    }));
+    const rows = await getTurnsByOrg(orgId);
+    const portfolioContext = buildPortfolioContext(rows);
+
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json({
+        ok: true,
+        orgId,
+        source: "supabase",
+        rowCount: rows.length,
+        answer: buildDeterministicAnswer(question, rows),
+      });
+    }
 
     const prompt = `
 You are Ask TurnIQ, an AI operating assistant for single-family rental turn operations.
 
-Your job:
-- Answer using only the turn portfolio data provided.
-- Be direct, operator-focused, and concise.
-- Prioritize execution, bottlenecks, risk, revenue protection, and next actions.
-- If data is missing, say what is missing.
-- Do not invent facts.
+Use only the live portfolio data provided below. Do not invent facts.
+
+Answer style:
+- Be direct and operator-focused.
+- Start with the answer.
+- Then explain why.
+- Include specific turns, markets, stages, owners, blockers, and risk where relevant.
+- Recommend clear next actions.
+- If the data is insufficient, say what is missing.
+
+Org ID:
+${orgId}
 
 User question:
 ${question}
 
-Turn portfolio data:
+Live turn portfolio:
 ${JSON.stringify(portfolioContext, null, 2)}
 `;
-
-    // Temporary deterministic fallback until OpenAI API key is added
-    if (!process.env.OPENAI_API_KEY) {
-      const highRisk = portfolioContext.filter((r) => (r.risk || 0) >= 75);
-      const blocked = portfolioContext.filter((r) => r.status === "Blocked");
-      const top = [...portfolioContext].sort(
-        (a, b) => (b.priorityScore || 0) - (a.priorityScore || 0)
-      )[0];
-
-      return NextResponse.json({
-        ok: true,
-        answer: `Ask TurnIQ read ${portfolioContext.length} turns. ${highRisk.length} are high-risk and ${blocked.length} are blocked. Top priority is ${top?.name || "not available"}${top?.recommendation ? ` — ${top.recommendation}` : ""}. Add OPENAI_API_KEY to enable full chat reasoning.`,
-      });
-    }
 
     const response = await fetch("https://api.openai.com/v1/responses", {
       method: "POST",
@@ -83,7 +122,8 @@ ${JSON.stringify(portfolioContext, null, 2)}
 
     const answer =
       data.output_text ||
-      data.output?.flatMap((item) => item.content || [])
+      data.output
+        ?.flatMap((item) => item.content || [])
         ?.map((content) => content.text)
         ?.filter(Boolean)
         ?.join("\n") ||
@@ -91,6 +131,9 @@ ${JSON.stringify(portfolioContext, null, 2)}
 
     return NextResponse.json({
       ok: true,
+      orgId,
+      source: "supabase",
+      rowCount: rows.length,
       answer,
     });
   } catch (error) {

@@ -1141,9 +1141,9 @@ async function handleAskTurnIQ(questionOverride = "") {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        question,
-        rows: enrichedRows,
-      }),
+  question,
+  orgId: rows[0]?.orgId || "demo",
+}),
     });
 
     const data = await response.json();
