@@ -777,6 +777,36 @@ function ActionBucketCard({ bucket }) {
 }
 
 function ActionCard({ row, onOpen, onApply }) {
+  const [whyStuckAnswer, setWhyStuckAnswer] = useState("");
+  const [isWhyStuckLoading, setIsWhyStuckLoading] = useState(false);
+
+  async function handleWhyStuck() {
+    try {
+      setIsWhyStuckLoading(true);
+      setWhyStuckAnswer("");
+
+      const response = await fetch("/api/turn-ai", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ row }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(data?.error || "Turn AI failed");
+      }
+
+      setWhyStuckAnswer(data.answer);
+    } catch (error) {
+      setWhyStuckAnswer(error.message || "Turn AI failed.");
+    } finally {
+      setIsWhyStuckLoading(false);
+    }
+  }
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-4">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -798,16 +828,16 @@ function ActionCard({ row, onOpen, onApply }) {
           </div>
 
           <div className="mt-3 text-[10px] uppercase tracking-wide text-blue-600">
-  AI Recommendation
-</div>
+            AI Recommendation
+          </div>
 
-<div className="mt-1 text-sm font-medium text-slate-900">
-  {row.actionEngine.headline}
-</div>
+          <div className="mt-1 text-sm font-medium text-slate-900">
+            {row.actionEngine.headline}
+          </div>
 
-<div className="mt-1 text-sm text-slate-600">
-  {row.actionEngine.whyNow}
-</div>
+          <div className="mt-1 text-sm text-slate-600">
+            {row.actionEngine.whyNow}
+          </div>
 
           {row.aiRiskDrivers?.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -846,15 +876,41 @@ function ActionCard({ row, onOpen, onApply }) {
             >
               Apply action
             </button>
+
             <button
               onClick={onOpen}
               className="rounded-md border border-slate-200 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50"
             >
               Open turn
             </button>
+
+            <button
+              onClick={handleWhyStuck}
+              disabled={isWhyStuckLoading}
+              className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+            >
+              {isWhyStuckLoading ? "Thinking..." : "Why stuck?"}
+            </button>
           </div>
         </div>
       </div>
+
+      {whyStuckAnswer ? (
+        <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-slate-800">
+          <div className="mb-1 text-xs font-semibold uppercase tracking-wide text-blue-700">
+            TurnIQ diagnosis
+          </div>
+
+          <div className="whitespace-pre-wrap">{whyStuckAnswer}</div>
+
+          <button
+            onClick={onApply}
+            className="mt-3 rounded-md bg-slate-900 px-3 py-2 text-xs font-medium text-white hover:bg-slate-800"
+          >
+            Apply recommendation
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1204,16 +1260,18 @@ async function handleAskTurnIQ(questionOverride = "") {
   const nextLearningLog = [learningEntry, ...actionLearningLog].slice(0, 200);
   persistActionLearning(nextLearningLog);
 
+const lastAction = {
+  label,
+  timestamp: new Date().toISOString(),
+  daysRecovered: daysSaved,
+  revenueProtected,
+  prevECD,
+  nextECD,
+};
+
   patchRow(row.id, {
-    lastAction: {
-      label,
-      timestamp: new Date().toISOString(),
-      daysRecovered: daysSaved,
-      revenueProtected,
-      prevECD,
-      nextECD,
-    },
-  });
+  lastAction,
+});
 
   setLastActionImpact({
     property: row.name,
@@ -1222,6 +1280,23 @@ async function handleAskTurnIQ(questionOverride = "") {
     prevECD,
     nextECD,
   });
+
+fetch("/api/turns", {
+  method: "PATCH",
+  headers: {
+    "Content-Type": "application/json",
+  },
+  body: JSON.stringify({
+    orgId: row.orgId || "demo",
+    turnId: row.id,
+    patch: {
+      ...patch,
+      lastAction,
+    },
+  }),
+}).catch((error) => {
+  console.error("Failed to persist turn patch", error);
+});
 
   fetch("/api/action-history", {
     method: "POST",

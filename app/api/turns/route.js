@@ -4,6 +4,7 @@ import {
   deleteTurnsForOrg,
   getTurnsByOrg,
   replaceTurnsForOrg,
+  updateTurnForOrg,
 } from "../../../lib/turnsDb";
 
 export async function GET(request) {
@@ -24,6 +25,39 @@ export async function GET(request) {
 
     return NextResponse.json(
       { ok: false, error: error.message || "Failed to load turns" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(request) {
+  try {
+    const body = await request.json();
+
+    const orgId = body.orgId || "demo";
+    const turnId = body.turnId;
+    const patch = body.patch || {};
+
+    if (!turnId) {
+      return NextResponse.json(
+        { ok: false, error: "turnId is required" },
+        { status: 400 }
+      );
+    }
+
+    const turn = await updateTurnForOrg(orgId, turnId, patch);
+
+    return NextResponse.json({
+      ok: true,
+      orgId,
+      turnId,
+      turn,
+    });
+  } catch (error) {
+    console.error("Failed to update turn", error);
+
+    return NextResponse.json(
+      { ok: false, error: error.message || "Failed to update turn" },
       { status: 500 }
     );
   }
