@@ -1464,16 +1464,51 @@ fetch("/api/turns", {
   }
 
   function handleApplyTopAction(row) {
-    const patch = buildPatchForApplyRecommendation(row, row.aiRecommendation);
-    if (!patch) return;
+  let patch = buildPatchForApplyRecommendation(row, row.aiRecommendation);
 
-    patchRow(row.id, patch);
-    recordActionOutcome(
-      row,
-      patch,
-      row.aiRecommendation?.title || row.actionEngine.headline || row.nextAction
-    );
+  if (!patch) {
+    patch = {
+      turnStatus: "Monitoring",
+      blockers: ["No active blockers"],
+      blocker: "None",
+      daysInStage: Math.max(
+        0,
+        (row.daysInStage || 0) -
+          Math.max(1, row.actionEngine?.daysRecovered || 1)
+      ),
+      projectedCompletion:
+        row.actionEngine?.daysRecovered > 0
+          ? shiftDate(row.projectedCompletion, -row.actionEngine.daysRecovered)
+          : row.projectedCompletion,
+      nextAction: "Recommendation applied",
+      workflowCompletedSteps: [
+        ...(row.workflowCompletedSteps || []),
+        "ai_recommendation_applied",
+      ],
+    };
+
+    if (row.currentStage === "Owner Approval") {
+      patch.currentStage = "Dispatch";
+      patch.nextAction = "Confirm vendor schedule";
+    }
+
+    if (row.currentStage === "Failed Rent Ready") {
+      patch.currentStage = "Rent Ready Open";
+      patch.nextAction = "Re-inspect and confirm rent ready";
+    }
   }
+
+  patchRow(row.id, patch);
+
+  recordActionOutcome(
+    row,
+    patch,
+    row.aiRecommendation?.title ||
+      row.actionEngine?.headline ||
+      row.nextAction ||
+      "Apply recommendation"
+  );
+}
 
   function handleWorkflowStep(row, step) {
     if (!step) return;
