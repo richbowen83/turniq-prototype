@@ -688,19 +688,21 @@ useEffect(() => {
   }, [filteredProperties, queueFilter, selectedStageFilter, sortBy]);
 
   function updateProperty(id, patch) {
-    if (importedProperties.length) {
-      setImportedProperties((prev) => {
-        const next = prev.map((row) => (row.id === id ? { ...row, ...patch } : row));
-        persistTurns(next);
-        return next;
-      });
-      return;
-    }
-
-    setProperties((prev) =>
-      prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+  if (importedProperties.length) {
+    const nextRows = importedProperties.map((row) =>
+      row.id === id ? { ...row, ...patch } : row
     );
+
+    setOrgImportedProperties(orgId, nextRows);
+    persistTurns(nextRows, orgId);
+
+    return;
   }
+
+  setProperties((prev) =>
+    prev.map((row) => (row.id === id ? { ...row, ...patch } : row))
+  );
+}
 
   function getActiveDatasetInfo() {
     return {
