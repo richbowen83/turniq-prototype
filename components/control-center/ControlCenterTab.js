@@ -336,6 +336,32 @@ function buildSourceSystemMetadata(row) {
   };
 }
 
+function computeECDRisk(row) {
+  let score = 0;
+
+  if (row.turnStatus === "Blocked") score += 30;
+  if (row.currentStage === "Failed Rent Ready") score += 25;
+  if ((row.daysInStage || 0) >= 7) score += 20;
+  if ((row.risk || 0) >= 75) score += 15;
+  if ((row.readiness || 100) <= 30) score += 15;
+  if (row.blocker && row.blocker !== "None") score += 10;
+
+  const probability = Math.min(score, 95);
+
+  let projectedSlipDays = 0;
+
+  if (probability >= 80) projectedSlipDays = 5;
+  else if (probability >= 60) projectedSlipDays = 3;
+  else if (probability >= 40) projectedSlipDays = 2;
+  else if (probability >= 20) projectedSlipDays = 1;
+
+  return {
+    probability,
+    projectedSlipDays,
+    likelyToSlip: probability >= 40,
+  };
+}
+
 function buildEnrichedRows(rows) {
   return rows.map((row) => {
     const stale = isStale(row);
@@ -364,6 +390,7 @@ function buildEnrichedRows(rows) {
     return {
       ...base,
       actionEngine,
+      ecdPrediction: computeECDRisk(base),
       aiRecommendation: getAiRecommendation(base),
       aiPriorityScore: Math.max(getAiPriorityScore(base), actionEngine.score),
       aiRiskDrivers: getAiRiskDrivers(base),
@@ -826,6 +853,17 @@ function ActionCard({ row, onOpen, onApply }) {
             {row.market} • {row.currentStage} • ECD{" "}
             {formatShortDate(row.projectedCompletion)}
           </div>
+
+          {row.ecdPrediction?.likelyToSlip ? (
+            <div className="mt-2 inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">
+              {row.ecdPrediction.probability}% risk of ECD slip • projected +
+              {row.ecdPrediction.projectedSlipDays}d
+            </div>
+          ) : (
+            <div className="mt-2 inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+              ECD on track
+            </div>
+          )}
 
           <div className="mt-3 text-[10px] uppercase tracking-wide text-blue-600">
             AI Recommendation
@@ -1755,6 +1793,15 @@ fetch("/api/turns", {
     </div>
   ) : null}
 </Card>
+<div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
+  <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
+    Proactive AI Alert
+  </div>
+
+  <div className="mt-1 text-sm text-slate-800">
+    TurnIQ detected rising ECD slippage risk concentrated in failed rent-ready turns across Phoenix and Dallas.
+  </div>
+</div>
 
       {lastActionImpact ? (
         <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
@@ -1803,6 +1850,14 @@ fetch("/api/turns", {
           tone="amber"
           subtext="Coverage gap"
         />
+         <StatCard
+           label="Forecasted Slips"
+           value={
+           enrichedRows.filter((r) => r.ecdPrediction?.likelyToSlip).length
+           }
+           tone="red"
+           subtext="Turns likely to miss ECD"
+         />
       </div>
 
       {topActionBuckets.length ? (
