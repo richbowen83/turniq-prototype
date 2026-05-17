@@ -1015,6 +1015,9 @@ export default function ControlCenterTab({
   const [askQuestion, setAskQuestion] = useState("");
   const [askAnswer, setAskAnswer] = useState("");
   const [isAskingTurnIQ, setIsAskingTurnIQ] = useState(false);
+  const [executiveSummary, setExecutiveSummary] = useState("");
+  const [isGeneratingExecutiveSummary, setIsGeneratingExecutiveSummary] =
+    useState(false);
 
   const queueRef = useRef(null);
 
@@ -1254,6 +1257,53 @@ async function handleAskTurnIQ(questionOverride = "") {
     setAskAnswer(error.message || "Ask TurnIQ failed.");
   } finally {
     setIsAskingTurnIQ(false);
+  }
+}
+
+async function handleGenerateExecutiveSummary() {
+  try {
+    setIsGeneratingExecutiveSummary(true);
+    setExecutiveSummary("");
+
+    const response = await fetch("/api/ask-turniq", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+
+      body: JSON.stringify({
+        orgId: rows[0]?.orgId || "demo",
+
+        question: `
+Generate an executive operating summary for this turns portfolio.
+
+Include:
+- biggest operational bottleneck
+- ECD slip risk
+- revenue at risk
+- top actions completed
+- highest-risk markets
+- operator pressure
+- recommended leadership intervention
+
+Make this sound like a COO operating update.
+`,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Executive summary failed");
+    }
+
+    setExecutiveSummary(data.answer);
+  } catch (error) {
+    setExecutiveSummary(
+      error.message || "Failed to generate executive summary."
+    );
+  } finally {
+    setIsGeneratingExecutiveSummary(false);
   }
 }
 
@@ -1826,12 +1876,46 @@ fetch("/api/turns", {
       </button>
     ))}
   </div>
+{askAnswer ? (
+  <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-slate-800 whitespace-pre-wrap">
+    {askAnswer}
+  </div>
+) : null}
 
-  {askAnswer ? (
-    <div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4 text-sm leading-6 text-slate-800 whitespace-pre-wrap">
-      {askAnswer}
+</Card>
+
+<Card>
+  <div className="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div className="text-xl font-semibold text-slate-900">
+        Executive Auto-Summary
+      </div>
+
+      <div className="mt-1 text-sm text-slate-500">
+        AI-generated operating narrative for leadership updates.
+      </div>
     </div>
-  ) : null}
+
+    <button
+      onClick={handleGenerateExecutiveSummary}
+      disabled={isGeneratingExecutiveSummary}
+      className="rounded-xl bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-800 disabled:opacity-50"
+    >
+      {isGeneratingExecutiveSummary
+        ? "Generating..."
+        : "Generate Executive Update"}
+    </button>
+  </div>
+
+  {executiveSummary ? (
+    <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm leading-7 text-slate-800 whitespace-pre-wrap">
+      {executiveSummary}
+    </div>
+  ) : (
+    <div className="mt-4 text-sm text-slate-500">
+      No executive summary generated yet.
+    </div>
+  )}
 </Card>
 <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3">
   <div className="text-xs font-semibold uppercase tracking-wide text-amber-700">
