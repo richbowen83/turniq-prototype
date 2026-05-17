@@ -1033,12 +1033,15 @@ export default function ControlCenterTab({
   const topActionRows = useMemo(() => {
     return [...enrichedRows]
       .filter(
-        (row) =>
-          row.turnStatus === "Blocked" ||
-          row.currentStage === "Failed Rent Ready" ||
-          row.actionEngine.score >= 28 ||
-          row.actionEngine.daysRecovered > 0
-      )
+  (row) =>
+    !row.actionApplied &&
+    (
+      row.turnStatus === "Blocked" ||
+      row.currentStage === "Failed Rent Ready" ||
+      row.actionEngine.score >= 28 ||
+      row.actionEngine.daysRecovered > 0
+    )
+)
       .sort((a, b) => {
         return (
           b.actionEngine.revenueRecovered - a.actionEngine.revenueRecovered ||
@@ -1471,6 +1474,8 @@ fetch("/api/turns", {
       turnStatus: "Monitoring",
       blockers: ["No active blockers"],
       blocker: "None",
+      actionApplied: true,
+      actionAppliedAt: new Date().toISOString(),
       daysInStage: Math.max(
         0,
         (row.daysInStage || 0) -
