@@ -393,6 +393,8 @@ export default function TurnDetailDrawer({
   onApplySimulatedPlan,
 }) {
   const [selectedOptions, setSelectedOptions] = useState([]);
+  const [copilotAnswer, setCopilotAnswer] = useState("");
+  const [isCopilotLoading, setIsCopilotLoading] = useState(false);
 
   const recommendedVendor = useMemo(() => {
     if (!row) return null;
@@ -508,6 +510,49 @@ export default function TurnDetailDrawer({
     });
   }
 
+async function askTurnCopilot(promptType) {
+  if (!row) return;
+
+  const prompts = {
+    stuck:
+      "Explain why this turn is stuck and what the operator should do next.",
+    vendor:
+      "Draft a concise vendor follow-up message for this turn.",
+    owner:
+      "Draft a concise owner escalation message for this turn.",
+    action:
+      "Recommend the next best operational action for this turn.",
+  };
+
+  try {
+    setIsCopilotLoading(true);
+    setCopilotAnswer("");
+
+    const response = await fetch("/api/turn-ai", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        row,
+        prompt: prompts[promptType] || prompts.action,
+      }),
+    });
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Turn copilot failed");
+    }
+
+    setCopilotAnswer(data.answer);
+  } catch (error) {
+    setCopilotAnswer(error.message || "Turn copilot failed.");
+  } finally {
+    setIsCopilotLoading(false);
+  }
+}
+
   return (
     <div className="fixed inset-0 z-50 flex">
       <div className="flex-1 bg-black/30" onClick={onClose} />
@@ -538,6 +583,66 @@ export default function TurnDetailDrawer({
           </Pill>
           <Pill tone="blue">Risk {row.risk}</Pill>
         </div>
+
+<Card className="mt-6 border-blue-200 bg-blue-50">
+  <div className="flex items-start justify-between gap-4">
+    <div>
+      <div className="text-sm font-semibold text-slate-900">
+        TurnIQ Copilot
+      </div>
+      <div className="mt-1 text-xs text-slate-600">
+        Drawer-level assistant for diagnosis, escalation, and next-best action.
+      </div>
+    </div>
+    <Pill tone="blue">AI Copilot</Pill>
+  </div>
+
+  <div className="mt-4 grid gap-2 md:grid-cols-2">
+    <button
+      onClick={() => askTurnCopilot("stuck")}
+      disabled={isCopilotLoading}
+      className="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+    >
+      Why is this stuck?
+    </button>
+
+    <button
+      onClick={() => askTurnCopilot("action")}
+      disabled={isCopilotLoading}
+      className="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+    >
+      Recommend next action
+    </button>
+
+    <button
+      onClick={() => askTurnCopilot("vendor")}
+      disabled={isCopilotLoading}
+      className="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+    >
+      Draft vendor follow-up
+    </button>
+
+    <button
+      onClick={() => askTurnCopilot("owner")}
+      disabled={isCopilotLoading}
+      className="rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+    >
+      Draft owner escalation
+    </button>
+  </div>
+
+  {isCopilotLoading ? (
+    <div className="mt-4 rounded-2xl border border-blue-200 bg-white p-4 text-sm text-slate-500">
+      TurnIQ is thinking...
+    </div>
+  ) : null}
+
+  {copilotAnswer ? (
+    <div className="mt-4 rounded-2xl border border-blue-200 bg-white p-4 text-sm leading-6 text-slate-800 whitespace-pre-wrap">
+      {copilotAnswer}
+    </div>
+  ) : null}
+</Card>
 
         {/* DECIDE */}
         <Card className="mt-6 border-blue-200">
