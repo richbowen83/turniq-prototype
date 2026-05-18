@@ -339,26 +339,107 @@ function buildSourceSystemMetadata(row) {
 function computeECDRisk(row) {
   let score = 0;
 
-  if (row.turnStatus === "Blocked") score += 30;
-  if (row.currentStage === "Failed Rent Ready") score += 25;
-  if ((row.daysInStage || 0) >= 7) score += 20;
-  if ((row.risk || 0) >= 75) score += 15;
-  if ((row.readiness || 100) <= 30) score += 15;
-  if (row.blocker && row.blocker !== "None") score += 10;
+  const daysInStage = row.daysInStage || 0;
+  const risk = row.risk || 0;
+  const readiness = row.readiness || 100;
 
-  const probability = Math.min(score, 95);
+  const blocker = String(row.blocker || "").toLowerCase();
+
+  /*
+    CORE EXECUTION RISK
+  */
+
+  if (row.turnStatus === "Blocked") score += 28;
+
+  if (row.currentStage === "Failed Rent Ready") score += 26;
+
+  if (row.currentStage === "Owner Approval") score += 14;
+
+  /*
+    STAGE AGING
+  */
+
+  if (daysInStage >= 3) score += 5;
+  if (daysInStage >= 5) score += 10;
+  if (daysInStage >= 7) score += 16;
+  if (daysInStage >= 10) score += 24;
+
+  /*
+    RISK + READINESS
+  */
+
+  if (risk >= 95) score += 20;
+  else if (risk >= 85) score += 15;
+  else if (risk >= 75) score += 10;
+
+  if (readiness <= 15) score += 18;
+  else if (readiness <= 30) score += 12;
+  else if (readiness <= 50) score += 6;
+
+  /*
+    BLOCKER INTELLIGENCE
+  */
+
+  if (blocker.includes("access")) score += 14;
+
+  if (blocker.includes("vendor")) score += 12;
+
+  if (blocker.includes("approval")) score += 10;
+
+  if (blocker.includes("appliance")) score += 9;
+
+  if (blocker.includes("inspection")) score += 11;
+
+  /*
+    VENDOR LATENCY SIGNAL
+  */
+
+  if (row.vendor === "CoolAir") score += 8;
+
+  /*
+    MARKET CONCENTRATION SIGNAL
+  */
+
+  if (
+    row.market === "Phoenix" &&
+    row.currentStage === "Failed Rent Ready"
+  ) {
+    score += 10;
+  }
+
+  if (
+    row.market === "Dallas" &&
+    row.currentStage === "Owner Approval"
+  ) {
+    score += 8;
+  }
+
+  /*
+    FINAL NORMALIZATION
+  */
+
+  const probability = Math.min(95, Math.max(5, Math.round(score)));
 
   let projectedSlipDays = 0;
 
-  if (probability >= 80) projectedSlipDays = 5;
-  else if (probability >= 60) projectedSlipDays = 3;
-  else if (probability >= 40) projectedSlipDays = 2;
+  if (probability >= 90) projectedSlipDays = 7;
+  else if (probability >= 80) projectedSlipDays = 5;
+  else if (probability >= 65) projectedSlipDays = 4;
+  else if (probability >= 50) projectedSlipDays = 3;
+  else if (probability >= 35) projectedSlipDays = 2;
   else if (probability >= 20) projectedSlipDays = 1;
+
+  let severity = "low";
+
+  if (probability >= 80) severity = "critical";
+  else if (probability >= 60) severity = "high";
+  else if (probability >= 35) severity = "medium";
 
   return {
     probability,
     projectedSlipDays,
-    likelyToSlip: probability >= 40,
+    likelyToSlip: probability >= 35,
+    severity,
   };
 }
 
@@ -1859,11 +1940,11 @@ fetch("/api/turns", {
 
   <div className="mt-3 flex flex-wrap gap-2">
     {[
-      "What should we fix first today?",
-      "Where is the biggest bottleneck?",
-      "Which market has the most revenue at risk?",
-      "Summarize this for an executive update.",
-    ].map((prompt) => (
+  "What should we fix first today?",
+  "Where is the biggest bottleneck?",
+  "Which turns are most likely to miss ECD?",
+  "Which market has the most revenue at risk?",
+].map((prompt) => (
       <button
         key={prompt}
         onClick={() => {
@@ -1923,7 +2004,7 @@ fetch("/api/turns", {
   </div>
 
   <div className="mt-1 text-sm text-slate-800">
-    TurnIQ detected rising ECD slippage risk concentrated in failed rent-ready turns across Phoenix and Dallas.
+    TurnIQ detected elevated ECD slippage probability driven by failed rent-ready aging in Phoenix, approval bottlenecks in Dallas, and recurring access/vendor latency patterns.
   </div>
 </div>
 
@@ -2416,6 +2497,23 @@ fetch("/api/turns", {
                     {topActionRows[0]?.actionEngine.whyNow || "Portfolio is stable"}
                   </div>
                 </div>
+{enrichedRows.filter((r) => r.ecdPrediction?.severity === "critical")
+  .length > 0 ? (
+  <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3">
+    <div className="text-xs font-semibold uppercase tracking-wide text-red-700">
+      Critical Forecast Alert
+    </div>
+
+    <div className="mt-1 text-sm text-slate-800">
+      {
+        enrichedRows.filter(
+          (r) => r.ecdPrediction?.severity === "critical"
+        ).length
+      }{" "}
+      turns are now forecasted at critical ECD slip probability.
+    </div>
+  </div>
+) : null}
 
                 <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
                   <div className="text-xs uppercase tracking-wide text-amber-700">Portfolio intervention set</div>
