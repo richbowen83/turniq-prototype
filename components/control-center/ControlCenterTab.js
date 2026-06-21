@@ -836,6 +836,42 @@ function buildTopActionBuckets(rows) {
   .sort((a, b) => b.revenueRecovered - a.revenueRecovered);
 }
 
+function buildAiImpactSummary(actionLearningLog = [], lastActionImpact = null) {
+  const today = new Date().toISOString().slice(0, 10);
+
+  const todayActions = actionLearningLog.filter((entry) =>
+    String(entry.timestamp || "").startsWith(today)
+  );
+
+  const sourceRows = todayActions.length ? todayActions : actionLearningLog;
+
+  const totalDaysRecovered = sourceRows.reduce(
+    (sum, entry) => sum + (entry.daysSaved || 0),
+    0
+  );
+
+  const totalRevenueProtected = sourceRows.reduce(
+    (sum, entry) => sum + (entry.revenueProtected || 0),
+    0
+  );
+
+  const actionsCompleted = sourceRows.length;
+  const turnsRecovered = new Set(sourceRows.map((entry) => entry.propertyId)).size;
+
+  const lastActionLabel =
+    lastActionImpact?.property && lastActionImpact?.daysSaved > 0
+      ? `${lastActionImpact.property} improved by ${lastActionImpact.daysSaved}d`
+      : "Waiting for the next completed recommendation";
+
+  return {
+    totalDaysRecovered,
+    totalRevenueProtected,
+    actionsCompleted,
+    turnsRecovered,
+    lastActionLabel,
+  };
+}
+
 function StatCard({ label, value, tone = "slate", subtext }) {
   const toneClasses = {
     slate: "border-slate-200 bg-white",
@@ -1302,6 +1338,10 @@ const queueSummary = useMemo(() => {
       .sort((a, b) => b.totalRevenueProtected - a.totalRevenueProtected)
       .slice(0, 5);
   }, [actionLearningLog]);
+
+const aiImpactSummary = useMemo(() => {
+  return buildAiImpactSummary(actionLearningLog, lastActionImpact);
+}, [actionLearningLog, lastActionImpact]);
 
   const computedLastUpdated = useMemo(() => {
     const timestamps = [];
@@ -2179,7 +2219,67 @@ fetch("/api/turns", {
   </div>
 </Card>
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+      <Card className="overflow-hidden border-emerald-200 bg-gradient-to-br from-emerald-50 via-white to-blue-50">
+  <div className="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-emerald-700">
+        AI Impact Counter
+      </div>
+      <div className="mt-2 text-2xl font-semibold text-slate-900">
+        TurnIQ impact created today
+      </div>
+      <div className="mt-1 text-sm text-slate-600">
+        Converts completed AI recommendations into measurable operating value.
+      </div>
+    </div>
+
+    <Pill tone="green">Live impact</Pill>
+  </div>
+
+  <div className="mt-5 grid gap-4 md:grid-cols-4">
+    <div className="rounded-2xl border border-emerald-200 bg-white p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        Days recovered
+      </div>
+      <div className="mt-2 text-3xl font-semibold text-emerald-700">
+        +{aiImpactSummary.totalDaysRecovered}d
+      </div>
+    </div>
+
+    <div className="rounded-2xl border border-emerald-200 bg-white p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        Revenue protected
+      </div>
+      <div className="mt-2 text-3xl font-semibold text-emerald-700">
+        ${aiImpactSummary.totalRevenueProtected.toLocaleString()}
+      </div>
+    </div>
+
+    <div className="rounded-2xl border border-blue-200 bg-white p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        AI actions completed
+      </div>
+      <div className="mt-2 text-3xl font-semibold text-blue-700">
+        {aiImpactSummary.actionsCompleted}
+      </div>
+    </div>
+
+    <div className="rounded-2xl border border-blue-200 bg-white p-4">
+      <div className="text-xs uppercase tracking-wide text-slate-500">
+        Turns recovered
+      </div>
+      <div className="mt-2 text-3xl font-semibold text-blue-700">
+        {aiImpactSummary.turnsRecovered}
+      </div>
+    </div>
+  </div>
+
+  <div className="mt-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-700">
+    <span className="font-medium text-slate-900">Latest impact:</span>{" "}
+    {aiImpactSummary.lastActionLabel}
+  </div>
+</Card>
+<div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Top 10 Recoverable"
           value={`${actionEngineSummary.daysRecovered}d`}
