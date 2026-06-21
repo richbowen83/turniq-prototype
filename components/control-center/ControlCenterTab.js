@@ -1906,13 +1906,14 @@ fetch("/api/turns", {
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
+                   <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={resetQueueViewFull}
               className="rounded-md border border-slate-200 bg-white px-3 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
             >
               Reset view
             </button>
+
             <button
               onClick={() => {
                 setQueueFilter("Top 10 Actions");

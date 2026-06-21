@@ -1209,10 +1209,6 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
             markets={markets}
           />
 
-          <div className="mt-1 text-sm text-slate-500">
-            TurnIQ is a control tower for turns operations; helping teams prioritize and execute turns faster.
-          </div>
-
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2">
               <select
