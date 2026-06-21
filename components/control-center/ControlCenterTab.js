@@ -5,6 +5,7 @@ import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 import TurnDetailDrawer from "./TurnDetailDrawer";
 import { getStageTone } from "../../utils/tone";
+import { calculateHealthIndex } from "../../utils/healthIndex";
 import {
   getAiRecommendation,
   getAiPriorityScore,
@@ -593,9 +594,13 @@ function applyFilter(rows, queueFilter) {
 function formatRelativeTime(timestamp) {
   if (!timestamp) return "Updated just now";
 
-  const then = new Date(timestamp).getTime();
-  const now = Date.now();
-  const diffMs = Math.max(0, now - then);
+  const then = new Date(timestamp);
+
+  if (Number.isNaN(then.getTime())) {
+    return "Updated just now";
+  }
+
+  const diffMs = Date.now() - then.getTime();
   const diffMin = Math.floor(diffMs / 60000);
 
   if (diffMin < 1) return "Updated just now";
@@ -603,10 +608,11 @@ function formatRelativeTime(timestamp) {
   if (diffMin < 60) return `Updated ${diffMin}m ago`;
 
   const diffHr = Math.floor(diffMin / 60);
+
   if (diffHr === 1) return "Updated 1h ago";
   if (diffHr < 24) return `Updated ${diffHr}h ago`;
 
-  return `Updated ${formatShortDate(new Date(then).toISOString())}`;
+  return `Updated ${formatShortDate(then.toISOString())}`;
 }
 
 function buildWorkflowPlan(row) {
@@ -1129,67 +1135,45 @@ export default function ControlCenterTab({
   const enrichedRows = useMemo(() => buildEnrichedRows(rows), [rows]);
   const stageBuckets = useMemo(() => buildStageBuckets(enrichedRows), [enrichedRows]);
 
-  const workingRows = useMemo(() => {
-    let next = applyFilter(enrichedRows, queueFilter);
-    if (customRowFilter) next = next.filter(customRowFilter);
-    if (selectedStageFilter) {
-      next = next.filter((row) => row.currentStage === selectedStageFilter);
-    }
-    return sortRows(next, sortBy);
-  }, [enrichedRows, queueFilter, customRowFilter, selectedStageFilter, sortBy]);
-
-  const topActionRows = useMemo(() => {
-    return [...enrichedRows]
-      .filter(
-  (row) =>
-    !row.actionApplied &&
-    (
-      row.turnStatus === "Blocked" ||
-      row.currentStage === "Failed Rent Ready" ||
-      row.actionEngine.score >= 28 ||
-      row.actionEngine.daysRecovered > 0
-    )
-)
-      .sort((a, b) => {
-        return (
-          b.actionEngine.revenueRecovered - a.actionEngine.revenueRecovered ||
-          b.actionEngine.daysRecovered - a.actionEngine.daysRecovered ||
-          b.aiPriorityScore - a.aiPriorityScore ||
-          (b.risk || 0) - (a.risk || 0)
-        );
-      })
-      .slice(0, 10)
-      .map((row) => ({
-        ...row,
-        workflowPlan: buildWorkflowPlan(row),
-      }));
-  }, [enrichedRows]);
-
-  const queueSummary = useMemo(() => {
-    const blocked = workingRows.filter((row) => row.turnStatus === "Blocked").length;
-    const overdue = workingRows.filter((row) => row.overdue).length;
-    const stale = workingRows.filter((row) => row.stale).length;
-    const critical = workingRows.filter((row) => row.actionEngine.urgency === "Critical").length;
-    const failedRentReady = workingRows.filter((row) => row.currentStage === "Failed Rent Ready").length;
-    const vendorless = workingRows.filter((row) => !row.vendor || row.vendor === "TBD").length;
-
-    return { blocked, overdue, stale, critical, failedRentReady, vendorless };
-  }, [workingRows]);
-
-  const actionEngineSummary = useMemo(() => {
-    return topActionRows.reduce(
-      (acc, row) => {
-        acc.daysRecovered += row.actionEngine.daysRecovered;
-        acc.revenueRecovered += row.actionEngine.revenueRecovered;
-        if (row.actionEngine.urgency === "Critical") acc.critical += 1;
-        return acc;
-      },
-      { daysRecovered: 0, revenueRecovered: 0, critical: 0 }
+const forecastRows = useMemo(() => {
+  return [...enrichedRows]
+    .filter((row) => row.forecast?.likelyToSlip || row.ecdPrediction?.likelyToSlip)
+    .sort(
+      (a, b) =>
+        (b.forecast?.probability || b.ecdPrediction?.probability || 0) -
+        (a.forecast?.probability || a.ecdPrediction?.probability || 0)
     );
-  }, [topActionRows]);
+}, [enrichedRows]);
+
+const portfolioForecastRisk = useMemo(() => {
+  if (!forecastRows.length) return 0;
+
+  return Math.round(
+    forecastRows.reduce(
+      (sum, row) =>
+        sum + (row.forecast?.probability || row.ecdPrediction?.probability || 0),
+      0
+    ) / forecastRows.length
+  );
+}, [forecastRows]);
+
+const health = useMemo(() => {
+  return calculateHealthIndex(enrichedRows, {
+    forecastRows,
+    lastActionImpact,
+  });
+}, [enrichedRows, forecastRows, lastActionImpact]);
+
+const portfolioHealth = health.score;
+const healthDelta = health.delta;
+
+const healthDrivers = Array.isArray(health.drivers)
+  ? health.drivers
+  : [];
 
 const aiPortfolioSummary = useMemo(() => {
   const highRiskRows = enrichedRows.filter((row) => (row.risk || 0) >= 75);
+
   const totalRevenueAtRisk = highRiskRows.reduce(
     (sum, row) => sum + (row.actionEngine?.revenueRecovered || 0),
     0
@@ -1220,35 +1204,63 @@ const aiPortfolioSummary = useMemo(() => {
   };
 }, [enrichedRows]);
 
-  const topActionBuckets = useMemo(() => {
-    return buildTopActionBuckets(topActionRows);
-  }, [topActionRows]);
-
-const forecastRows = useMemo(() => {
-  return [...enrichedRows]
-    .filter((row) => row.forecast?.likelyToSlip)
-    .sort((a, b) => (b.forecast?.probability || 0) - (a.forecast?.probability || 0));
+const topActionRows = useMemo(() => {
+  return applyFilter(enrichedRows, "Top 10 Actions");
 }, [enrichedRows]);
 
-const portfolioForecastRisk = useMemo(() => {
-  if (!forecastRows.length) return 0;
+const actionEngineSummary = useMemo(() => {
+  return topActionRows.reduce(
+    (acc, row) => {
+      acc.daysRecovered += row.actionEngine?.daysRecovered || 0;
+      acc.revenueRecovered += row.actionEngine?.revenueRecovered || 0;
 
-  return Math.round(
-    forecastRows.reduce((sum, row) => sum + (row.forecast?.probability || 0), 0) /
-      forecastRows.length
+      if (row.actionEngine?.urgency === "Critical") {
+        acc.critical += 1;
+      }
+
+      return acc;
+    },
+    {
+      daysRecovered: 0,
+      revenueRecovered: 0,
+      critical: 0,
+    }
   );
-}, [forecastRows]);
+}, [topActionRows]);
 
-const forecastRadar = useMemo(() => {
-  return [...enrichedRows]
-    .filter((r) => r.ecdPrediction?.likelyToSlip)
-    .sort(
-      (a, b) =>
-        b.ecdPrediction.probability -
-        a.ecdPrediction.probability
-    )
-    .slice(0,5);
-}, [enrichedRows]);
+const filteredRows = useMemo(() => {
+  let nextRows = applyFilter(enrichedRows, queueFilter);
+
+  if (selectedStageFilter) {
+    nextRows = nextRows.filter((row) => row.currentStage === selectedStageFilter);
+  }
+
+  if (customRowFilter) {
+    nextRows = nextRows.filter(customRowFilter);
+  }
+
+  return nextRows;
+}, [enrichedRows, queueFilter, selectedStageFilter, customRowFilter]);
+
+const workingRows = useMemo(() => {
+  return sortRows(filteredRows, sortBy);
+}, [filteredRows, sortBy]);
+
+const queueSummary = useMemo(() => {
+  return workingRows.reduce(
+    (acc, row) => {
+      if (row.turnStatus === "Blocked") acc.blocked += 1;
+      if (row.overdue) acc.overdue += 1;
+      if (!row.vendor || row.vendor === "TBD") acc.vendorless += 1;
+      return acc;
+    },
+    {
+      blocked: 0,
+      overdue: 0,
+      vendorless: 0,
+    }
+  );
+}, [workingRows]);
 
   const trendData = useMemo(() => TREND_SERIES, []);
   const operatorTrendCards = useMemo(
@@ -2077,6 +2089,96 @@ fetch("/api/turns", {
         </div>
       ) : null}
 
+<Card className="mb-6 overflow-hidden">
+  <div className="grid gap-8 xl:grid-cols-[1.1fr_0.9fr]">
+    <div>
+      <div className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-600">
+        TurnIQ Health Index™
+      </div>
+
+      <div className="mt-2 flex items-end gap-3">
+        <div className="text-6xl font-bold tracking-tight">{portfolioHealth}</div>
+        <div className="pb-2 text-sm text-emerald-600">↑ {healthDelta} today</div>
+      </div>
+
+      <div className="mt-2 max-w-xl text-sm text-slate-500">
+        A composite operating health score combining execution quality, forecast
+        confidence, vendor reliability, workflow velocity, backlog health and AI
+        recovery potential.
+      </div>
+
+      <div className="mt-4 grid gap-2">
+        {healthDrivers.slice(0, 5).map((driver) => (
+          <div
+            key={driver.key || driver.label}
+            className={`flex items-center gap-3 rounded-xl border px-3 py-2 text-sm ${
+              driver.tone === "red"
+                ? "border-red-200 bg-red-50 text-red-800"
+                : driver.tone === "amber"
+                ? "border-amber-200 bg-amber-50 text-amber-800"
+                : driver.tone === "blue"
+                ? "border-blue-200 bg-blue-50 text-blue-800"
+                : driver.tone === "green"
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-slate-200 bg-white text-slate-700"
+            }`}
+          >
+            <span>{driver.icon || "•"}</span>
+            <span>{driver.label}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+
+    <div className="flex flex-col justify-center">
+      <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+        <div className="text-xs uppercase tracking-wide text-slate-500">
+          Portfolio Health
+        </div>
+        <div className="mt-1 text-2xl font-semibold text-slate-900">
+          {health.status}
+        </div>
+        <div className="mt-2 text-sm text-slate-600">
+          {health.interpretation}
+        </div>
+
+        <div className="mt-4 rounded-xl bg-white p-3">
+          <div className="text-xs uppercase tracking-wide text-slate-500">
+            Top health driver
+          </div>
+          <div className="mt-1 text-sm font-medium text-slate-900">
+            {health.topDriver?.icon} {health.topDriver?.label}
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            -{Math.round(health.topDriver?.penalty || 0)} point impact
+          </div>
+        </div>
+      </div>
+
+      <div className="mt-5">
+        <div className="mb-2 flex justify-between text-xs text-slate-500">
+          <span>Poor</span>
+          <span>Healthy</span>
+        </div>
+
+        <div className="h-4 overflow-hidden rounded-full bg-slate-100">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500 transition-all duration-1000"
+            style={{ width: `${portfolioHealth}%` }}
+          />
+        </div>
+
+        <div className="mt-3 flex justify-between text-xs text-slate-500">
+          <span>0</span>
+          <span>50</span>
+          <span>75</span>
+          <span>100</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</Card>
+
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Top 10 Recoverable"
@@ -2145,7 +2247,7 @@ fetch("/api/turns", {
 
   <div className="mt-5 space-y-3">
     {forecastRows.slice(0, 5).map((row) => {
-      const probability = row.forecast?.probability || 0;
+      const probability = row.forecast?.probability || row.ecdPrediction?.probability || 0;
       const postActionProbability = Math.max(
         5,
         probability - Math.max(20, row.actionEngine?.daysRecovered * 12 || 20)
@@ -2610,13 +2712,13 @@ fetch("/api/turns", {
                     <div key={item.actionLabel} className="rounded-2xl border border-slate-200 bg-white p-4">
                       <div className="text-sm font-medium text-slate-900">{item.actionLabel}</div>
                       <div className="mt-3 text-2xl font-semibold text-slate-900">
-                        ${item.totalRevenueProtected.toLocaleString()}
+                        ${(item.totalRevenueProtected || 0).toLocaleString()}
                       </div>
                       <div className="mt-1 text-xs text-slate-500">
                         {item.totalDaysSaved}d recovered across {item.uses} uses
                       </div>
                       <div className="mt-2 text-xs text-slate-400">
-                        Avg {item.avgDaysSaved}d • ${item.avgRevenueProtected.toLocaleString()}
+                        Avg {item.avgDaysSaved}d • ${(item.avgRevenueProtected || 0).toLocaleString()}
                       </div>
                     </div>
                   ))}
