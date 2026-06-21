@@ -6,6 +6,8 @@ import Pill from "../shared/Pill";
 import TurnDetailDrawer from "./TurnDetailDrawer";
 import { getStageTone } from "../../utils/tone";
 import { calculateHealthIndex } from "../../utils/healthIndex";
+import TurnIQReplay from "./TurnIQReplay";
+import TurnIQRecommendations from "./TurnIQRecommendations";
 import {
   getAiRecommendation,
   getAiPriorityScore,
@@ -2279,6 +2281,16 @@ fetch("/api/turns", {
     {aiImpactSummary.lastActionLabel}
   </div>
 </Card>
+
+<TurnIQReplay
+  rows={enrichedRows}
+  actionLearningLog={actionLearningLog}
+  health={health}
+  forecastRows={forecastRows}
+  aiImpactSummary={aiImpactSummary}
+/>
+
+<TurnIQRecommendations rows={enrichedRows} />
 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Top 10 Recoverable"
