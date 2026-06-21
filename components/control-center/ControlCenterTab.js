@@ -1224,6 +1224,32 @@ const aiPortfolioSummary = useMemo(() => {
     return buildTopActionBuckets(topActionRows);
   }, [topActionRows]);
 
+const forecastRows = useMemo(() => {
+  return [...enrichedRows]
+    .filter((row) => row.forecast?.likelyToSlip)
+    .sort((a, b) => (b.forecast?.probability || 0) - (a.forecast?.probability || 0));
+}, [enrichedRows]);
+
+const portfolioForecastRisk = useMemo(() => {
+  if (!forecastRows.length) return 0;
+
+  return Math.round(
+    forecastRows.reduce((sum, row) => sum + (row.forecast?.probability || 0), 0) /
+      forecastRows.length
+  );
+}, [forecastRows]);
+
+const forecastRadar = useMemo(() => {
+  return [...enrichedRows]
+    .filter((r) => r.ecdPrediction?.likelyToSlip)
+    .sort(
+      (a, b) =>
+        b.ecdPrediction.probability -
+        a.ecdPrediction.probability
+    )
+    .slice(0,5);
+}, [enrichedRows]);
+
   const trendData = useMemo(() => TREND_SERIES, []);
   const operatorTrendCards = useMemo(
     () => ["rri_pass_rate", "rri_completion_time", "avg_turn_time"],
@@ -1469,13 +1495,21 @@ const lastAction = {
   lastAction,
 });
 
-  setLastActionImpact({
-    property: row.name,
-    daysSaved,
-    revenueProtected,
-    prevECD,
-    nextECD,
-  });
+setLastActionImpact({
+  property: row.name,
+  daysSaved,
+  revenueProtected,
+  prevECD,
+  nextECD,
+  forecastUpdated: true,
+});
+
+setTimeout(() => {
+  setLastActionImpact((prev) => ({
+    ...prev,
+    forecastUpdated: true,
+  }));
+}, 250);
 
 fetch("/api/turns", {
   method: "PATCH",
@@ -2079,23 +2113,109 @@ fetch("/api/turns", {
           tone="amber"
           subtext="Coverage gap"
         />
-         <StatCard
-  label="Forecast Engine"
-  value={`${enrichedRows.filter((r) => r.forecast?.likelyToSlip).length} predicted`}
-  tone="red"
-  subtext={`Highest risk ${
-    Math.max(...enrichedRows.map((r) => r.forecast?.probability || 0), 0)
-  }%`}
-/>
+
       </div>
 
-      {topActionBuckets.length ? (
-        <div className="grid gap-4 xl:grid-cols-4">
-          {topActionBuckets.map((bucket) => (
-            <ActionBucketCard key={bucket.key} bucket={bucket} />
-          ))}
-        </div>
-      ) : null}
+<Card>
+  <div className="flex flex-wrap items-start justify-between gap-4">
+    <div>
+      <div className="flex items-center gap-2 text-xl font-semibold text-slate-900">
+        Forecast Radar
+        <span className="relative flex h-2 w-2">
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75" />
+          <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-500" />
+        </span>
+      </div>
+
+      <div className="mt-1 text-sm text-slate-500">
+        Continuously recalculating ECD miss probability as operators execute work.
+      </div>
+    </div>
+
+    <div className="flex flex-wrap gap-2">
+      <Pill tone={forecastRows.length ? "red" : "green"}>
+        {forecastRows.length} predicted misses
+      </Pill>
+      <Pill tone={portfolioForecastRisk >= 70 ? "red" : portfolioForecastRisk >= 40 ? "amber" : "green"}>
+        Portfolio risk {portfolioForecastRisk}%
+      </Pill>
+    </div>
+  </div>
+
+  <div className="mt-5 space-y-3">
+    {forecastRows.slice(0, 5).map((row) => {
+      const probability = row.forecast?.probability || 0;
+      const postActionProbability = Math.max(
+        5,
+        probability - Math.max(20, row.actionEngine?.daysRecovered * 12 || 20)
+      );
+
+      return (
+        <button
+          key={row.id}
+          onClick={() => {
+            setSelectedPropertyId(row.id);
+            setDrawerRow(row);
+          }}
+          className="w-full rounded-2xl border border-red-200 bg-red-50 p-4 text-left transition hover:border-blue-300 hover:bg-white"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-base font-semibold text-slate-900">{row.name}</div>
+              <div className="mt-1 text-sm text-slate-600">
+                {row.market} • {row.currentStage} • ECD {formatShortDate(row.projectedCompletion)}
+              </div>
+            </div>
+
+            <Pill tone="red">{probability}% risk</Pill>
+          </div>
+
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">Current risk</div>
+              <div className="mt-2 h-2 rounded-full bg-red-100">
+                <div
+                  className="h-2 rounded-full bg-red-500 transition-all duration-500"
+                  style={{ width: `${probability}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-red-700">{probability}% likely to miss ECD</div>
+            </div>
+
+            <div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">After recommendation</div>
+              <div className="mt-2 h-2 rounded-full bg-emerald-100">
+                <div
+                  className="h-2 rounded-full bg-emerald-500 transition-all duration-500"
+                  style={{ width: `${postActionProbability}%` }}
+                />
+              </div>
+              <div className="mt-1 text-xs text-emerald-700">
+                modeled down to {postActionProbability}%
+              </div>
+            </div>
+
+            <div>
+              <div className="text-xs uppercase tracking-wide text-slate-500">Recommended action</div>
+              <div className="mt-1 text-sm font-medium text-slate-900">
+                {row.actionEngine?.headline || row.nextAction || "Review this turn today"}
+              </div>
+              <div className="mt-1 text-xs text-slate-500">
+                {row.forecast?.drivers?.[0] || "Forecast risk detected"}
+              </div>
+            </div>
+          </div>
+        </button>
+      );
+    })}
+
+    {!forecastRows.length ? (
+      <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-5 text-sm text-emerald-800">
+        No forecasted ECD misses. Radar is clear.
+      </div>
+    ) : null}
+  </div>
+</Card>
 
       <div className="grid gap-6 xl:grid-cols-12">
         <div className="xl:col-span-8">
