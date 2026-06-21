@@ -7,6 +7,19 @@ import {
   updateTurnForOrg,
 } from "../../../lib/turnsDb";
 
+function errorResponse(error) {
+  console.error("TURNS API ERROR:", error);
+
+  return NextResponse.json(
+    {
+      ok: false,
+      error: error?.message || String(error),
+      stack: error?.stack || null,
+    },
+    { status: 500 }
+  );
+}
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -21,12 +34,7 @@ export async function GET(request) {
       turns,
     });
   } catch (error) {
-    console.error("Failed to load turns", error);
-
-    return NextResponse.json(
-      { ok: false, error: error.message || "Failed to load turns" },
-      { status: 500 }
-    );
+    return errorResponse(error);
   }
 }
 
@@ -54,12 +62,7 @@ export async function PATCH(request) {
       turn,
     });
   } catch (error) {
-    console.error("Failed to update turn", error);
-
-    return NextResponse.json(
-      { ok: false, error: error.message || "Failed to update turn" },
-      { status: 500 }
-    );
+    return errorResponse(error);
   }
 }
 
@@ -82,12 +85,7 @@ export async function POST(request) {
       turns,
     });
   } catch (error) {
-    console.error("Failed to save turns", error);
-
-    return NextResponse.json(
-      { ok: false, error: error.message || "Failed to save turns" },
-      { status: 500 }
-    );
+    return errorResponse(error);
   }
 }
 
@@ -113,11 +111,6 @@ export async function DELETE(request) {
       { status: 400 }
     );
   } catch (error) {
-    console.error("Failed to clear turns", error);
-
-    return NextResponse.json(
-      { ok: false, error: error.message || "Failed to clear turns" },
-      { status: 500 }
-    );
+    return errorResponse(error);
   }
 }

@@ -998,9 +998,58 @@ async function regenerateApiKey() {
 }
 
 async function sendTestWebhook() {
+console.log("SEND TEST WEBHOOK CLICKED", {
+  orgId,
+  activeOrgLabel,
+  turns: demoTurns?.length,
+});
+
   try {
     setIsSendingTestWebhook(true);
     setTestWebhookStatus(null);
+
+    const response = await fetch(
+      `/api/pms-sync?orgId=${orgId}`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-turniq-org-id": orgId,
+          "x-turniq-api-key": apiKey || "",
+        },
+        body: JSON.stringify({
+          orgId,
+          source: `${activeOrgLabel} Test Webhook`,
+          mode: "replace",
+          isTestData: true,
+          turns: demoTurns,
+        }),
+      }
+    );
+
+    const data = await response.json();
+
+    if (!response.ok || !data?.ok) {
+      throw new Error(data?.error || "Test webhook failed");
+    }
+
+    setTestWebhookStatus({
+  type: "success",
+  message: `Synced ${data.count || data.received || 0} turns`,
+});
+
+    await refreshPersistedTurns();
+  } catch (error) {
+    console.error(error);
+
+   setTestWebhookStatus({
+  type: "error",
+  message: error.message || "Failed to send test webhook",
+});
+  } finally {
+    setIsSendingTestWebhook(false);
+  }
+}
 
 const demoMarkets = ["Dallas", "Phoenix", "Atlanta", "Nashville", "Charlotte"];
 
@@ -1075,62 +1124,9 @@ const demoTurns = Array.from({ length: 50 }, (_, index) => {
     "Approved Cost": String(Math.max(0, profile.estimateCost - 150)),
     Notes: profile.note,
     isTestData: true,
-    sourceSystemName: `${activeOrgLabel} Test Webhook`,
+    sourceSystemName: "Test Webhook",
   };
 });
-
-    const response = await fetch("/api/pms-sync", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-turniq-org-id": orgId,
-        "x-turniq-api-key": apiKey,
-      },
-      body: JSON.stringify({
-  source: `${activeOrgLabel} Test Webhook`,
-  mode: "replace", // important for demo
-  isTestData: true,
-  turns: demoTurns,
-}),
-});
-
-    const data = await response.json();
-
-    if (!response.ok || !data?.ok) {
-      throw new Error(data?.error || "Webhook test failed");
-    }
-
-const syncedTurns = data.turns || demoTurns;
-
-setOrgImportedProperties(orgId, syncedTurns);
-setLastSyncStatus("Webhook synced");
-setLastSyncSource(`${activeOrgLabel} Test Webhook`);
-setLastSyncCount(syncedTurns.length);
-setLastSyncAt(new Date().toISOString());
-setDataSource(`${activeOrgLabel} Test Webhook`);
-setSelectedMarket("All Markets");
-
-if (syncedTurns[0]?.id) {
-  setSelectedPropertyId(syncedTurns[0].id);
-}
-
-setActiveTab("Control Center");
-
-    setTestWebhookStatus({
-      type: "success",
-      message: `Webhook synced • ${demoTurns.length} turns imported`
-    });
-
-  } catch (error) {
-    console.error("Failed to send test webhook", error);
-    setTestWebhookStatus({
-      type: "error",
-      message: error.message || "Failed to send test webhook.",
-    });
-  } finally {
-    setIsSendingTestWebhook(false);
-  }
-}
 
   const activeOrgLabel =
     orgOptions.find((org) => org.id === orgId)?.label || orgId;
@@ -1425,12 +1421,12 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
           </button>
 
           <button
-            onClick={sendTestWebhook}
-            disabled={!apiKey || isSendingTestWebhook}
-            className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm text-blue-700 hover:bg-blue-100 disabled:opacity-50"
-          >
-            {isSendingTestWebhook ? "Sending test..." : "Send test webhook"}
-          </button>
+  onClick={sendTestWebhook}
+  disabled={isSendingTestWebhook}
+  className="rounded-xl border border-blue-200 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 disabled:opacity-50"
+>
+  {isSendingTestWebhook ? "Sending..." : "Send test webhook"}
+</button>
         </div>
 
         {importedProperties.some((row) => row.isTestData) && (
