@@ -826,8 +826,8 @@ function buildTopActionBuckets(rows) {
   });
 
   return Object.values(buckets)
-    .filter((bucket) => bucket.rows.length > 0)
-    .sort((a, b) => b.revenueRecovered - a.revenueRecovered);
+  .filter((bucket) => bucket.rows.length > 0)
+  .sort((a, b) => b.revenueRecovered - a.revenueRecovered);
 }
 
 function StatCard({ label, value, tone = "slate", subtext }) {
@@ -856,14 +856,30 @@ function ActionBucketCard({ bucket }) {
     green: "border-emerald-200 bg-emerald-50",
   };
 
+  const icons = {
+    unblock: "🚧",
+    approval: "📝",
+    vendor: "🚚",
+    compress: "⚡",
+  };
+
   return (
     <div className={`rounded-2xl border p-4 ${toneClasses[bucket.tone] || toneClasses.blue}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold text-slate-900">{bucket.label}</div>
-          <div className="mt-1 text-xs text-slate-600">{bucket.description}</div>
+          <div className="text-sm font-semibold text-slate-900">
+            {icons[bucket.key]} {bucket.label}
+          </div>
+          <div className="mt-1 text-xs text-slate-600">
+            {bucket.rows.length
+              ? bucket.description
+              : "Nothing requiring intervention right now."}
+          </div>
         </div>
-        <Pill tone={bucket.tone}>{bucket.rows.length}</Pill>
+
+        <Pill tone={bucket.rows.length ? bucket.tone : "slate"}>
+          {bucket.rows.length}
+        </Pill>
       </div>
 
       <div className="mt-4 grid grid-cols-2 gap-3">
@@ -935,16 +951,24 @@ function ActionCard({ row, onOpen, onApply }) {
             {formatShortDate(row.projectedCompletion)}
           </div>
 
-          {row.ecdPrediction?.likelyToSlip ? (
-            <div className="mt-2 inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">
-              {row.ecdPrediction.probability}% risk of ECD slip • projected +
-              {row.ecdPrediction.projectedSlipDays}d
-            </div>
-          ) : (
-            <div className="mt-2 inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
-              ECD on track
-            </div>
-          )}
+          <div className="mt-2 flex flex-wrap gap-2">
+  {row.ecdPrediction?.likelyToSlip ? (
+    <div className="inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">
+      {row.ecdPrediction.probability}% risk of ECD slip • projected +
+      {row.ecdPrediction.projectedSlipDays}d
+    </div>
+  ) : (
+    <div className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-1 text-[11px] font-medium text-emerald-700">
+      ECD on track
+    </div>
+  )}
+
+  {row.forecast?.likelyToSlip ? (
+    <div className="inline-flex rounded-full bg-red-50 px-2 py-1 text-[11px] font-medium text-red-700">
+      {row.forecast.probability}% forecast miss risk • {row.forecast.confidence} confidence
+    </div>
+  ) : null}
+</div>
 
           <div className="mt-3 text-[10px] uppercase tracking-wide text-blue-600">
             AI Recommendation
@@ -2056,13 +2080,13 @@ fetch("/api/turns", {
           subtext="Coverage gap"
         />
          <StatCard
-           label="Forecasted Slips"
-           value={
-           enrichedRows.filter((r) => r.ecdPrediction?.likelyToSlip).length
-           }
-           tone="red"
-           subtext="Turns likely to miss ECD"
-         />
+  label="Forecast Engine"
+  value={`${enrichedRows.filter((r) => r.forecast?.likelyToSlip).length} predicted`}
+  tone="red"
+  subtext={`Highest risk ${
+    Math.max(...enrichedRows.map((r) => r.forecast?.probability || 0), 0)
+  }%`}
+/>
       </div>
 
       {topActionBuckets.length ? (

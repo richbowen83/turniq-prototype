@@ -11,6 +11,7 @@ import PipelineTab from "../components/pipeline/PipelineTab";
 import AnalyticsTab from "../components/analytics/AnalyticsTab";
 import ForecastTab from "../components/forecast/ForecastTab";
 import VendorsTab from "../components/vendors/VendorsTab";
+import { forecastTurn } from "../lib/forecastEngine";
 
 const INITIAL_PROPERTIES = [
   {
@@ -540,20 +541,29 @@ useEffect(() => {
   );
 
   const filteredProperties = useMemo(() => {
-    return activeProperties.filter(
-      (x) => selectedMarket === "All Markets" || x.market === selectedMarket
-    );
-  }, [activeProperties, selectedMarket]);
+  return activeProperties.filter(
+    (x) => selectedMarket === "All Markets" || x.market === selectedMarket
+  );
+}, [activeProperties, selectedMarket]);
+
+const enrichedProperties = useMemo(() => {
+  return filteredProperties.map((row) => ({
+    ...row,
+    forecast: forecastTurn(row),
+  }));
+}, [filteredProperties]);
 
   const selectedProperty =
-    activeProperties.find((x) => x.id === selectedPropertyId) || activeProperties[0];
+  enrichedProperties.find((x) => x.id === selectedPropertyId) ||
+  enrichedProperties[0] ||
+  activeProperties[0];
 
-  const marketHealth = useMemo(() => getMarketHealth(filteredProperties), [filteredProperties]);
-  const stageFlow = useMemo(() => getStageFlow(filteredProperties), [filteredProperties]);
+  const marketHealth = useMemo(() => getMarketHealth(enrichedProperties), [enrichedProperties]);
+  const stageFlow = useMemo(() => getStageFlow(enrichedProperties), [enrichedProperties]);
 
   const stagePipeline = useMemo(() => {
     return PIPELINE_STAGES.map((stage) => {
-      const rows = filteredProperties.filter((p) => p.currentStage === stage);
+      const rows = enrichedProperties.filter((p) => p.currentStage === stage);
       const count = rows.length;
       const avgDaysInStage = count
         ? Number(
@@ -573,7 +583,7 @@ useEffect(() => {
         blockedPercent,
       };
     });
-  }, [filteredProperties]);
+  }, [enrichedProperties]);
 
   const topStageBottleneck = useMemo(() => {
     if (!stagePipeline.length) return null;
@@ -581,19 +591,19 @@ useEffect(() => {
   }, [stagePipeline]);
 
   const operatorSummary = useMemo(() => {
-    const owners = Array.from(new Set(filteredProperties.map((p) => p.turnOwner)));
+    const owners = Array.from(new Set(enrichedProperties.map((p) => p.turnOwner)));
     return owners.map((owner) => {
-      const rows = filteredProperties.filter((p) => p.turnOwner === owner);
+      const rows = enrichedProperties.filter((p) => p.turnOwner === owner);
       return {
         owner,
         activeTurns: rows.length,
         highRisk: rows.filter((row) => row.risk >= 75).length,
       };
     });
-  }, [filteredProperties]);
+  }, [enrichedProperties]);
 
   const kpis = useMemo(() => {
-    const rows = filteredProperties;
+    const rows = enrichedProperties;
 
     const blockedTurns = rows.filter((x) => x.turnStatus === "Blocked").length;
     const scopeReviewsPending = rows.filter((x) => x.currentStage === "Scope Review").length;
@@ -635,10 +645,10 @@ useEffect(() => {
       ecdThisWeek,
       rriFailRate,
     };
-  }, [filteredProperties]);
+  }, [enrichedProperties]);
 
   const queueRows = useMemo(() => {
-    let rows = filteredProperties;
+    let rows = enrichedProperties;
 
     if (queueFilter === "Open Turns > 60 Days") rows = rows.filter((x) => x.openDays > 60);
     if (queueFilter === "Open Turns 31–60 Days") {
@@ -685,7 +695,7 @@ useEffect(() => {
     }
 
     return sorted;
-  }, [filteredProperties, queueFilter, selectedStageFilter, sortBy]);
+  }, [enrichedProperties, queueFilter, selectedStageFilter, sortBy]);
 
   function updateProperty(id, patch) {
   if (importedProperties.length) {
@@ -1523,7 +1533,7 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
 
         {activeTab === "Pipeline" && (
           <PipelineTab
-            rows={filteredProperties}
+            rows={enrichedProperties}
             selectedPropertyId={selectedPropertyId}
             setSelectedPropertyId={setSelectedPropertyId}
             updateProperty={updateProperty}
@@ -1534,7 +1544,7 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
           <ForecastTab
             mode={audienceMode}
             selectedProperty={selectedProperty}
-            properties={filteredProperties}
+            properties={enrichedProperties}
             setSelectedPropertyId={setSelectedPropertyId}
             applyForecastPatch={applyForecastPatch}
             applyForecastBatch={applyForecastBatch}
@@ -1545,10 +1555,10 @@ const curlCommandString = `curl -X POST ${webhookEndpoint} \\
         )}
 
         {activeTab === "Analytics" && (
-          <AnalyticsTab properties={filteredProperties} actionHistory={actionHistory} />
+          <AnalyticsTab properties={enrichedProperties} actionHistory={actionHistory} />
         )}
 
-        {activeTab === "Vendors" && <VendorsTab properties={filteredProperties} />}
+        {activeTab === "Vendors" && <VendorsTab properties={enrichedProperties} />}
 
         {activeTab === "Import" && (
   <>
