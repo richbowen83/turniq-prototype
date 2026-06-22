@@ -10,6 +10,7 @@ import TurnIQReplay from "./TurnIQReplay";
 import TurnIQRecommendations from "./TurnIQRecommendations";
 import { buildImpactEngine } from "../../lib/impactEngine";
 import TurnIQImpactCounter from "./TurnIQImpactCounter";
+import TurnIQRelayQueue from "./TurnIQRelayQueue";
 import {
   getAiRecommendation,
   getAiPriorityScore,
@@ -1656,6 +1657,40 @@ fetch("/api/turns", {
     recordActionOutcome(row, patch, "Resolve issue");
   }
 
+function handleApproveRecommendation({ row, patch }) {
+  patchRow(row.id, patch);
+}
+
+function handleSendRelay(row) {
+  const sendingPatch = {
+    relayStatus: "sending",
+    relaySentAt: new Date().toISOString(),
+  };
+
+  patchRow(row.id, sendingPatch);
+
+  recordActionOutcome(
+    row,
+    sendingPatch,
+    "Relay sending"
+  );
+
+  setTimeout(() => {
+    const deliveredPatch = {
+      relayStatus: "delivered",
+      relayDeliveredAt: new Date().toISOString(),
+    };
+
+    patchRow(row.id, deliveredPatch);
+
+    recordActionOutcome(
+      row,
+      deliveredPatch,
+      "Relay delivered"
+    );
+  }, 1200);
+}
+
   function handleFlagReady(id) {
     const row = enrichedRows.find((item) => item.id === id);
     if (!row) return;
@@ -2236,7 +2271,16 @@ fetch("/api/turns", {
     impact={impactEngine}
 />
 
-<TurnIQRecommendations rows={enrichedRows} />
+<TurnIQRecommendations
+  rows={enrichedRows}
+  onApproveRecommendation={handleApproveRecommendation}
+/>
+
+<TurnIQRelayQueue
+  rows={enrichedRows}
+  onSendRelay={handleSendRelay}
+/>
+
 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Top 10 Recoverable"

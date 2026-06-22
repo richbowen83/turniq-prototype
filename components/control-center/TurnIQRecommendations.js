@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Card from "../shared/Card";
 import Pill from "../shared/Pill";
 
@@ -48,10 +48,9 @@ export default function TurnIQRecommendations({
   rows = [],
   onApproveRecommendation,
 }) {
-  const [approvedIds, setApprovedIds] = useState([]);
-
   const recommendations = useMemo(() => {
     return [...rows]
+      .filter((row) => row.relayApproved !== true)
       .filter(
         (row) =>
           row.actionEngine?.score >= 28 ||
@@ -77,14 +76,18 @@ export default function TurnIQRecommendations({
   }, [rows]);
 
   function handleApprove(row, pack) {
-    setApprovedIds((prev) =>
-      prev.includes(row.id) ? prev : [...prev, row.id]
-    );
-
     onApproveRecommendation?.({
       row,
       pack,
-      approvedAt: new Date().toISOString(),
+      patch: {
+        relayApproved: true,
+        relayStatus: "queued",
+        relayApprovedAt: new Date().toISOString(),
+        relayDestination: pack.destination,
+        relayAction: pack.action,
+        relayTitle: pack.title,
+        relayType: pack.type,
+      },
     });
   }
 
@@ -108,7 +111,7 @@ export default function TurnIQRecommendations({
 
       <div className="mt-5 grid gap-4 xl:grid-cols-3">
         {recommendations.map(({ row, pack }) => {
-          const approved = approvedIds.includes(row.id);
+          const approved = row.relayApproved === true;
 
           return (
             <div

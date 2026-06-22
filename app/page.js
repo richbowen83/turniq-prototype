@@ -610,9 +610,25 @@ const enrichedProperties = useMemo(() => {
     const ownerApprovalPending = rows.filter((x) => x.currentStage === "Owner Approval").length;
     const highRisk = rows.filter((x) => x.risk >= 75).length;
 
-    const avgTurnTime = rows.length
-      ? `${(rows.reduce((sum, x) => sum + x.openDays, 0) / rows.length).toFixed(1)} days`
-      : "0 days";
+    const validOpenDays = rows
+  .map((x) =>
+    Number(
+      x.openDays ??
+      x.daysOpen ??
+      x.turnDays ??
+      x.daysInTurn ??
+      x.daysInStage ??
+      0
+    )
+  )
+  .filter(Number.isFinite);
+
+const avgTurnTime = validOpenDays.length
+  ? `${(
+      validOpenDays.reduce((sum, days) => sum + days, 0) /
+      validOpenDays.length
+    ).toFixed(1)} days`
+  : "0 days";
 
     const ecdPastDue = rows.filter(
       (x) => new Date(x.projectedCompletion) < new Date("2026-05-07")
